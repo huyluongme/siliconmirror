@@ -59,17 +59,18 @@ make test                  # build and run the tests
 
 Variables:
 
-| Variable        | Values                                                |
-|-----------------|-------------------------------------------------------|
-| `PRESET=<name>` | `debug` (default), `release`, `asan`, `ci`            |
-| `CC=<compiler>` | Build with another compiler, for example `CC=clang`   |
+| Variable        | Values                                              |
+|-----------------|-----------------------------------------------------|
+| `PRESET=<name>` | A preset from the table below; `debug` by default   |
+| `CC=<compiler>` | Build with another compiler, for example `CC=clang` |
 
-| Preset    | Purpose                                     |
-|-----------|---------------------------------------------|
-| `debug`   | Debug build                                 |
-| `release` | Optimized build                             |
-| `asan`    | Debug build with AddressSanitizer and UBSan |
-| `ci`      | `asan` with warnings treated as errors      |
+| Preset       | Purpose                                     |
+|--------------|---------------------------------------------|
+| `debug`      | Debug build                                 |
+| `release`    | Optimized build                             |
+| `asan`       | Debug build with AddressSanitizer and UBSan |
+| `ci`         | `asan` with warnings treated as errors      |
+| `ci-release` | `release` with warnings treated as errors   |
 
 The Makefile is a thin wrapper around the CMake presets in
 [CMakePresets.json](CMakePresets.json); `cmake --workflow --preset debug`

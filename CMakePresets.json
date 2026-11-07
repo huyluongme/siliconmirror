@@ -46,13 +46,22 @@
 			"cacheVariables": {
 				"SMIRROR_WERROR": "ON"
 			}
+		},
+		{
+			"name": "ci-release",
+			"displayName": "CI: optimized build, warnings as errors",
+			"inherits": "release",
+			"cacheVariables": {
+				"SMIRROR_WERROR": "ON"
+			}
 		}
 	],
 	"buildPresets": [
 		{ "name": "debug", "configurePreset": "debug" },
 		{ "name": "release", "configurePreset": "release" },
 		{ "name": "asan", "configurePreset": "asan" },
-		{ "name": "ci", "configurePreset": "ci" }
+		{ "name": "ci", "configurePreset": "ci" },
+		{ "name": "ci-release", "configurePreset": "ci-release" }
 	],
 	"testPresets": [
 		{
@@ -65,7 +74,12 @@
 		{ "name": "debug", "inherits": "base", "configurePreset": "debug" },
 		{ "name": "release", "inherits": "base", "configurePreset": "release" },
 		{ "name": "asan", "inherits": "base", "configurePreset": "asan" },
-		{ "name": "ci", "inherits": "base", "configurePreset": "ci" }
+		{ "name": "ci", "inherits": "base", "configurePreset": "ci" },
+		{
+			"name": "ci-release",
+			"inherits": "base",
+			"configurePreset": "ci-release"
+		}
 	],
 	"workflowPresets": [
 		{
@@ -98,6 +112,14 @@
 				{ "type": "configure", "name": "ci" },
 				{ "type": "build", "name": "ci" },
 				{ "type": "test", "name": "ci" }
+			]
+		},
+		{
+			"name": "ci-release",
+			"steps": [
+				{ "type": "configure", "name": "ci-release" },
+				{ "type": "build", "name": "ci-release" },
+				{ "type": "test", "name": "ci-release" }
 			]
 		}
 	]

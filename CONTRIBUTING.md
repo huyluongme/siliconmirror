@@ -64,12 +64,15 @@ Build and run the tests before sending a change:
 make test
 ```
 
-CI uses the `ci` preset (AddressSanitizer, UBSan, warnings as errors)
-with both GCC and Clang. Run the same checks locally with:
+CI builds with both GCC and Clang, using two presets: `ci`
+(AddressSanitizer, UBSan, warnings as errors) and `ci-release`
+(optimized, warnings as errors). Run the same checks locally with:
 
 ```sh
 make PRESET=ci test
 make PRESET=ci CC=clang test
+make PRESET=ci-release test
+make PRESET=ci-release CC=clang test
 make check-format
 ```
 

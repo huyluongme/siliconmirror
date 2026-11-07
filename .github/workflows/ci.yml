@@ -9,12 +9,15 @@ permissions:
 
 jobs:
   build:
-    name: Build and test (${{ matrix.cc }})
+    name: Build and test (${{ matrix.cc }}, ${{ matrix.preset }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         cc: [gcc, clang]
+        # ci: debug build with sanitizers. ci-release: optimized build,
+        # where assert() is compiled out.
+        preset: [ci, ci-release]
     env:
       CC: ${{ matrix.cc }}
     steps:
@@ -22,7 +25,7 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build and test
-        run: make PRESET=ci test
+        run: make PRESET=${{ matrix.preset }} test
 
   format:
     name: Check formatting
