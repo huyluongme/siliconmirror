@@ -38,7 +38,7 @@ endif()
 
 include(GNUInstallDirs)
 
-add_subdirectory(frontend)
+add_subdirectory(src)
 
 enable_testing()
 add_subdirectory(tests)

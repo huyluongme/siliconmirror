@@ -49,6 +49,13 @@ blobs or other third-party binaries.
   wrapped at 72 columns.
 - One logical change per commit. Every commit should build.
 
+## Project layout
+
+Read [docs/architecture.md](docs/architecture.md) before adding code. It
+describes where each kind of code goes and which modules may depend on
+which. `make test` fails if a module includes headers from a module it
+must not depend on.
+
 ## Building and testing
 
 Build and run the tests before sending a change:

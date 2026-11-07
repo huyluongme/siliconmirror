@@ -77,6 +77,10 @@ works as well. Builds go to `build/<preset>/`, or
 `build/<preset>-<compiler>/` when `CC` is given. Each build directory
 contains `compile_commands.json` for editors and language servers.
 
+## Documentation
+
+- [Architecture](docs/architecture.md): source tree, layers and naming.
+
 ## Roadmap
 
 1. Core (bus, interrupt lines, virtual clock), AArch64 interpreter
