@@ -24,3 +24,11 @@ add_test(NAME unit.event COMMAND test_event)
 add_executable(test_machine test_machine.c)
 target_link_libraries(test_machine PRIVATE core)
 add_test(NAME unit.machine COMMAND test_machine)
+
+add_executable(test_char_file test_char_file.c)
+target_link_libraries(test_char_file PRIVATE backend)
+add_test(NAME unit.char_file COMMAND test_char_file)
+
+add_executable(test_pl011 test_pl011.c)
+target_link_libraries(test_pl011 PRIVATE hw)
+add_test(NAME unit.pl011 COMMAND test_pl011)

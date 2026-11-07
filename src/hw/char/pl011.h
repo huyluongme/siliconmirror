@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Copyright (C) 2026 Huy Luong Duc */
+
+/*
+ * ARM PrimeCell UART (PL011).
+ *
+ * Written from the PrimeCell UART (PL011) Technical Reference Manual,
+ * revision r1p5 (ARM DDI 0183G), and chapter 13 of the BCM2835 ARM
+ * Peripherals datasheet for the Raspberry Pi variant.
+ *
+ * Implemented so far: transmitting, the flag register, the control and
+ * configuration registers, and the identification registers. Bytes are
+ * passed to the output stream as soon as the UART may send them; the
+ * time a real UART takes to shift them out is not modelled.
+ *
+ * Not implemented yet: receiving, interrupts, loopback. The interrupt
+ * registers hold their values, but no interrupt is ever raised.
+ */
+
+#ifndef HW_CHAR_PL011_H
+#define HW_CHAR_PL011_H
+
+#include <stdint.h>
+
+#include "core/bus.h"
+#include "core/char_stream.h"
+#include "core/irq.h"
+
+/* Size of the register block. */
+#define PL011_MMIO_SIZE 0x1000
+
+/* The largest FIFO depth a PL011 can have. */
+#define PL011_MAX_FIFO_DEPTH 32
+
+/* Differences between implementations of the PL011. */
+typedef struct Pl011Config {
+	/* Entries in each FIFO: 32 on r1p5, 16 on the BCM2835. */
+	unsigned fifo_depth;
+
+	/*
+	 * UARTPeriphID0-3, with ID0 in the low byte; 0x00341011 on r1p5.
+	 * 0 means the identification registers are not implemented: they
+	 * and UARTPCellID0-3 then read as 0.
+	 */
+	uint32_t periph_id;
+} Pl011Config;
+
+/* The PL011 as ARM's manual describes it, revision r1p5. */
+extern const Pl011Config pl011_arm_r1p5;
+
+typedef struct Pl011 Pl011;
+
+/*
+ * Create a UART in its reset state. Bytes it sends go to out; irq is its
+ * interrupt output (UARTINTR). Either may be NULL when not connected.
+ * Returns NULL when out of memory.
+ */
+Pl011 *pl011_create(const Pl011Config *config, CharStream *out, IrqLine *irq);
+
+void pl011_destroy(Pl011 *uart);
+
+/* Put the UART back in its reset state. */
+void pl011_reset(Pl011 *uart);
+
+/* Map the registers on bus at base. */
+BusStatus pl011_map(Pl011 *uart, Bus *bus, const char *name, uint64_t base);
+
+#endif /* HW_CHAR_PL011_H */

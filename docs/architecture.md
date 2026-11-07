@@ -23,7 +23,8 @@ src/
                       MBR/FAT reading, device tree building
   core/               Board-independent core: memory bus, interrupt
                       lines, virtual time and timed events, the CPU
-                      interface, the machine main loop
+                      and character stream interfaces, the machine
+                      main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -98,6 +99,10 @@ Two consequences are worth stating plainly:
 holds what the host provides: your terminal, a log file, a socket. The
 machine connects the two, so the same PL011 model can print to a terminal
 or write to a file without any change to its code.
+
+Since `hw` may not depend on `backend`, the two meet through an interface
+defined in `core`: a UART writes to a `CharStream` (`core/char_stream.h`),
+and each back end in `backend/char/` implements one.
 
 Devices are grouped by kind, not by board. A PL011 exists on many ARM
 boards, so a future board can reuse it directly.
