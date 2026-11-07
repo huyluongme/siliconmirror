@@ -72,10 +72,11 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn)
 		return ARM64_EXEC_UNDEFINED;
 	case ARM64_GROUP_DP_IMM:
 		return arm64_exec_dp_imm(c, insn);
+	case ARM64_GROUP_LOAD_STORE:
+		return arm64_exec_load_store(c, insn);
 	case ARM64_GROUP_BRANCH_SYS:
 	case ARM64_GROUP_DP_REG:
 	case ARM64_GROUP_SIMD_FP:
-	case ARM64_GROUP_LOAD_STORE:
 		break;
 	}
 	return ARM64_EXEC_UNIMPLEMENTED;

@@ -121,6 +121,8 @@ typedef enum Arm64Exec {
 	ARM64_EXEC_UNDEFINED,
 	/* Valid, but this model does not implement it yet. */
 	ARM64_EXEC_UNIMPLEMENTED,
+	/* A data access failed; c->data_abort describes it. */
+	ARM64_EXEC_DATA_ABORT,
 } Arm64Exec;
 
 /* Decode and execute one instruction; c->pc is its address. */
@@ -128,5 +130,16 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
 
 /* The same for each group of C4.1, in the source file named after it. */
 Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
+
+/*
+ * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. On failure they
+ * fill in c->data_abort and return false; the instruction then returns
+ * ARM64_EXEC_DATA_ABORT.
+ */
+bool arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
+                    uint64_t *value);
+bool arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
+                     uint64_t value);
 
 #endif /* CPU_ARM64_INTERNAL_H */

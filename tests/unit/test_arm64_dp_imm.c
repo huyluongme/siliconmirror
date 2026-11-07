@@ -23,28 +23,6 @@
 #define C ARM64_NZCV_C
 #define V ARM64_NZCV_V
 
-/* Run one instruction that must execute. */
-static void exec(Machine *m, Arm64Cpu *c, uint32_t insn)
-{
-	CHECK_EQ(arm64_test_step(m, c, insn), MACHINE_STOP_LIMIT);
-}
-
-/* Check that each instruction stops the machine as UNDEFINED. */
-static void check_undefined(const uint32_t *insns, unsigned count)
-{
-	for (unsigned i = 0; i < count; i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		if (strstr(m->stop_message, "undefined instruction") == NULL) {
-			fprintf(stderr, "0x%08" PRIx32 " is not UNDEFINED\n", insns[i]);
-			test_failures++;
-		}
-		machine_destroy(m);
-	}
-}
-
 /* SInt() of the low 32 bits of x. */
 static int64_t sint32(uint64_t x)
 {
@@ -120,16 +98,16 @@ static void test_movz(void)
 	Machine *m = arm64_test_machine(&c);
 
 	c->x[0] = 0x5555555555555555;
-	exec(m, c, 0xd2e24680); /* MOVZ X0, #0x1234, LSL #48 */
+	arm64_test_exec(m, c, 0xd2e24680); /* MOVZ X0, #0x1234, LSL #48 */
 	CHECK_EQ(c->x[0], 0x1234000000000000);
 
 	c->x[1] = UINT64_MAX;
-	exec(m, c, 0x52b579a1); /* MOVZ W1, #0xabcd, LSL #16 */
+	arm64_test_exec(m, c, 0x52b579a1); /* MOVZ W1, #0xabcd, LSL #16 */
 	CHECK_EQ(c->x[1], 0xabcd0000);
 
 	/* Rd 31 is the zero register: SP does not change. */
 	c->sp_el[3] = 0x8000;
-	exec(m, c, 0xd280003f); /* MOVZ XZR, #1 */
+	arm64_test_exec(m, c, 0xd280003f); /* MOVZ XZR, #1 */
 	CHECK_EQ(c->sp_el[3], 0x8000);
 	machine_destroy(m);
 }
@@ -139,17 +117,18 @@ static void test_movn(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	exec(m, c, 0x92800002); /* MOVN X2, #0 */
+	arm64_test_exec(m, c, 0x92800002); /* MOVN X2, #0 */
 	CHECK_EQ(c->x[2], UINT64_MAX);
 
 	c->x[3] = UINT64_MAX;
-	exec(m, c, 0x12800003); /* MOVN W3, #0 */
+	arm64_test_exec(m, c, 0x12800003); /* MOVN W3, #0 */
 	CHECK_EQ(c->x[3], 0xffffffff);
 
-	exec(m, c, 0x92a24684); /* MOVN X4, #0x1234, LSL #16 */
+	arm64_test_exec(m, c, 0x92a24684); /* MOVN X4, #0x1234, LSL #16 */
 	CHECK_EQ(c->x[4], 0xffffffffedcbffff);
 
-	exec(m, c, 0x92800027); /* MOV X7, #-2, the alias of MOVN X7, #1 */
+	arm64_test_exec(m, c,
+	                0x92800027); /* MOV X7, #-2, the alias of MOVN X7, #1 */
 	CHECK_EQ(c->x[7], 0xfffffffffffffffe);
 	machine_destroy(m);
 }
@@ -160,12 +139,12 @@ static void test_movk(void)
 	Machine *m = arm64_test_machine(&c);
 
 	c->x[5] = 0x1111222233334444;
-	exec(m, c, 0xf2d7dde5); /* MOVK X5, #0xbeef, LSL #32 */
+	arm64_test_exec(m, c, 0xf2d7dde5); /* MOVK X5, #0xbeef, LSL #32 */
 	CHECK_EQ(c->x[5], 0x1111beef33334444);
 
 	/* A 32-bit MOVK keeps bits 31:16 and clears bits 63:32. */
 	c->x[6] = 0xffffffff12345678;
-	exec(m, c, 0x7297dde6); /* MOVK W6, #0xbeef */
+	arm64_test_exec(m, c, 0x7297dde6); /* MOVK W6, #0xbeef */
 	CHECK_EQ(c->x[6], 0x1234beef);
 	machine_destroy(m);
 }
@@ -177,7 +156,7 @@ static void test_move_wide_unallocated(void)
 		0x32800000, /* opc = 01 */
 	};
 
-	check_undefined(insns, ARRAY_SIZE(insns));
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 static void test_add_sub_imm(void)
@@ -188,15 +167,15 @@ static void test_add_sub_imm(void)
 	/* ADD and SUB leave the flags alone. */
 	c->nzcv = N | C;
 	c->x[1] = 0x1000;
-	exec(m, c, 0x91048c20); /* ADD X0, X1, #0x123 */
+	arm64_test_exec(m, c, 0x91048c20); /* ADD X0, X1, #0x123 */
 	CHECK_EQ(c->x[0], 0x1123);
-	exec(m, c, 0x91400422); /* ADD X2, X1, #1, LSL #12 */
+	arm64_test_exec(m, c, 0x91400422); /* ADD X2, X1, #1, LSL #12 */
 	CHECK_EQ(c->x[2], 0x2000);
 
 	/* A 32-bit result wraps around and clears bits 63:32. */
 	c->x[1] = 0xffffffff;
 	c->x[3] = UINT64_MAX;
-	exec(m, c, 0x11000423); /* ADD W3, W1, #1 */
+	arm64_test_exec(m, c, 0x11000423); /* ADD W3, W1, #1 */
 	CHECK_EQ(c->x[3], 0);
 	CHECK_EQ(c->nzcv, N | C);
 	machine_destroy(m);
@@ -209,18 +188,18 @@ static void test_stack_pointer_operands(void)
 
 	/* At EL3 with PSTATE.SP = 1, register 31 means SP_EL3. */
 	c->x[1] = 0x8000;
-	exec(m, c, 0x9100003f); /* MOV SP, X1 */
+	arm64_test_exec(m, c, 0x9100003f); /* MOV SP, X1 */
 	CHECK_EQ(c->sp_el[3], 0x8000);
 
-	exec(m, c, 0xd10043ff); /* SUB SP, SP, #0x10 */
+	arm64_test_exec(m, c, 0xd10043ff); /* SUB SP, SP, #0x10 */
 	CHECK_EQ(c->sp_el[3], 0x7ff0);
 
-	exec(m, c, 0x910003e7); /* MOV X7, SP */
+	arm64_test_exec(m, c, 0x910003e7); /* MOV X7, SP */
 	CHECK_EQ(c->x[7], 0x7ff0);
 
 	/* C6.2.5: a 32-bit result written to SP is zero-extended. */
 	c->x[1] = 0xffffffff00001234;
-	exec(m, c, 0x1100003f); /* MOV WSP, W1 */
+	arm64_test_exec(m, c, 0x1100003f); /* MOV WSP, W1 */
 	CHECK_EQ(c->sp_el[3], 0x1234);
 	CHECK_EQ(c->sp_el[0], 0);
 	machine_destroy(m);
@@ -246,7 +225,7 @@ static void test_flag_setting(void)
 
 		c->x[1] = cases[i].x1;
 		c->nzcv = N | Z | C | V;
-		exec(m, c, cases[i].insn);
+		arm64_test_exec(m, c, cases[i].insn);
 		CHECK_EQ(c->nzcv, cases[i].nzcv);
 		machine_destroy(m);
 	}
@@ -255,17 +234,17 @@ static void test_flag_setting(void)
 	Machine *m = arm64_test_machine(&c);
 
 	c->x[1] = UINT64_MAX;
-	exec(m, c, 0xb1000420); /* ADDS X0, X1, #1 */
+	arm64_test_exec(m, c, 0xb1000420); /* ADDS X0, X1, #1 */
 	CHECK_EQ(c->x[0], 0);
 
 	c->x[0] = UINT64_MAX;
 	c->x[1] = 0x80000000;
-	exec(m, c, 0x71000420); /* SUBS W0, W1, #1 */
+	arm64_test_exec(m, c, 0x71000420); /* SUBS W0, W1, #1 */
 	CHECK_EQ(c->x[0], 0x7fffffff);
 
 	/* Rn 31 is SP, but Rd 31 of a flag-setting form is the zero register. */
 	c->sp_el[3] = 0x8000;
-	exec(m, c, 0xf10003ff); /* CMP SP, #0 */
+	arm64_test_exec(m, c, 0xf10003ff); /* CMP SP, #0 */
 	CHECK_EQ(c->nzcv, C);
 	CHECK_EQ(c->sp_el[3], 0x8000);
 	machine_destroy(m);
@@ -278,20 +257,20 @@ static void test_adr(void)
 	uint64_t pc;
 
 	pc = c->pc;
-	exec(m, c, 0x10000800); /* ADR X0, . + 0x100 */
+	arm64_test_exec(m, c, 0x10000800); /* ADR X0, . + 0x100 */
 	CHECK_EQ(c->x[0], pc + 0x100);
 
 	pc = c->pc;
-	exec(m, c, 0x10ffffe1); /* ADR X1, . - 4 */
+	arm64_test_exec(m, c, 0x10ffffe1); /* ADR X1, . - 4 */
 	CHECK_EQ(c->x[1], pc - 4);
 
 	/* The limits of the 21-bit signed offset. */
 	pc = c->pc;
-	exec(m, c, 0x10800002); /* ADR X2, . - 0x100000 */
+	arm64_test_exec(m, c, 0x10800002); /* ADR X2, . - 0x100000 */
 	CHECK_EQ(c->x[2], pc - 0x100000);
 
 	pc = c->pc;
-	exec(m, c, 0x707fffe3); /* ADR X3, . + 0xfffff */
+	arm64_test_exec(m, c, 0x707fffe3); /* ADR X3, . + 0xfffff */
 	CHECK_EQ(c->x[3], pc + 0xfffff);
 	machine_destroy(m);
 }
@@ -303,13 +282,13 @@ static void test_adrp(void)
 
 	/* Start near the end of a page so that the page offset matters. */
 	c->pc = 0x80ff4;
-	exec(m, c, 0xb0000000); /* ADRP X0, . + 1 page */
+	arm64_test_exec(m, c, 0xb0000000); /* ADRP X0, . + 1 page */
 	CHECK_EQ(c->x[0], 0x81000);
 
-	exec(m, c, 0xf0ffffe1); /* ADRP X1, . - 1 page, at 0x80ff8 */
+	arm64_test_exec(m, c, 0xf0ffffe1); /* ADRP X1, . - 1 page, at 0x80ff8 */
 	CHECK_EQ(c->x[1], 0x7f000);
 
-	exec(m, c, 0x90800002); /* ADRP X2, . - 4GB, at 0x80ffc */
+	arm64_test_exec(m, c, 0x90800002); /* ADRP X2, . - 4GB, at 0x80ffc */
 	CHECK_EQ(c->x[2], 0xffffffff00080000);
 	machine_destroy(m);
 }
@@ -320,29 +299,29 @@ static void test_logical_imm(void)
 	Machine *m = arm64_test_machine(&c);
 
 	c->x[1] = 0xfedcba987654321f;
-	exec(m, c, 0x92401c20); /* AND X0, X1, #0xff */
+	arm64_test_exec(m, c, 0x92401c20); /* AND X0, X1, #0xff */
 	CHECK_EQ(c->x[0], 0x1f);
 
 	c->x[2] = UINT64_MAX;
-	exec(m, c, 0x12000422); /* AND W2, W1, #3 */
+	arm64_test_exec(m, c, 0x12000422); /* AND W2, W1, #3 */
 	CHECK_EQ(c->x[2], 3);
 
-	exec(m, c, 0xb204cc23); /* ORR X3, X1, #0xf0f0f0f0f0f0f0f0 */
+	arm64_test_exec(m, c, 0xb204cc23); /* ORR X3, X1, #0xf0f0f0f0f0f0f0f0 */
 	CHECK_EQ(c->x[3], 0xfefcfaf8f6f4f2ff);
 
-	exec(m, c, 0xd200f024); /* EOR X4, X1, #0x5555555555555555 */
+	arm64_test_exec(m, c, 0xd200f024); /* EOR X4, X1, #0x5555555555555555 */
 	CHECK_EQ(c->x[4], 0xab89efcd2301674a);
 
-	exec(m, c, 0xb200f3e5); /* MOV X5, #0x5555555555555555, an ORR */
+	arm64_test_exec(m, c, 0xb200f3e5); /* MOV X5, #0x5555555555555555, an ORR */
 	CHECK_EQ(c->x[5], 0x5555555555555555);
 
 	c->x[6] = UINT64_MAX;
-	exec(m, c, 0x32009fe6); /* MOV W6, #0x00ff00ff, an ORR */
+	arm64_test_exec(m, c, 0x32009fe6); /* MOV W6, #0x00ff00ff, an ORR */
 	CHECK_EQ(c->x[6], 0x00ff00ff);
 
 	/* Rd 31 of AND is SP: aligning the stack pointer. */
 	c->x[1] = 0x8007;
-	exec(m, c, 0x927cec3f); /* AND SP, X1, #0xfffffffffffffff0 */
+	arm64_test_exec(m, c, 0x927cec3f); /* AND SP, X1, #0xfffffffffffffff0 */
 	CHECK_EQ(c->sp_el[3], 0x8000);
 	machine_destroy(m);
 }
@@ -368,7 +347,7 @@ static void test_logical_imm_flags(void)
 		c->x[1] = cases[i].x1;
 		c->nzcv = N | Z | C | V;
 		c->sp_el[3] = 0x8000;
-		exec(m, c, cases[i].insn);
+		arm64_test_exec(m, c, cases[i].insn);
 		CHECK_EQ(c->nzcv, cases[i].nzcv);
 		CHECK_EQ(c->sp_el[3], 0x8000); /* TST writes the zero register */
 		machine_destroy(m);
@@ -422,7 +401,7 @@ static void test_logical_imm_undefined(void)
 		0x1200f800, /* N:NOT(imms) = 0000000 or 0000001: no element size */
 	};
 
-	check_undefined(insns, ARRAY_SIZE(insns));
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 static void test_bitfield_aliases(void)
@@ -431,47 +410,47 @@ static void test_bitfield_aliases(void)
 	Machine *m = arm64_test_machine(&c);
 
 	c->x[1] = 0xfedcba9876543210;
-	exec(m, c, 0xd37cec20); /* LSL X0, X1, #4 */
+	arm64_test_exec(m, c, 0xd37cec20); /* LSL X0, X1, #4 */
 	CHECK_EQ(c->x[0], 0xedcba98765432100);
-	exec(m, c, 0xd37cfc22); /* LSR X2, X1, #60 */
+	arm64_test_exec(m, c, 0xd37cfc22); /* LSR X2, X1, #60 */
 	CHECK_EQ(c->x[2], 0xf);
-	exec(m, c, 0x9344fc23); /* ASR X3, X1, #4 */
+	arm64_test_exec(m, c, 0x9344fc23); /* ASR X3, X1, #4 */
 	CHECK_EQ(c->x[3], 0xffedcba987654321);
-	exec(m, c, 0xd3483c24); /* UBFX X4, X1, #8, #8 */
+	arm64_test_exec(m, c, 0xd3483c24); /* UBFX X4, X1, #8, #8 */
 	CHECK_EQ(c->x[4], 0x32);
-	exec(m, c, 0xd37c1c2c); /* UBFIZ X12, X1, #4, #8 */
+	arm64_test_exec(m, c, 0xd37c1c2c); /* UBFIZ X12, X1, #4, #8 */
 	CHECK_EQ(c->x[12], 0x100);
 
 	c->x[6] = 0x1111111111111111;
-	exec(m, c, 0xb3701c26); /* BFI X6, X1, #16, #8 */
+	arm64_test_exec(m, c, 0xb3701c26); /* BFI X6, X1, #16, #8 */
 	CHECK_EQ(c->x[6], 0x1111111111101111);
 	c->x[7] = 0x1111111111111111;
-	exec(m, c, 0xb3483c27); /* BFXIL X7, X1, #8, #8 */
+	arm64_test_exec(m, c, 0xb3483c27); /* BFXIL X7, X1, #8, #8 */
 	CHECK_EQ(c->x[7], 0x1111111111111132);
 	c->x[14] = UINT64_MAX;
-	exec(m, c, 0xb3783fee); /* BFC X14, #8, #16 */
+	arm64_test_exec(m, c, 0xb3783fee); /* BFC X14, #8, #16 */
 	CHECK_EQ(c->x[14], 0xffffffffff0000ff);
 
 	c->x[8] = UINT64_MAX;
-	exec(m, c, 0x53001c28); /* UXTB W8, W1 */
+	arm64_test_exec(m, c, 0x53001c28); /* UXTB W8, W1 */
 	CHECK_EQ(c->x[8], 0x10);
 
 	/* The signed forms copy the top bit of the field upwards. */
 	c->x[1] = 0x8000;
-	exec(m, c, 0x93483c25); /* SBFX X5, X1, #8, #8 */
+	arm64_test_exec(m, c, 0x93483c25); /* SBFX X5, X1, #8, #8 */
 	CHECK_EQ(c->x[5], 0xffffffffffffff80);
 	c->x[1] = 0x80;
-	exec(m, c, 0x937c1c2d); /* SBFIZ X13, X1, #4, #8 */
+	arm64_test_exec(m, c, 0x937c1c2d); /* SBFIZ X13, X1, #4, #8 */
 	CHECK_EQ(c->x[13], 0xfffffffffffff800);
 	c->x[1] = 0x12348765;
-	exec(m, c, 0x93403c29); /* SXTH X9, W1 */
+	arm64_test_exec(m, c, 0x93403c29); /* SXTH X9, W1 */
 	CHECK_EQ(c->x[9], 0xffffffffffff8765);
 	c->x[1] = 0x80000000;
-	exec(m, c, 0x93407c2a); /* SXTW X10, W1 */
+	arm64_test_exec(m, c, 0x93407c2a); /* SXTW X10, W1 */
 	CHECK_EQ(c->x[10], 0xffffffff80000000);
 
 	c->x[1] = 3;
-	exec(m, c, 0x5301002b); /* LSL W11, W1, #31 */
+	arm64_test_exec(m, c, 0x5301002b); /* LSL W11, W1, #31 */
 	CHECK_EQ(c->x[11], 0x80000000);
 	machine_destroy(m);
 }
@@ -558,7 +537,7 @@ static void test_bitfield_undefined(void)
 		0x73000000, /* opc = 11 */
 	};
 
-	check_undefined(insns, ARRAY_SIZE(insns));
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 static void test_extract(void)
@@ -568,13 +547,13 @@ static void test_extract(void)
 
 	c->x[1] = 0xfedcba9876543210;
 	c->x[2] = 0x0123456789abcdef;
-	exec(m, c, 0x93c22020); /* EXTR X0, X1, X2, #8 */
+	arm64_test_exec(m, c, 0x93c22020); /* EXTR X0, X1, X2, #8 */
 	CHECK_EQ(c->x[0], 0x100123456789abcd);
-	exec(m, c, 0x93c11023); /* ROR X3, X1, #4 */
+	arm64_test_exec(m, c, 0x93c11023); /* ROR X3, X1, #4 */
 	CHECK_EQ(c->x[3], 0x0fedcba987654321);
-	exec(m, c, 0x13824024); /* EXTR W4, W1, W2, #16 */
+	arm64_test_exec(m, c, 0x13824024); /* EXTR W4, W1, W2, #16 */
 	CHECK_EQ(c->x[4], 0x321089ab);
-	exec(m, c, 0x93c20025); /* EXTR X5, X1, X2, #0 */
+	arm64_test_exec(m, c, 0x93c20025); /* EXTR X5, X1, X2, #0 */
 	CHECK_EQ(c->x[5], 0x0123456789abcdef);
 	machine_destroy(m);
 }
@@ -588,7 +567,7 @@ static void test_extract_undefined(void)
 		0x33800000, /* op21 = 01 */
 	};
 
-	check_undefined(insns, ARRAY_SIZE(insns));
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 static void test_classes_newer_than_armv8_0_are_undefined(void)
@@ -603,7 +582,7 @@ static void test_classes_newer_than_armv8_0_are_undefined(void)
 		0xf380001f, /* AUTIASPPC (FEAT_PAuth_LR) */
 	};
 
-	check_undefined(insns, ARRAY_SIZE(insns));
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 int main(void)

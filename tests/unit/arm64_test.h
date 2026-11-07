@@ -6,7 +6,10 @@
 #ifndef TESTS_UNIT_ARM64_TEST_H
 #define TESTS_UNIT_ARM64_TEST_H
 
+#include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "core/machine.h"
 #include "cpu/arm64/cpu.h"
@@ -34,6 +37,29 @@ static inline MachineStop arm64_test_step(Machine *m, Arm64Cpu *c,
 {
 	CHECK_EQ(bus_write(m->bus, c->pc, 4, insn), BUS_OK);
 	return machine_run(m, 1);
+}
+
+/* The same, for an instruction that must execute. */
+static inline void arm64_test_exec(Machine *m, Arm64Cpu *c, uint32_t insn)
+{
+	CHECK_EQ(arm64_test_step(m, c, insn), MACHINE_STOP_LIMIT);
+}
+
+/* Check that each instruction stops a new machine as UNDEFINED. */
+static inline void arm64_test_check_undefined(const uint32_t *insns,
+                                              unsigned count)
+{
+	for (unsigned i = 0; i < count; i++) {
+		Arm64Cpu *c;
+		Machine *m = arm64_test_machine(&c);
+
+		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
+		if (strstr(m->stop_message, "undefined instruction") == NULL) {
+			fprintf(stderr, "0x%08" PRIx32 " is not UNDEFINED\n", insns[i]);
+			test_failures++;
+		}
+		machine_destroy(m);
+	}
 }
 
 #endif /* TESTS_UNIT_ARM64_TEST_H */

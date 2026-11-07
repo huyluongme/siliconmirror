@@ -60,6 +60,14 @@ typedef struct Arm64Cpu {
 
 	/* Address of the next instruction, set while one executes. */
 	uint64_t next_pc;
+
+	/* The data access that failed, when an instruction ends in a data abort. */
+	struct {
+		uint64_t address;
+		unsigned size; /* in bytes */
+		bool write;
+		const char *reason;
+	} data_abort;
 } Arm64Cpu;
 
 /*

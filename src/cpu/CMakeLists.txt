@@ -5,6 +5,8 @@
 add_library(cpu STATIC
 	arm64/cpu.c
 	arm64/decode.c
-	arm64/dp_imm.c)
+	arm64/dp_imm.c
+	arm64/load_store.c
+	arm64/mem.c)
 
 target_link_libraries(cpu PUBLIC core)

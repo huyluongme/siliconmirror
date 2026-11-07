@@ -80,6 +80,14 @@ static bool step(Arm64Cpu *c)
 		          (uint32_t)insn, c->pc,
 		          arm64_group_name(arm64_group((uint32_t)insn)));
 		return false;
+	case ARM64_EXEC_DATA_ABORT:
+		cpu_error(c,
+		          "data abort at 0x%016" PRIx64 ": %u-byte %s 0x%016" PRIx64
+		          " failed: %s (exceptions are not implemented yet)",
+		          c->pc, c->data_abort.size,
+		          c->data_abort.write ? "write to" : "read from",
+		          c->data_abort.address, c->data_abort.reason);
+		return false;
 	}
 	return false;
 }
