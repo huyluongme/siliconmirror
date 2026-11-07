@@ -240,6 +240,57 @@ static void test_pairs(void)
 	machine_destroy(m);
 }
 
+static void test_register_offset(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	for (unsigned i = 0; i < 4; i++)
+		poke(m, DATA - 8 + 8 * i, 8, 0x1111111111111111 * (i + 1));
+	c->x[1] = DATA;
+
+	c->x[2] = 8;
+	arm64_test_exec(m, c, 0xf8626820); /* LDR X0, [X1, X2] */
+	CHECK_EQ(c->x[0], 0x3333333333333333);
+	c->x[2] = 2;
+	arm64_test_exec(m, c, 0xf8627820); /* LDR X0, [X1, X2, LSL #3] */
+	CHECK_EQ(c->x[0], 0x4444444444444444);
+
+	/* Only W2 counts, zero- or sign-extended. */
+	c->x[2] = 0xffffffff00000003;
+	arm64_test_exec(m, c, 0xb8625820); /* LDR W0, [X1, W2, UXTW #2] */
+	CHECK_EQ(c->x[0], 0x33333333);
+	c->x[2] = 0xfffffff8;
+	arm64_test_exec(m, c, 0xf862c820); /* LDR X0, [X1, W2, SXTW] */
+	CHECK_EQ(c->x[0], 0x1111111111111111);
+
+	c->x[0] = 0xab;
+	c->x[2] = 5;
+	arm64_test_exec(m, c, 0x38226820); /* STRB W0, [X1, X2] */
+	CHECK_EQ(peek(m, DATA + 5, 1), 0xab);
+
+	poke(m, DATA + 6, 2, 0x8001);
+	c->x[2] = 3;
+	arm64_test_exec(m, c, 0x78a27820); /* LDRSH X0, [X1, X2, LSL #1] */
+	CHECK_EQ(c->x[0], 0xffffffffffff8001);
+	c->x[2] = 6;
+	arm64_test_exec(m, c, 0x38627820); /* LDRB W0, [X1, X2, LSL #0] */
+	CHECK_EQ(c->x[0], 0x01);
+
+	/* Rn 31 is SP. */
+	c->sp_el[3] = 0x8000;
+	c->x[0] = 0x77;
+	c->x[2] = 1;
+	arm64_test_exec(m, c, 0xf8227be0); /* STR X0, [SP, X2, LSL #3] */
+	CHECK_EQ(peek(m, 0x8008, 8), 0x77);
+
+	/* Prefetches do nothing; RPRFM is a NOP without FEAT_RPRFM. */
+	c->x[1] = 0x200000;
+	arm64_test_exec(m, c, 0xf8a26820); /* PRFM PLDL1KEEP, [X1, X2] */
+	arm64_test_exec(m, c, 0xf8a24838); /* RPRFM PLDKEEP, X2, [X1] */
+	machine_destroy(m);
+}
+
 static void test_prefetch_has_no_effect(void)
 {
 	Arm64Cpu *c;
@@ -415,6 +466,7 @@ static void test_unallocated(void)
 		0xb9c00020, /* size = 10, opc = 11: no LDRSW to 32 bits */
 		0xdc000000, /* LDR (literal) with opc = 11 and VR = 1 */
 		0x68400000, /* LDNP with opc = 01: no LDNPSW */
+		0xf8620820, /* LDR (register) with option = 000 */
 	};
 
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
@@ -426,7 +478,6 @@ static void test_not_implemented_yet(void)
 		0xc85f7c20, /* LDXR X0, [X1] */
 		0xc8dffc20, /* LDAR X0, [X1] */
 		0xc89ffc20, /* STLR X0, [X1] */
-		0xf8627820, /* LDR X0, [X1, X2, LSL #3] */
 		0xf8400820, /* LDTR X0, [X1] */
 		0x3dc00020, /* LDR Q0, [X1] */
 		0x4c407020, /* LD1 {V0.16B}, [X1] */
@@ -453,6 +504,7 @@ int main(void)
 	RUN_TEST(test_unscaled_offset);
 	RUN_TEST(test_literal);
 	RUN_TEST(test_pairs);
+	RUN_TEST(test_register_offset);
 	RUN_TEST(test_prefetch_has_no_effect);
 	RUN_TEST(test_register_31);
 	RUN_TEST(test_constrained_unpredictable_choices);

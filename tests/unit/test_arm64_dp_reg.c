@@ -381,6 +381,265 @@ static void test_conditional_select(void)
 	machine_destroy(m);
 }
 
+static void test_add_sub_with_carry(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[1] = 5;
+	c->x[2] = 7;
+	c->nzcv = C;
+	arm64_test_exec(m, c, 0x9a020020); /* ADC X0, X1, X2 */
+	CHECK_EQ(c->x[0], 13);
+	CHECK_EQ(c->nzcv, C); /* ADC leaves the flags alone */
+	c->nzcv = 0;
+	arm64_test_exec(m, c, 0x9a020020); /* ADC X0, X1, X2 */
+	CHECK_EQ(c->x[0], 12);
+
+	/* SBC subtracts one more when C is clear: C means "no borrow". */
+	c->x[1] = 10;
+	c->x[2] = 3;
+	c->nzcv = C;
+	arm64_test_exec(m, c, 0xda020020); /* SBC X0, X1, X2 */
+	CHECK_EQ(c->x[0], 7);
+	c->nzcv = 0;
+	arm64_test_exec(m, c, 0xda020020); /* SBC X0, X1, X2 */
+	CHECK_EQ(c->x[0], 6);
+
+	c->x[2] = 5;
+	c->nzcv = C;
+	arm64_test_exec(m, c, 0xda0203e0); /* NGC X0, X2 */
+	CHECK_EQ(c->x[0], (uint64_t)-5);
+	c->nzcv = 0;
+	arm64_test_exec(m, c, 0xda0203e0); /* NGC X0, X2 */
+	CHECK_EQ(c->x[0], (uint64_t)-6);
+
+	/* The flag-setting forms. */
+	c->x[1] = 0xffffffff;
+	c->x[2] = 0;
+	c->nzcv = C;
+	arm64_test_exec(m, c, 0x3a020020); /* ADCS W0, W1, W2 */
+	CHECK_EQ(c->x[0], 0);
+	CHECK_EQ(c->nzcv, Z | C);
+	c->x[1] = 0;
+	c->nzcv = 0;
+	arm64_test_exec(m, c, 0xfa020020); /* SBCS X0, X1, X2 */
+	CHECK_EQ(c->x[0], UINT64_MAX);
+	CHECK_EQ(c->nzcv, N);
+	machine_destroy(m);
+}
+
+static void test_divide(void)
+{
+	static const struct {
+		uint32_t insn;
+		uint64_t x1, x2, result;
+	} cases[] = {
+		{0x9ac20820, 100, 7, 14},                    /* UDIV X0, X1, X2 */
+		{0x9ac20820, 100, 0, 0},                     /* UDIV X0, X1, X2 */
+		{0x1ac20820, 0x1ffffffff, 2, 0x7fffffff},    /* UDIV W0, W1, W2 */
+		{0x9ac20c20, (uint64_t)-7, 2, (uint64_t)-3}, /* SDIV X0, X1, X2 */
+		{0x9ac20c20, 7, (uint64_t)-2, (uint64_t)-3}, /* SDIV X0, X1, X2 */
+		{0x9ac20c20, (uint64_t)-7, (uint64_t)-2, 3}, /* SDIV X0, X1, X2 */
+		{0x9ac20c20, 7, 0, 0},                       /* SDIV X0, X1, X2 */
+		/* The most negative value divided by -1 overflows to itself. */
+		{0x9ac20c20, 0x8000000000000000, UINT64_MAX, 0x8000000000000000},
+		{0x1ac20c20, 0x80000000, 0xffffffff, 0x80000000}, /* SDIV W0 */
+		{0x1ac20c20, 0xfffffff9, 2, 0xfffffffd},          /* SDIV W0 */
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+		Arm64Cpu *c;
+		Machine *m = arm64_test_machine(&c);
+
+		c->x[1] = cases[i].x1;
+		c->x[2] = cases[i].x2;
+		arm64_test_exec(m, c, cases[i].insn);
+		CHECK_EQ(c->x[0], cases[i].result);
+		machine_destroy(m);
+	}
+}
+
+static void test_shift_by_register(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	/* The amount is taken modulo the register size. */
+	c->x[1] = 0x0123456789abcdef;
+	c->x[2] = 68;
+	arm64_test_exec(m, c, 0x9ac22020); /* LSL X0, X1, X2 */
+	CHECK_EQ(c->x[0], 0x123456789abcdef0);
+	c->x[2] = 33;
+	arm64_test_exec(m, c, 0x1ac22420); /* LSR W0, W1, W2 */
+	CHECK_EQ(c->x[0], 0x44d5e6f7);
+	c->x[1] = 0x8000000000000000;
+	c->x[2] = 63;
+	arm64_test_exec(m, c, 0x9ac22820); /* ASR X0, X1, X2 */
+	CHECK_EQ(c->x[0], UINT64_MAX);
+	c->x[1] = 0x12345678;
+	c->x[2] = 36;
+	arm64_test_exec(m, c, 0x1ac22c20); /* ROR W0, W1, W2 */
+	CHECK_EQ(c->x[0], 0x81234567);
+	machine_destroy(m);
+}
+
+/* Run a CRC32 instruction with W0 as the accumulator. */
+static void crc(Machine *m, Arm64Cpu *c, uint32_t insn, uint64_t value)
+{
+	c->x[1] = value;
+	arm64_test_exec(m, c, insn);
+}
+
+static void test_crc32(void)
+{
+	/*
+	 * The standard check values of CRC-32 and CRC-32C for "123456789":
+	 * start from all ones, add each byte, invert at the end.
+	 */
+	static const char data[] = "123456789";
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[0] = UINT32_MAX;
+	for (unsigned i = 0; i < 9; i++)
+		crc(m, c, 0x1ac14000, (uint8_t)data[i]); /* CRC32B W0, W0, W1 */
+	CHECK_EQ(c->x[0] ^ UINT32_MAX, 0xcbf43926);
+
+	c->x[0] = UINT32_MAX;
+	for (unsigned i = 0; i < 9; i++)
+		crc(m, c, 0x1ac15000, (uint8_t)data[i]); /* CRC32CB W0, W0, W1 */
+	CHECK_EQ(c->x[0] ^ UINT32_MAX, 0xe3069283);
+
+	/* Eight bytes at once, as a little-endian doubleword. */
+	c->x[0] = UINT32_MAX;
+	crc(m, c, 0x9ac14c00, 0x3837363534333231); /* CRC32X W0, W0, X1 */
+	crc(m, c, 0x1ac14000, '9');                /* CRC32B W0, W0, W1 */
+	CHECK_EQ(c->x[0] ^ UINT32_MAX, 0xcbf43926);
+
+	c->x[0] = UINT32_MAX;
+	crc(m, c, 0x9ac15c00, 0x3837363534333231); /* CRC32CX W0, W0, X1 */
+	crc(m, c, 0x1ac15000, '9');                /* CRC32CB W0, W0, W1 */
+	CHECK_EQ(c->x[0] ^ UINT32_MAX, 0xe3069283);
+
+	/* Only the low 16 and 32 bits count; values from Python. */
+	c->x[0] = UINT32_MAX;
+	crc(m, c, 0x1ac14400, 0xffff3231); /* CRC32H W0, W0, W1 */
+	CHECK_EQ(c->x[0], 0xb0acbb32);
+	c->x[0] = 0xffffffff00000000 | UINT32_MAX;
+	crc(m, c, 0x1ac14800, 0xffffffff34333231); /* CRC32W W0, W0, W1 */
+	CHECK_EQ(c->x[0], 0x641c1f5c);
+	machine_destroy(m);
+}
+
+static void test_bit_operations(void)
+{
+	static const struct {
+		uint32_t insn;
+		uint64_t x1, result;
+	} cases[] = {
+		{0xdac00020, 1, 0x8000000000000000},                  /* RBIT X0, X1 */
+		{0x5ac00020, 0xffffffff00000001, 0x80000000},         /* RBIT W0, W1 */
+		{0xdac00420, 0x0011223344556677, 0x1100332255447766}, /* REV16 X0, X1 */
+		{0xdac00820, 0x0011223344556677, 0x3322110077665544}, /* REV32 X0, X1 */
+		{0xdac00c20, 0x0011223344556677, 0x7766554433221100}, /* REV X0, X1 */
+		{0x5ac00820, 0xffffffff00112233, 0x33221100},         /* REV W0, W1 */
+		{0xdac01020, 0, 64},                                  /* CLZ X0, X1 */
+		{0xdac01020, 1, 63},                                  /* CLZ X0, X1 */
+		{0xdac01020, 0x8000000000000000, 0},                  /* CLZ X0, X1 */
+		{0x5ac01020, 0, 32},                                  /* CLZ W0, W1 */
+		{0x5ac01020, 0xffffffff00000001, 31},                 /* CLZ W0, W1 */
+		{0xdac01420, 0, 63},                                  /* CLS X0, X1 */
+		{0xdac01420, UINT64_MAX, 63},                         /* CLS X0, X1 */
+		{0xdac01420, 1, 62},                                  /* CLS X0, X1 */
+		{0xdac01420, 0x4000000000000000, 0},                  /* CLS X0, X1 */
+		{0x5ac01420, 0x80000000, 0},                          /* CLS W0, W1 */
+		{0x5ac01420, 0xffffffff, 31},                         /* CLS W0, W1 */
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+		Arm64Cpu *c;
+		Machine *m = arm64_test_machine(&c);
+
+		c->x[0] = 0x5555;
+		c->x[1] = cases[i].x1;
+		arm64_test_exec(m, c, cases[i].insn);
+		CHECK_EQ(c->x[0], cases[i].result);
+		machine_destroy(m);
+	}
+}
+
+static void test_multiply(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[1] = 5;
+	c->x[2] = 7;
+	c->x[3] = 3;
+	arm64_test_exec(m, c, 0x9b020c20); /* MADD X0, X1, X2, X3 */
+	CHECK_EQ(c->x[0], 38);
+	arm64_test_exec(m, c, 0x9b028c20); /* MSUB X0, X1, X2, X3 */
+	CHECK_EQ(c->x[0], (uint64_t)-32);
+	arm64_test_exec(m, c, 0x9b02fc20); /* MNEG X0, X1, X2 */
+	CHECK_EQ(c->x[0], (uint64_t)-35);
+
+	c->x[1] = 0x10000;
+	c->x[2] = 0x10001;
+	arm64_test_exec(m, c, 0x1b027c20); /* MUL W0, W1, W2 */
+	CHECK_EQ(c->x[0], 0x10000);
+
+	/* The long forms multiply the low 32 bits into 64. */
+	c->x[1] = 0xfffffffe; /* -2 as a signed word */
+	c->x[2] = 3;
+	c->x[3] = 100;
+	arm64_test_exec(m, c, 0x9b220c20); /* SMADDL X0, W1, W2, X3 */
+	CHECK_EQ(c->x[0], 94);
+	arm64_test_exec(m, c, 0x9b228c20); /* SMSUBL X0, W1, W2, X3 */
+	CHECK_EQ(c->x[0], 106);
+	arm64_test_exec(m, c, 0x9ba20c20); /* UMADDL X0, W1, W2, X3 */
+	CHECK_EQ(c->x[0], 0x30000005e);
+	arm64_test_exec(m, c, 0x9b227c20); /* SMULL X0, W1, W2 */
+	CHECK_EQ(c->x[0], (uint64_t)-6);
+	arm64_test_exec(m, c, 0x9ba27c20); /* UMULL X0, W1, W2 */
+	CHECK_EQ(c->x[0], 0x2fffffffa);
+	machine_destroy(m);
+}
+
+static void test_multiply_high(void)
+{
+	/* The high halves of 128-bit products, computed with Python. */
+	static const struct {
+		uint64_t x, y, umulh, smulh;
+	} cases[] = {
+		{UINT64_MAX, UINT64_MAX, 0xfffffffffffffffe, 0},
+		{0x8000000000000000, 0x8000000000000000, 0x4000000000000000,
+	     0x4000000000000000},
+		{0x8000000000000000, 1, 0, UINT64_MAX},
+		{0x123456789abcdef0, 0xfedcba9876543210, 0x121fa00ad77d7422,
+	     0xffeb49923cc09532},
+		{UINT64_MAX, 2, 1, UINT64_MAX},
+		{0x7fffffffffffffff, 0x7fffffffffffffff, 0x3fffffffffffffff,
+	     0x3fffffffffffffff},
+	};
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+		c->x[1] = cases[i].x;
+		c->x[2] = cases[i].y;
+		arm64_test_exec(m, c, 0x9bc27c20); /* UMULH X0, X1, X2 */
+		CHECK_EQ(c->x[0], cases[i].umulh);
+		arm64_test_exec(m, c, 0x9b427c20); /* SMULH X0, X1, X2 */
+		CHECK_EQ(c->x[0], cases[i].smulh);
+	}
+
+	/* Ra should be 11111; as chosen in dp_reg.c, other values are ignored. */
+	arm64_test_exec(m, c, 0x9b420c20); /* SMULH X0, X1, X2 with Ra = 3 */
+	CHECK_EQ(c->x[0], 0x3fffffffffffffff);
+	machine_destroy(m);
+}
+
 static void test_undefined(void)
 {
 	/*
@@ -399,32 +658,26 @@ static void test_undefined(void)
 		0x9a820c20, /* CSEL with op2 = 11 */
 		0xba820020, /* CSEL with S = 1 */
 		0x9a200000, /* op1 = 1, op2 = 0001: UNALLOCATED */
+		0xbac20c20, /* SDIV with S = 1 */
+		0x1ac24c20, /* CRC32X with sf = 0 */
+		0x9ac24020, /* CRC32B with sf = 1 */
+		0x5ac00c20, /* 32-bit REV with opc = 11 */
+		0x9b42fc20, /* SMULH with o0 = 1 */
+		0xbb020c20, /* 3 source with op54 = 01 */
+		0x1b220c20, /* 32-bit SMADDL */
 		0xba018402, /* RMIF X0, #3, #2 (FEAT_FlagM) */
 		0x3a00080d, /* SETF8 W0 (FEAT_FlagM) */
 		0x9a022020, /* ADDPT X0, X1, X2 (FEAT_CPA) */
+		0x9b620c20, /* MADDPT X0, X1, X2, X3 (FEAT_CPA) */
+		0x9ac26020, /* SMAX X0, X1, X2 (FEAT_CSSC) */
+		0xdac02020, /* ABS X0, X1 (FEAT_CSSC) */
+		0x5ac01c20, /* CNT W0, W1 (FEAT_CSSC) */
+		0x9adf1020, /* IRG X0, X1 (FEAT_MTE) */
+		0x9ac23020, /* PACGA X0, X1, X2 (FEAT_PAuth) */
+		0xdac10020, /* PACIA X0, X1 (FEAT_PAuth) */
 	};
 
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
-}
-
-static void test_not_implemented_yet(void)
-{
-	static const uint32_t insns[] = {
-		0x9a020020, /* ADC X0, X1, X2 */
-		0x9ac20820, /* UDIV X0, X1, X2 */
-		0xdac00020, /* RBIT X0, X1 */
-		0x9b020c20, /* MADD X0, X1, X2, X3 */
-	};
-
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message, "is not implemented yet (Data "
-		                              "Processing -- Register)") != NULL);
-		machine_destroy(m);
-	}
 }
 
 int main(void)
@@ -438,7 +691,13 @@ int main(void)
 	RUN_TEST(test_extended_with_stack_pointer);
 	RUN_TEST(test_conditional_compare);
 	RUN_TEST(test_conditional_select);
+	RUN_TEST(test_add_sub_with_carry);
+	RUN_TEST(test_divide);
+	RUN_TEST(test_shift_by_register);
+	RUN_TEST(test_crc32);
+	RUN_TEST(test_bit_operations);
+	RUN_TEST(test_multiply);
+	RUN_TEST(test_multiply_high);
 	RUN_TEST(test_undefined);
-	RUN_TEST(test_not_implemented_yet);
 	return test_summary();
 }

@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "cpu/arm64/cpu.h"
+#include "util/bits.h"
 
 /*
  * General-purpose registers, C1.2.6.1 and the X accessor in J1.2.3.260:
@@ -61,6 +62,27 @@ static inline void set_xsp(Arm64Cpu *c, unsigned n, uint64_t value)
 static inline uint64_t datasize_mask(unsigned datasize)
 {
 	return datasize == 64 ? UINT64_MAX : UINT32_MAX;
+}
+
+/*
+ * ExtendReg() from J1.2.3.42: the low 8, 16, 32 or 64 bits of register
+ * m, zero- or sign-extended, then shifted left by 0 to 4. option is
+ * UXTB, UXTH, UXTW, UXTX, SXTB, SXTH, SXTW, SXTX for 0 to 7
+ * (DecodeRegExtend()).
+ */
+static inline uint64_t extend_reg(Arm64Cpu *c, unsigned m, unsigned option,
+                                  unsigned shift, unsigned datasize)
+{
+	unsigned len = 8u << (option & 3);
+	uint64_t value = get_x(c, m);
+
+	if (len < 64) {
+		if (option & 4)
+			value = sign_extend64(value, len);
+		else
+			value &= ((uint64_t)1 << len) - 1;
+	}
+	return (value << shift) & datasize_mask(datasize);
 }
 
 /*

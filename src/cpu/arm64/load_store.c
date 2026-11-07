@@ -6,12 +6,12 @@
  * clear. Each one follows its description in C6.2.
  *
  * Implemented so far: the general-purpose register forms with an
- * immediate offset (unsigned offset, unscaled, pre-index and post-index),
- * the literal forms, the register pairs, and the prefetches, which are
- * hints with no effect here. The SIMD&FP forms, the register offset
- * forms, the unprivileged forms, and the exclusive and ordered classes
- * are not implemented yet. Classes that only hold instructions newer
- * than Armv8.0 are UNDEFINED.
+ * immediate offset (unsigned offset, unscaled, pre-index and post-index)
+ * or a register offset, the literal forms, the register pairs, and the
+ * prefetches, which are hints with no effect here. The SIMD&FP forms,
+ * the unprivileged forms, and the exclusive and ordered classes are not
+ * implemented yet. Classes that only hold instructions newer than
+ * Armv8.0 are UNDEFINED.
  *
  * Where the manual leaves a choice of CONSTRAINED UNPREDICTABLE
  * behaviors, this model makes these:
@@ -272,8 +272,18 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 		switch (field32(insn, 11, 10)) {
 		case 0: /* Atomic memory operations: FEAT_LSE */
 			return ARM64_EXEC_UNDEFINED;
-		case 2: /* register offset */
-			return ARM64_EXEC_UNIMPLEMENTED;
+		case 2: { /* register offset, LDR (register) and others */
+			unsigned option = field32(insn, 15, 13);
+			unsigned shift = bit32(insn, 12) ? field32(insn, 31, 30) : 0;
+
+			/* option<1> = 0 would index a sub-word register. */
+			if (!(option & 2))
+				return ARM64_EXEC_UNDEFINED;
+			return load_store_register(
+				c, insn,
+				extend_reg(c, field32(insn, 20, 16), option, shift, 64), false,
+				false);
+		}
 		default: /* LDRAA and LDRAB: FEAT_PAuth */
 			return ARM64_EXEC_UNDEFINED;
 		}
