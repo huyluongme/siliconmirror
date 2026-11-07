@@ -4,11 +4,14 @@
 /*
  * Unit tests for the Data Processing -- Immediate instructions of the
  * AArch64 model (src/cpu/arm64/dp_imm.c). Every encoding was produced by
- * the GNU assembler, unless its comment says otherwise. Section numbers
+ * the GNU assembler, unless a comment says otherwise. Section numbers
  * refer to the Arm Architecture Reference Manual, ARM DDI 0487 M.d.
  */
 
+#include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "arm64_test.h"
@@ -24,6 +27,22 @@
 static void exec(Machine *m, Arm64Cpu *c, uint32_t insn)
 {
 	CHECK_EQ(arm64_test_step(m, c, insn), MACHINE_STOP_LIMIT);
+}
+
+/* Check that each instruction stops the machine as UNDEFINED. */
+static void check_undefined(const uint32_t *insns, unsigned count)
+{
+	for (unsigned i = 0; i < count; i++) {
+		Arm64Cpu *c;
+		Machine *m = arm64_test_machine(&c);
+
+		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
+		if (strstr(m->stop_message, "undefined instruction") == NULL) {
+			fprintf(stderr, "0x%08" PRIx32 " is not UNDEFINED\n", insns[i]);
+			test_failures++;
+		}
+		machine_destroy(m);
+	}
 }
 
 /* SInt() of the low 32 bits of x. */
@@ -158,14 +177,7 @@ static void test_move_wide_unallocated(void)
 		0x32800000, /* opc = 01 */
 	};
 
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message, "undefined instruction") != NULL);
-		machine_destroy(m);
-	}
+	check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 static void test_add_sub_imm(void)
@@ -302,45 +314,296 @@ static void test_adrp(void)
 	machine_destroy(m);
 }
 
-static void test_classes_newer_than_armv8_0_are_undefined(void)
+static void test_logical_imm(void)
 {
-	static const uint32_t insns[] = {
-		0x91800000, /* ADDG X0, X0, #0, #0 (FEAT_MTE) */
-		0x91c00000, /* SMAX X0, X0, #0 (FEAT_CSSC) */
-		/*
-	     * AUTIASPPC (FEAT_PAuth_LR), built from the table in C4.1:
-	     * binutils 2.46 does not know it.
-	     */
-		0xf380001f,
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[1] = 0xfedcba987654321f;
+	exec(m, c, 0x92401c20); /* AND X0, X1, #0xff */
+	CHECK_EQ(c->x[0], 0x1f);
+
+	c->x[2] = UINT64_MAX;
+	exec(m, c, 0x12000422); /* AND W2, W1, #3 */
+	CHECK_EQ(c->x[2], 3);
+
+	exec(m, c, 0xb204cc23); /* ORR X3, X1, #0xf0f0f0f0f0f0f0f0 */
+	CHECK_EQ(c->x[3], 0xfefcfaf8f6f4f2ff);
+
+	exec(m, c, 0xd200f024); /* EOR X4, X1, #0x5555555555555555 */
+	CHECK_EQ(c->x[4], 0xab89efcd2301674a);
+
+	exec(m, c, 0xb200f3e5); /* MOV X5, #0x5555555555555555, an ORR */
+	CHECK_EQ(c->x[5], 0x5555555555555555);
+
+	c->x[6] = UINT64_MAX;
+	exec(m, c, 0x32009fe6); /* MOV W6, #0x00ff00ff, an ORR */
+	CHECK_EQ(c->x[6], 0x00ff00ff);
+
+	/* Rd 31 of AND is SP: aligning the stack pointer. */
+	c->x[1] = 0x8007;
+	exec(m, c, 0x927cec3f); /* AND SP, X1, #0xfffffffffffffff0 */
+	CHECK_EQ(c->sp_el[3], 0x8000);
+	machine_destroy(m);
+}
+
+static void test_logical_imm_flags(void)
+{
+	/* ANDS sets N and Z from the result and clears C and V. */
+	static const struct {
+		uint32_t insn;
+		uint64_t x1;
+		uint32_t nzcv;
+	} cases[] = {
+		{0xf2410020, UINT64_MAX, N},         /* ANDS X0, X1, #1 << 63 */
+		{0x7200003f, 0x10, Z},               /* TST W1, #1 */
+		{0x7200003f, 0xffffffff00000001, 0}, /* TST W1, #1 */
+		{0x72181c20, 0xffffffff00000000, Z}, /* ANDS W0, W1, #0xff00 */
 	};
 
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
 		Arm64Cpu *c;
 		Machine *m = arm64_test_machine(&c);
 
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message, "undefined instruction") != NULL);
+		c->x[1] = cases[i].x1;
+		c->nzcv = N | Z | C | V;
+		c->sp_el[3] = 0x8000;
+		exec(m, c, cases[i].insn);
+		CHECK_EQ(c->nzcv, cases[i].nzcv);
+		CHECK_EQ(c->sp_el[3], 0x8000); /* TST writes the zero register */
 		machine_destroy(m);
 	}
 }
 
-static void test_classes_not_implemented_yet(void)
+static int compare_u64(const void *a, const void *b)
+{
+	uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+
+	return (x > y) - (x < y);
+}
+
+static void test_logical_imm_all_encodings(void)
+{
+	/*
+	 * Run ORR <Rd>, ZR, #imm for every value of N:immr:imms. There are
+	 * 5334 different 64-bit bitmask immediates and 1302 32-bit ones,
+	 * and none of them is all zeros or all ones.
+	 */
+	static uint64_t values[1 << 13];
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	for (uint32_t sf = 0; sf < 2; sf++) {
+		uint64_t all_ones = sf ? UINT64_MAX : UINT32_MAX;
+		unsigned count = 0, distinct = 0;
+
+		for (uint32_t fields = 0; fields < ARRAY_SIZE(values); fields++) {
+			uint32_t insn = sf << 31 | 0x32000000 | fields << 10 | 31 << 5;
+
+			if (arm64_execute(c, insn) != ARM64_EXEC_OK)
+				continue;
+			CHECK(c->x[0] != 0 && c->x[0] != all_ones);
+			values[count++] = c->x[0];
+		}
+		qsort(values, count, sizeof(values[0]), compare_u64);
+		for (unsigned i = 0; i < count; i++)
+			distinct += i == 0 || values[i] != values[i - 1];
+		CHECK_EQ(distinct, sf ? 5334 : 1302);
+	}
+	machine_destroy(m);
+}
+
+static void test_logical_imm_undefined(void)
 {
 	static const uint32_t insns[] = {
-		0x92400000, /* AND X0, X0, #1: Logical (immediate) */
-		0x93400000, /* SBFX X0, X0, #0, #1: Bitfield */
-		0x13800000, /* ROR W0, W0, #0, the alias of EXTR: Extract */
+		0x12400000, /* 32-bit AND with N = 1 */
+		0x9240fc00, /* N:imms = 1:111111, a 64-bit element of all ones */
+		0x1200f400, /* N:imms = 0:111101, a 2-bit element of all ones */
+		0x1200f800, /* N:NOT(imms) = 0000000 or 0000001: no element size */
 	};
 
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
+	check_undefined(insns, ARRAY_SIZE(insns));
+}
 
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message, "is not implemented yet (Data "
-		                              "Processing -- Immediate)") != NULL);
-		machine_destroy(m);
+static void test_bitfield_aliases(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[1] = 0xfedcba9876543210;
+	exec(m, c, 0xd37cec20); /* LSL X0, X1, #4 */
+	CHECK_EQ(c->x[0], 0xedcba98765432100);
+	exec(m, c, 0xd37cfc22); /* LSR X2, X1, #60 */
+	CHECK_EQ(c->x[2], 0xf);
+	exec(m, c, 0x9344fc23); /* ASR X3, X1, #4 */
+	CHECK_EQ(c->x[3], 0xffedcba987654321);
+	exec(m, c, 0xd3483c24); /* UBFX X4, X1, #8, #8 */
+	CHECK_EQ(c->x[4], 0x32);
+	exec(m, c, 0xd37c1c2c); /* UBFIZ X12, X1, #4, #8 */
+	CHECK_EQ(c->x[12], 0x100);
+
+	c->x[6] = 0x1111111111111111;
+	exec(m, c, 0xb3701c26); /* BFI X6, X1, #16, #8 */
+	CHECK_EQ(c->x[6], 0x1111111111101111);
+	c->x[7] = 0x1111111111111111;
+	exec(m, c, 0xb3483c27); /* BFXIL X7, X1, #8, #8 */
+	CHECK_EQ(c->x[7], 0x1111111111111132);
+	c->x[14] = UINT64_MAX;
+	exec(m, c, 0xb3783fee); /* BFC X14, #8, #16 */
+	CHECK_EQ(c->x[14], 0xffffffffff0000ff);
+
+	c->x[8] = UINT64_MAX;
+	exec(m, c, 0x53001c28); /* UXTB W8, W1 */
+	CHECK_EQ(c->x[8], 0x10);
+
+	/* The signed forms copy the top bit of the field upwards. */
+	c->x[1] = 0x8000;
+	exec(m, c, 0x93483c25); /* SBFX X5, X1, #8, #8 */
+	CHECK_EQ(c->x[5], 0xffffffffffffff80);
+	c->x[1] = 0x80;
+	exec(m, c, 0x937c1c2d); /* SBFIZ X13, X1, #4, #8 */
+	CHECK_EQ(c->x[13], 0xfffffffffffff800);
+	c->x[1] = 0x12348765;
+	exec(m, c, 0x93403c29); /* SXTH X9, W1 */
+	CHECK_EQ(c->x[9], 0xffffffffffff8765);
+	c->x[1] = 0x80000000;
+	exec(m, c, 0x93407c2a); /* SXTW X10, W1 */
+	CHECK_EQ(c->x[10], 0xffffffff80000000);
+
+	c->x[1] = 3;
+	exec(m, c, 0x5301002b); /* LSL W11, W1, #31 */
+	CHECK_EQ(c->x[11], 0x80000000);
+	machine_destroy(m);
+}
+
+/*
+ * What the descriptions of the SBFM, BFM and UBFM aliases say, one bit at
+ * a time. When imms >= immr, bits imms to immr of src go to the bottom
+ * of the result (SBFX, BFXIL, UBFX). Otherwise bits imms to 0 go to bit
+ * datasize - immr (SBFIZ, BFI, UBFIZ). SBFM fills the bits above the
+ * field with its top bit, BFM keeps the other bits of dst and UBFM
+ * clears them.
+ */
+static uint64_t bitfield_reference(unsigned opc, unsigned datasize,
+                                   unsigned immr, unsigned imms, uint64_t src,
+                                   uint64_t dst)
+{
+	unsigned from = imms >= immr ? immr : 0;
+	unsigned to = imms >= immr ? 0 : datasize - immr;
+	unsigned width = imms >= immr ? imms - immr + 1 : imms + 1;
+	uint64_t result = opc == 1 ? dst : 0;
+
+	for (unsigned i = 0; i < width; i++) {
+		uint64_t bit = (src >> (from + i)) & 1;
+
+		result &= ~((uint64_t)1 << (to + i));
+		result |= bit << (to + i);
 	}
+	if (opc == 0) {
+		uint64_t sign = (src >> (from + width - 1)) & 1;
+
+		for (unsigned i = to + width; i < datasize; i++)
+			result |= sign << i;
+	}
+	return datasize == 64 ? result : result & UINT32_MAX;
+}
+
+static void test_bitfield_all_encodings(void)
+{
+	static const uint64_t sources[] = {0xfedcba9876543210, 0x0123456789abcdef};
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+	unsigned mismatches = 0;
+
+	for (uint32_t sf = 0; sf < 2; sf++) {
+		unsigned datasize = 32 << sf;
+
+		for (uint32_t opc = 0; opc < 3; opc++) {
+			for (uint32_t immr = 0; immr < datasize; immr++) {
+				for (uint32_t imms = 0; imms < datasize; imms++) {
+					/* <op> X0, X1, #immr, #imms, with N = sf */
+					uint32_t insn = sf << 31 | opc << 29 | 0x13000000 |
+					                sf << 22 | immr << 16 | imms << 10 | 1 << 5;
+
+					for (unsigned i = 0; i < ARRAY_SIZE(sources); i++) {
+						uint64_t dst = 0x5aa55aa55aa55aa5;
+						uint64_t expected = bitfield_reference(
+							opc, datasize, immr, imms, sources[i], dst);
+
+						c->x[0] = dst;
+						c->x[1] = sources[i];
+						if (arm64_execute(c, insn) != ARM64_EXEC_OK ||
+						    c->x[0] != expected) {
+							if (mismatches++ == 0)
+								fprintf(stderr,
+								        "first mismatch: 0x%08" PRIx32 "\n",
+								        insn);
+						}
+					}
+				}
+			}
+		}
+	}
+	CHECK_EQ(mismatches, 0);
+	machine_destroy(m);
+}
+
+static void test_bitfield_undefined(void)
+{
+	static const uint32_t insns[] = {
+		0x13400000, /* 32-bit SBFM with N = 1 */
+		0x93000000, /* 64-bit SBFM with N = 0 */
+		0x13200000, /* 32-bit SBFM with immr = 32 */
+		0x13008000, /* 32-bit SBFM with imms = 32 */
+		0x73000000, /* opc = 11 */
+	};
+
+	check_undefined(insns, ARRAY_SIZE(insns));
+}
+
+static void test_extract(void)
+{
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	c->x[1] = 0xfedcba9876543210;
+	c->x[2] = 0x0123456789abcdef;
+	exec(m, c, 0x93c22020); /* EXTR X0, X1, X2, #8 */
+	CHECK_EQ(c->x[0], 0x100123456789abcd);
+	exec(m, c, 0x93c11023); /* ROR X3, X1, #4 */
+	CHECK_EQ(c->x[3], 0x0fedcba987654321);
+	exec(m, c, 0x13824024); /* EXTR W4, W1, W2, #16 */
+	CHECK_EQ(c->x[4], 0x321089ab);
+	exec(m, c, 0x93c20025); /* EXTR X5, X1, X2, #0 */
+	CHECK_EQ(c->x[5], 0x0123456789abcdef);
+	machine_destroy(m);
+}
+
+static void test_extract_undefined(void)
+{
+	static const uint32_t insns[] = {
+		0x13808000, /* 32-bit EXTR with imms = 32 */
+		0x93808000, /* 64-bit EXTR with N = 0 */
+		0x13a00000, /* o0 = 1 */
+		0x33800000, /* op21 = 01 */
+	};
+
+	check_undefined(insns, ARRAY_SIZE(insns));
+}
+
+static void test_classes_newer_than_armv8_0_are_undefined(void)
+{
+	/*
+	 * The encoding of AUTIASPPC is built from the table in C4.1:
+	 * binutils 2.46 does not know FEAT_PAuth_LR.
+	 */
+	static const uint32_t insns[] = {
+		0x91800000, /* ADDG X0, X0, #0, #0 (FEAT_MTE) */
+		0x91c00000, /* SMAX X0, X0, #0 (FEAT_CSSC) */
+		0xf380001f, /* AUTIASPPC (FEAT_PAuth_LR) */
+	};
+
+	check_undefined(insns, ARRAY_SIZE(insns));
 }
 
 int main(void)
@@ -356,7 +619,15 @@ int main(void)
 	RUN_TEST(test_flag_setting);
 	RUN_TEST(test_adr);
 	RUN_TEST(test_adrp);
+	RUN_TEST(test_logical_imm);
+	RUN_TEST(test_logical_imm_flags);
+	RUN_TEST(test_logical_imm_all_encodings);
+	RUN_TEST(test_logical_imm_undefined);
+	RUN_TEST(test_bitfield_aliases);
+	RUN_TEST(test_bitfield_all_encodings);
+	RUN_TEST(test_bitfield_undefined);
+	RUN_TEST(test_extract);
+	RUN_TEST(test_extract_undefined);
 	RUN_TEST(test_classes_newer_than_armv8_0_are_undefined);
-	RUN_TEST(test_classes_not_implemented_yet);
 	return test_summary();
 }
