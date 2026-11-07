@@ -1,0 +1,31 @@
+# https://editorconfig.org
+root = true
+
+# Indent with tabs, shown 4 columns wide.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
+[*.{c,h,S}]
+max_line_length = 80
+
+[*.{yml,yaml}]
+# YAML does not allow tabs.
+indent_style = space
+indent_size = 2
+
+[*.md]
+indent_style = space
+indent_size = 2
+# Two trailing spaces are a line break in Markdown.
+trim_trailing_whitespace = false
+
+[LICENSE]
+# Keep the license text byte-for-byte as published.
+trim_trailing_whitespace = false
+insert_final_newline = false
