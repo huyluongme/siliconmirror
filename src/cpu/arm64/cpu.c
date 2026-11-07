@@ -18,8 +18,9 @@ Arm64Cpu *arm64_cpu_of(Cpu *cpu)
 
 /*
  * Reset into AArch64 state, after AArch64_TakeReset() in J1.2.2.30. The
- * general-purpose registers, NZCV and the stack pointers are UNKNOWN
- * after reset; this model sets them to 0 so that every run is the same.
+ * general-purpose registers, NZCV, the stack pointers and the Event
+ * Register (D1.7.1.1) are UNKNOWN after reset; this model clears them so
+ * that every run is the same.
  */
 static void arm64_reset(Cpu *base)
 {
@@ -33,6 +34,7 @@ static void arm64_reset(Cpu *base)
 	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
 	c->pc = c->config.reset_pc;
 	c->next_pc = c->pc;
+	c->event_register = false;
 	base->state = CPU_RUNNING;
 }
 
@@ -116,6 +118,33 @@ static const CpuOps arm64_ops = {
 	.run = arm64_run,
 	.destroy = arm64_destroy,
 };
+
+/*
+ * SEV: signal an event to every AArch64 PE of the machine that is not
+ * powered off, this one included (D1.7.1.5). The event sets the Event
+ * Register, and it is a WFE wakeup event (D1.7.1.4): a PE waiting in WFE
+ * runs again. Its WFE then completes with the Event Register clear, one
+ * of the IMPLEMENTATION DEFINED states that D1.7.1.2 allows.
+ */
+void arm64_send_event(Arm64Cpu *c)
+{
+	Machine *m = c->cpu.machine;
+
+	for (unsigned i = 0; i < m->num_cpus; i++) {
+		Cpu *cpu = m->cpus[i];
+		Arm64Cpu *pe;
+
+		if (cpu->ops != &arm64_ops || cpu->state == CPU_OFF)
+			continue;
+		pe = arm64_cpu_of(cpu);
+		if (cpu->state == CPU_HALTED && pe->wait == ARM64_WAIT_EVENT) {
+			cpu->state = CPU_RUNNING;
+			pe->event_register = false;
+		} else {
+			pe->event_register = true;
+		}
+	}
+}
 
 Cpu *arm64_cpu_create(const Arm64Config *config)
 {

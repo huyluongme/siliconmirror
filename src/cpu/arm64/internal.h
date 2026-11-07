@@ -94,6 +94,41 @@ static inline uint64_t add_with_carry(unsigned datasize, uint64_t x, uint64_t y,
 	return result;
 }
 
+/* ConditionHolds() from J1.4.3.363: whether cond holds for PSTATE.NZCV. */
+static inline bool condition_holds(const Arm64Cpu *c, unsigned cond)
+{
+	bool n = c->nzcv & ARM64_NZCV_N, z = c->nzcv & ARM64_NZCV_Z;
+	bool cf = c->nzcv & ARM64_NZCV_C, v = c->nzcv & ARM64_NZCV_V;
+	bool result;
+
+	switch (cond >> 1) {
+	case 0: /* EQ or NE */
+		result = z;
+		break;
+	case 1: /* CS or CC */
+		result = cf;
+		break;
+	case 2: /* MI or PL */
+		result = n;
+		break;
+	case 3: /* VS or VC */
+		result = v;
+		break;
+	case 4: /* HI or LS */
+		result = cf && !z;
+		break;
+	case 5: /* GE or LT */
+		result = n == v;
+		break;
+	case 6: /* GT or LE */
+		result = n == v && !z;
+		break;
+	default:         /* AL */
+		return true; /* 1111 is also always true */
+	}
+	return (cond & 1) ? !result : result;
+}
+
 /* Instruction groups of the top-level A64 encoding table, C4.1. */
 typedef enum Arm64Group {
 	ARM64_GROUP_RESERVED,
@@ -130,7 +165,11 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
 
 /* The same for each group of C4.1, in the source file named after it. */
 Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
+
+/* SEV, from cpu.c: signal an event to every PE of the machine. */
+void arm64_send_event(Arm64Cpu *c);
 
 /*
  * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. On failure they

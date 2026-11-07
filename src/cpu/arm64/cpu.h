@@ -33,6 +33,12 @@
 #define ARM64_DAIF_A (1u << 8)
 #define ARM64_DAIF_D (1u << 9)
 
+/* What a CPU_HALTED CPU waits for, D1.7. */
+typedef enum Arm64Wait {
+	ARM64_WAIT_INTERRUPT, /* after WFI */
+	ARM64_WAIT_EVENT,     /* after WFE */
+} Arm64Wait;
+
 typedef struct Arm64Config {
 	/*
 	 * Address of the first instruction after reset: the IMPLEMENTATION
@@ -57,6 +63,10 @@ typedef struct Arm64Cpu {
 	uint32_t daif; /* D, A, I and F in bits 9:6, as in DAIF */
 	unsigned el;   /* PSTATE.EL, the current Exception level */
 	bool sp_sel;   /* PSTATE.SP: false selects SP_EL0, true SP_ELx */
+
+	/* The Event Register of WFE and SEV, D1.7.1.1. */
+	bool event_register;
+	Arm64Wait wait; /* meaningful while cpu.state is CPU_HALTED */
 
 	/* Address of the next instruction, set while one executes. */
 	uint64_t next_pc;
