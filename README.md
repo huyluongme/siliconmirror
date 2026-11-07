@@ -1,5 +1,6 @@
 # siliconmirror
 
+[![CI](https://github.com/huyluongme/siliconmirror/actions/workflows/ci.yml/badge.svg)](https://github.com/huyluongme/siliconmirror/actions/workflows/ci.yml)
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
 Generic full-system emulator for multiple CPU architectures and boards,
@@ -37,6 +38,45 @@ booting unmodified bootloaders and kernels.
 - No 3D GPU emulation.
 - Not cycle-accurate.
 
+## Building
+
+Requirements: a C11 compiler (GCC or Clang), GNU Make, CMake 3.25 or
+later and Ninja.
+
+```sh
+make test                  # build and run the tests
+./build/debug/smirror -version
+```
+
+| Command               | What it does                            |
+|-----------------------|-----------------------------------------|
+| `make`                | Build                                   |
+| `make test`           | Build and run the tests                 |
+| `make run ARGS="..."` | Build and run `smirror` with arguments  |
+| `make format`         | Format all C sources with clang-format  |
+| `make check-format`   | Check formatting without changing files |
+| `make clean`          | Remove all build directories            |
+
+Variables:
+
+| Variable        | Values                                                |
+|-----------------|-------------------------------------------------------|
+| `PRESET=<name>` | `debug` (default), `release`, `asan`, `ci`            |
+| `CC=<compiler>` | Build with another compiler, for example `CC=clang`   |
+
+| Preset    | Purpose                                     |
+|-----------|---------------------------------------------|
+| `debug`   | Debug build                                 |
+| `release` | Optimized build                             |
+| `asan`    | Debug build with AddressSanitizer and UBSan |
+| `ci`      | `asan` with warnings treated as errors      |
+
+The Makefile is a thin wrapper around the CMake presets in
+[CMakePresets.json](CMakePresets.json); `cmake --workflow --preset debug`
+works as well. Builds go to `build/<preset>/`, or
+`build/<preset>-<compiler>/` when `CC` is given. Each build directory
+contains `compile_commands.json` for editors and language servers.
+
 ## Roadmap
 
 1. Core (bus, interrupt lines, virtual clock), AArch64 interpreter
@@ -62,6 +102,11 @@ Each source file starts with an SPDX license identifier:
 ```
 SPDX-License-Identifier: GPL-2.0-or-later
 ```
+
+## Acknowledgements
+
+Command-line options follow the conventions of
+[QEMU](https://www.qemu.org/), so QEMU users can feel at home.
 
 ## Trademarks
 

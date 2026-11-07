@@ -1,0 +1,23 @@
+# clang-format configuration. See CONTRIBUTING.md, "Coding style".
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Tabs for indentation (4 columns wide), spaces for alignment.
+UseTab: AlignWithSpaces
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 80
+
+# Braces on their own line for functions only.
+BreakBeforeBraces: Linux
+
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+IndentCaseLabels: false
+PointerAlignment: Right
+SpaceAfterCStyleCast: false
+...

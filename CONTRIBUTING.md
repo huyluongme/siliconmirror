@@ -49,6 +49,23 @@ blobs or other third-party binaries.
   wrapped at 72 columns.
 - One logical change per commit. Every commit should build.
 
+## Building and testing
+
+Build and run the tests before sending a change:
+
+```sh
+make test
+```
+
+CI uses the `ci` preset (AddressSanitizer, UBSan, warnings as errors)
+with both GCC and Clang. Run the same checks locally with:
+
+```sh
+make PRESET=ci test
+make PRESET=ci CC=clang test
+make check-format
+```
+
 ## Coding style
 
 - C11.
@@ -57,3 +74,11 @@ blobs or other third-party binaries.
 - Lines at most 80 columns, counting a tab as 4 columns.
 - Whitespace rules are in [.editorconfig](.editorconfig); most editors
   apply them automatically.
+- Format C code with clang-format 21, using the project's
+  [.clang-format](.clang-format):
+
+  ```sh
+  make format
+  ```
+
+  CI fails if any `.c` or `.h` file is not formatted.
