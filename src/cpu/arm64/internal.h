@@ -166,6 +166,7 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
 /* The same for each group of C4.1, in the source file named after it. */
 Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_dp_reg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
 
 /* SEV, from cpu.c: signal an event to every PE of the machine. */

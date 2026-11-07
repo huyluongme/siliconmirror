@@ -45,6 +45,10 @@ add_executable(test_arm64_dp_imm test_arm64_dp_imm.c)
 target_link_libraries(test_arm64_dp_imm PRIVATE cpu)
 add_test(NAME unit.arm64_dp_imm COMMAND test_arm64_dp_imm)
 
+add_executable(test_arm64_dp_reg test_arm64_dp_reg.c)
+target_link_libraries(test_arm64_dp_reg PRIVATE cpu)
+add_test(NAME unit.arm64_dp_reg COMMAND test_arm64_dp_reg)
+
 add_executable(test_arm64_branch_sys test_arm64_branch_sys.c)
 target_link_libraries(test_arm64_branch_sys PRIVATE cpu)
 add_test(NAME unit.arm64_branch_sys COMMAND test_arm64_branch_sys)
