@@ -12,3 +12,15 @@ add_test(NAME unit.byteorder COMMAND test_byteorder)
 add_executable(test_bus test_bus.c)
 target_link_libraries(test_bus PRIVATE core)
 add_test(NAME unit.bus COMMAND test_bus)
+
+add_executable(test_irq test_irq.c)
+target_link_libraries(test_irq PRIVATE core)
+add_test(NAME unit.irq COMMAND test_irq)
+
+add_executable(test_event test_event.c)
+target_link_libraries(test_event PRIVATE core)
+add_test(NAME unit.event COMMAND test_event)
+
+add_executable(test_machine test_machine.c)
+target_link_libraries(test_machine PRIVATE core)
+add_test(NAME unit.machine COMMAND test_machine)

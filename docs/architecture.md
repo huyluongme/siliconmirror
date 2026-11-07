@@ -22,8 +22,8 @@ src/
   util/               Generic helpers: bit operations, byte order,
                       MBR/FAT reading, device tree building
   core/               Board-independent core: memory bus, interrupt
-                      lines, virtual clock, event scheduler, machine
-                      registry, logging
+                      lines, virtual time and timed events, the CPU
+                      interface, the machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -38,7 +38,7 @@ src/
   boot/               Boot methods: direct kernel load, Raspberry Pi
                       firmware emulation
   machine/            Board definitions (raspi3b): CPUs, memory map,
-                      devices, boot method
+                      devices, boot method; the list of boards for -M
   debug/              GDB stub, instruction tracing
   frontend/           Command line, machine configuration files, main()
 tests/
@@ -112,6 +112,34 @@ a boot method. The boot method decides how software gets into memory:
   development and tests.
 - `boot/raspi_fw`: do what the Raspberry Pi firmware does: read
   `config.txt`, the kernel and the device tree from the SD card image.
+
+## Virtual time
+
+Virtual time counts nanoseconds and only moves while the machine runs.
+Each instruction takes 1 ns, as on a nominal 1 GHz CPU. Time therefore
+depends on the number of instructions run, not on the speed of the host,
+and running the same guest twice gives exactly the same result.
+
+The main loop, `machine_run()` in `core/machine.c`, works in turns:
+
+1. A turn covers 1 µs of virtual time, or less when an event is due
+   sooner.
+2. Each running CPU executes the instructions that fit in the turn, one
+   CPU after the other.
+3. Virtual time moves to the end of the turn and the events that are due
+   fire, for example a timer that raises an interrupt and wakes a CPU.
+
+When every CPU is waiting (WFI, WFE), time jumps straight to the next
+event. When no event is pending either, nothing can ever happen again, so
+the machine stops with `MACHINE_STOP_IDLE`.
+
+Known limits, to be handled when the devices that need it arrive:
+
+- While a CPU runs, devices see the time at the start of the turn, so
+  they observe time in steps of up to 1 µs.
+- Input from the host, such as a terminal connected to a UART, can wake
+  a waiting machine, so such a machine must wait for input instead of
+  stopping as idle.
 
 ## Headers and naming
 
