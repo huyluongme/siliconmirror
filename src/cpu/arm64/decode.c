@@ -60,8 +60,6 @@ const char *arm64_group_name(Arm64Group group)
 
 Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn)
 {
-	(void)c;
-
 	switch (arm64_group(insn)) {
 	case ARM64_GROUP_RESERVED:
 		/* UDF and the UNALLOCATED encodings around it. */
@@ -73,6 +71,7 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn)
 	case ARM64_GROUP_UNALLOCATED:
 		return ARM64_EXEC_UNDEFINED;
 	case ARM64_GROUP_DP_IMM:
+		return arm64_exec_dp_imm(c, insn);
 	case ARM64_GROUP_BRANCH_SYS:
 	case ARM64_GROUP_DP_REG:
 	case ARM64_GROUP_SIMD_FP:

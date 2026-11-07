@@ -4,6 +4,7 @@
 # CPU models, one directory per architecture. See docs/architecture.md.
 add_library(cpu STATIC
 	arm64/cpu.c
-	arm64/decode.c)
+	arm64/decode.c
+	arm64/dp_imm.c)
 
 target_link_libraries(cpu PUBLIC core)

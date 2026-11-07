@@ -10,38 +10,13 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "core/machine.h"
-#include "cpu/arm64/cpu.h"
+#include "arm64_test.h"
 #include "cpu/arm64/internal.h"
-#include "test.h"
-
-#define RESET_PC 0x80000
-
-/* A machine with 1 MiB of RAM at 0 and one AArch64 CPU. */
-static Machine *make_machine(Arm64Cpu **cpu)
-{
-	static const Arm64Config config = {.reset_pc = RESET_PC, .highest_el = 3};
-	Machine *m = machine_create();
-	Cpu *base = arm64_cpu_create(&config);
-
-	CHECK(m != NULL && base != NULL);
-	CHECK_EQ(bus_map_ram(m->bus, "ram", 0, 0x100000), BUS_OK);
-	CHECK(machine_add_cpu(m, base));
-	*cpu = arm64_cpu_of(base);
-	return m;
-}
-
-/* Run a single instruction placed at the reset address. */
-static MachineStop run_insn(Machine *m, uint32_t insn)
-{
-	CHECK_EQ(bus_write(m->bus, RESET_PC, 4, insn), BUS_OK);
-	return machine_run(m, 1);
-}
 
 static void test_reset_state(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	/* J1.2.2.30: highest EL, SP_ELx selected, D, A, I and F masked. */
 	CHECK_EQ(c->pc, RESET_PC);
@@ -80,7 +55,7 @@ static void test_reset_el_follows_config(void)
 static void test_register_31(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	/* C1.2.6.1: as an Xn operand, 31 is the zero register. */
 	set_x(c, 31, 0x1234);
@@ -98,7 +73,7 @@ static void test_register_31(void)
 static void test_32_bit_writes_zero_extend(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	set_x(c, 3, UINT64_MAX);
 	set_w(c, 3, 0x12345678);
@@ -109,7 +84,7 @@ static void test_32_bit_writes_zero_extend(void)
 static void test_stack_pointer_selection(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	/* J1.2.3.259: PSTATE.SP selects SP_EL0 or SP_ELx of the current EL. */
 	for (unsigned el = 0; el < 4; el++)
@@ -164,12 +139,35 @@ static void test_top_level_groups(void)
 	}
 }
 
+static void test_executed_instructions_advance_pc(void)
+{
+	static const uint32_t program[] = {
+		0xd2800020, /* MOVZ X0, #1 */
+		0xd2800041, /* MOVZ X1, #2 */
+		0xd2800062, /* MOVZ X2, #3 */
+	};
+	Arm64Cpu *c;
+	Machine *m = arm64_test_machine(&c);
+
+	for (unsigned i = 0; i < 3; i++)
+		CHECK_EQ(bus_write(m->bus, RESET_PC + 4 * i, 4, program[i]), BUS_OK);
+
+	CHECK_EQ(machine_run(m, 3), MACHINE_STOP_LIMIT);
+	CHECK_EQ(m->insns, 3);
+	CHECK_EQ(c->pc, RESET_PC + 12);
+	CHECK_EQ(c->x[0], 1);
+	CHECK_EQ(c->x[1], 2);
+	CHECK_EQ(c->x[2], 3);
+	machine_destroy(m);
+}
+
 static void test_undefined_instruction_stops(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
-	CHECK_EQ(run_insn(m, 0x00000000), MACHINE_STOP_ERROR); /* UDF #0 */
+	CHECK_EQ(arm64_test_step(m, c, 0x00000000),
+	         MACHINE_STOP_ERROR); /* UDF #0 */
 	CHECK(strcmp(m->stop_message,
 	             "cpu0: undefined instruction 0x00000000 at "
 	             "0x0000000000080000 (exceptions are not implemented yet)") ==
@@ -186,9 +184,9 @@ static void test_features_this_cpu_lacks_are_undefined(void)
 
 	for (unsigned i = 0; i < sizeof(insns) / sizeof(insns[0]); i++) {
 		Arm64Cpu *c;
-		Machine *m = make_machine(&c);
+		Machine *m = arm64_test_machine(&c);
 
-		CHECK_EQ(run_insn(m, insns[i]), MACHINE_STOP_ERROR);
+		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
 		CHECK(strstr(m->stop_message, "undefined instruction") != NULL);
 		machine_destroy(m);
 	}
@@ -197,9 +195,10 @@ static void test_features_this_cpu_lacks_are_undefined(void)
 static void test_unimplemented_instruction_stops(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
-	CHECK_EQ(run_insn(m, 0x1e260000), MACHINE_STOP_ERROR); /* FMOV W0, S0 */
+	CHECK_EQ(arm64_test_step(m, c, 0x1e260000),
+	         MACHINE_STOP_ERROR); /* FMOV W0, S0 */
 	CHECK(strcmp(m->stop_message,
 	             "cpu0: instruction 0x1e260000 at 0x0000000000080000 is not "
 	             "implemented yet (Data Processing -- Scalar Floating-Point "
@@ -211,7 +210,7 @@ static void test_unimplemented_instruction_stops(void)
 static void test_fetch_from_unmapped_address(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	c->pc = 0x200000; /* above the 1 MiB of RAM */
 	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_ERROR);
@@ -224,7 +223,7 @@ static void test_fetch_from_unmapped_address(void)
 static void test_misaligned_pc(void)
 {
 	Arm64Cpu *c;
-	Machine *m = make_machine(&c);
+	Machine *m = arm64_test_machine(&c);
 
 	/* D1.4.10.1: bits 1:0 of the PC must be 0. */
 	c->pc = RESET_PC + 2;
@@ -243,6 +242,7 @@ int main(void)
 	RUN_TEST(test_32_bit_writes_zero_extend);
 	RUN_TEST(test_stack_pointer_selection);
 	RUN_TEST(test_top_level_groups);
+	RUN_TEST(test_executed_instructions_advance_pc);
 	RUN_TEST(test_undefined_instruction_stops);
 	RUN_TEST(test_features_this_cpu_lacks_are_undefined);
 	RUN_TEST(test_unimplemented_instruction_stops);

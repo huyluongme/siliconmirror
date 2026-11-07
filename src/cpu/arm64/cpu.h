@@ -21,6 +21,12 @@
 
 #include "core/cpu.h"
 
+/* PSTATE.{N,Z,C,V}, in their positions in the NZCV register. */
+#define ARM64_NZCV_V (1u << 28)
+#define ARM64_NZCV_C (1u << 29)
+#define ARM64_NZCV_Z (1u << 30)
+#define ARM64_NZCV_N (1u << 31)
+
 /* PSTATE.{D,A,I,F}, in their positions in the DAIF register. */
 #define ARM64_DAIF_F (1u << 6)
 #define ARM64_DAIF_I (1u << 7)

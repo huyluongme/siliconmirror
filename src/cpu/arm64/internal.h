@@ -57,6 +57,43 @@ static inline void set_xsp(Arm64Cpu *c, unsigned n, uint64_t value)
 		c->x[n] = value;
 }
 
+/* All ones in the low datasize bits; datasize is 32 or 64. */
+static inline uint64_t datasize_mask(unsigned datasize)
+{
+	return datasize == 64 ? UINT64_MAX : UINT32_MAX;
+}
+
+/*
+ * AddWithCarry() from J1.4.3.218, for datasize 32 or 64: returns the low
+ * datasize bits of x + y + carry_in, zero-extended, and stores N, Z, C
+ * and V in *nzcv, in their positions in the NZCV register.
+ */
+static inline uint64_t add_with_carry(unsigned datasize, uint64_t x, uint64_t y,
+                                      unsigned carry_in, uint32_t *nzcv)
+{
+	uint64_t mask = datasize_mask(datasize);
+	uint64_t sign = (uint64_t)1 << (datasize - 1);
+
+	x &= mask;
+	y &= mask;
+
+	uint64_t result = (x + y + carry_in) & mask;
+
+	/*
+	 * The carry out of the top bit is 1 when both operands have it set,
+	 * or when one has and the carry into it cleared it in the result.
+	 * The signed result overflows when both operands have the same sign
+	 * and the result has the other one.
+	 */
+	uint64_t carry = ((x & y) | ((x | y) & ~result)) & sign;
+	uint64_t overflow = (x ^ result) & (y ^ result) & sign;
+
+	*nzcv = (result & sign ? ARM64_NZCV_N : 0) |
+	        (result == 0 ? ARM64_NZCV_Z : 0) | (carry ? ARM64_NZCV_C : 0) |
+	        (overflow ? ARM64_NZCV_V : 0);
+	return result;
+}
+
 /* Instruction groups of the top-level A64 encoding table, C4.1. */
 typedef enum Arm64Group {
 	ARM64_GROUP_RESERVED,
@@ -88,5 +125,8 @@ typedef enum Arm64Exec {
 
 /* Decode and execute one instruction; c->pc is its address. */
 Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
+
+/* The same for each group of C4.1, in the source file named after it. */
+Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
 
 #endif /* CPU_ARM64_INTERNAL_H */

@@ -9,6 +9,10 @@ add_executable(test_byteorder test_byteorder.c)
 target_link_libraries(test_byteorder PRIVATE util)
 add_test(NAME unit.byteorder COMMAND test_byteorder)
 
+add_executable(test_bits test_bits.c)
+target_link_libraries(test_bits PRIVATE util)
+add_test(NAME unit.bits COMMAND test_bits)
+
 add_executable(test_bus test_bus.c)
 target_link_libraries(test_bus PRIVATE core)
 add_test(NAME unit.bus COMMAND test_bus)
@@ -36,3 +40,7 @@ add_test(NAME unit.pl011 COMMAND test_pl011)
 add_executable(test_arm64_cpu test_arm64_cpu.c)
 target_link_libraries(test_arm64_cpu PRIVATE cpu)
 add_test(NAME unit.arm64_cpu COMMAND test_arm64_cpu)
+
+add_executable(test_arm64_dp_imm test_arm64_dp_imm.c)
+target_link_libraries(test_arm64_dp_imm PRIVATE cpu)
+add_test(NAME unit.arm64_dp_imm COMMAND test_arm64_dp_imm)
