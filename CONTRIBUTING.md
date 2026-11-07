@@ -76,6 +76,14 @@ make check-format
 ## Coding style
 
 - C11.
+- Naming:
+  - types are CamelCase typedefs: `Bus`, `BusMmioOps`;
+  - functions and variables are snake_case: `bus_read()`;
+  - macros and enum constants are UPPER_CASE: `BUS_OK`;
+  - names a module exports start with the module or device name
+    (`bus_`, `Bus`, `BUS_`); everything else in a `.c` file is `static`.
+- Header guards are named after the path from `src/`: `core/bus.h` uses
+  `CORE_BUS_H`.
 - Indent with tabs, one tab per level, with a tab width of 4. Do not
   indent with spaces; spaces are only for aligning text after code.
 - Lines at most 80 columns, counting a tab as 4 columns.

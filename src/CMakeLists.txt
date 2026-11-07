@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Huy Luong Duc
 
-# Headers are included by their path from src/, for example
-# #include "core/bus.h". See docs/architecture.md.
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-
+# One library per module, from the bottom layer up. See
+# docs/architecture.md.
+add_subdirectory(util)
+add_subdirectory(core)
 add_subdirectory(frontend)

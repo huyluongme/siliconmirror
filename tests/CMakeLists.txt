@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Huy Luong Duc
 
+add_subdirectory(unit)
 add_subdirectory(cli)
 
 # Each module under src/ may only include headers from the modules below
