@@ -292,6 +292,52 @@ static void test_reset_and_cpu_limit(void)
 	machine_destroy(m);
 }
 
+/* Each fake device appends its letter to a log when reset or destroyed. */
+static char device_log[64];
+
+static void log_letter(void *ctx)
+{
+	size_t len = strlen(device_log);
+
+	device_log[len] = *(const char *)ctx;
+	device_log[len + 1] = '\0';
+}
+
+static void test_devices(void)
+{
+	static const char letters[] = "abc";
+	Machine *m = machine_create();
+	FakeCpu *cpu = add_fake_cpu(m, 1);
+
+	/* b has no reset function, c no destroy function. */
+	CHECK(machine_add_device(m, (void *)&letters[0], log_letter, log_letter));
+	CHECK(machine_add_device(m, (void *)&letters[1], NULL, log_letter));
+	CHECK(machine_add_device(m, (void *)&letters[2], log_letter, NULL));
+
+	/* Reset in the order of adding, devices before CPUs. */
+	device_log[0] = '\0';
+	machine_reset(m);
+	CHECK(strcmp(device_log, "ac") == 0);
+	CHECK_EQ(cpu->resets, 1);
+
+	/* Destroyed newest first. */
+	device_log[0] = '\0';
+	machine_destroy(m);
+	CHECK(strcmp(device_log, "ba") == 0);
+}
+
+static void test_device_limit(void)
+{
+	Machine *m = machine_create();
+	int dummy;
+
+	for (unsigned i = 0; i < MACHINE_MAX_DEVICES; i++)
+		CHECK(machine_add_device(m, &dummy, NULL, NULL));
+	CHECK(!machine_add_device(m, &dummy, NULL, NULL));
+	CHECK_EQ(m->num_devices, MACHINE_MAX_DEVICES);
+	machine_destroy(m);
+}
+
 static void test_stop_strings(void)
 {
 	for (int s = MACHINE_STOP_NONE; s <= MACHINE_STOP_ERROR; s++) {
@@ -316,6 +362,8 @@ int main(void)
 	RUN_TEST(test_error_stops_machine);
 	RUN_TEST(test_first_stop_reason_wins);
 	RUN_TEST(test_reset_and_cpu_limit);
+	RUN_TEST(test_devices);
+	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
 	return test_summary();
 }

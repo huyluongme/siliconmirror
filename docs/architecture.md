@@ -109,14 +109,24 @@ boards, so a future board can reuse it directly.
 
 ## Machines and boot methods
 
-A machine (`machine/raspi3b.c`) only assembles parts: it creates the CPUs
+A board (`machine/raspi3b.c`) only assembles parts: it creates the CPUs
 and RAM, maps each device at its address, wires interrupt lines and picks
-a boot method. The boot method decides how software gets into memory:
+a boot method. `machine/board.c` lists the boards that `-M` can select.
 
-- `boot/direct`: load a file given with `-kernel` and jump to it. Used for
-  development and tests.
+The machine owns everything the board creates: the CPUs, and with
+`machine_add_device()` the device models and back ends, which it resets
+and destroys with it.
+
+The boot method decides how software gets into memory:
+
+- `boot/direct`: load a file given with `-kernel`, as the firmware loads
+  `kernel8.img`. The board then starts its cores in the state that its
+  firmware would leave them in. Used for development and tests.
 - `boot/raspi_fw`: do what the Raspberry Pi firmware does: read
   `config.txt`, the kernel and the device tree from the SD card image.
+
+Each board has a page in `docs/boards/` with its memory map, its boot
+and how it differs from the real hardware.
 
 ## Virtual time
 

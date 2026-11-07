@@ -6,8 +6,9 @@
 Generic full-system emulator for multiple CPU architectures and boards,
 booting unmodified bootloaders and kernels.
 
-> **Status:** early development. Nothing runs yet. The first target
-> board is the Raspberry Pi 3 Model B.
+> **Status:** early development. Bare-metal AArch64 programs run on the
+> first board, the Raspberry Pi 3 Model B; bootloaders and kernels do
+> not yet.
 
 ## Goals
 
@@ -25,9 +26,9 @@ booting unmodified bootloaders and kernels.
 
 ## Supported boards
 
-| Board                  | SoC     | CPU                     | Status  |
-|------------------------|---------|-------------------------|---------|
-| Raspberry Pi 3 Model B | BCM2837 | 4x Cortex-A53 (AArch64) | Planned |
+| Board                  | SoC     | CPU                     | Status     |
+|------------------------|---------|-------------------------|------------|
+| Raspberry Pi 3 Model B | BCM2837 | 4x Cortex-A53 (AArch64) | Bare metal |
 
 ## Limitations
 
@@ -41,7 +42,9 @@ booting unmodified bootloaders and kernels.
 ## Building
 
 Requirements: a C11 compiler (GCC or Clang), GNU Make, CMake 3.25 or
-later and Ninja.
+later and Ninja. The bare-metal tests also need the GNU binutils for
+AArch64 (`binutils-aarch64-linux-gnu` on Debian and Ubuntu); without
+them, those tests are skipped.
 
 ```sh
 make test                  # build and run the tests
@@ -78,9 +81,29 @@ works as well. Builds go to `build/<preset>/`, or
 `build/<preset>-<compiler>/` when `CC` is given. Each build directory
 contains `compile_commands.json` for editors and language servers.
 
+## Running
+
+```sh
+./build/debug/smirror -M raspi3b -kernel hello.bin
+```
+
+| Option         | What it does                                                            |
+|----------------|-------------------------------------------------------------------------|
+| `-M NAME`      | Board to emulate; `-M help` lists them                                  |
+| `-kernel FILE` | Image to boot, loaded as the board's firmware would                     |
+| `-serial DEV`  | Where the first UART goes: `stdio` (the default), `null` or `file:PATH` |
+
+smirror stops when every CPU waits and nothing can wake them, for
+example when the program ends in a `WFI` loop, and when the guest does
+something that is not emulated yet. It then prints why on standard
+error, and exits with a failure status in the second case. The board
+pages in [docs/boards/](docs/boards/) describe how each board boots.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md): source tree, layers and naming.
+- [Raspberry Pi 3 Model B](docs/boards/raspi3b.md): memory map, boot and
+  differences from the real board.
 
 ## Roadmap
 

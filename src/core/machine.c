@@ -27,6 +27,12 @@ void machine_destroy(Machine *m)
 {
 	if (m == NULL)
 		return;
+	for (unsigned i = m->num_devices; i-- > 0;) {
+		MachineDevice *dev = &m->devices[i];
+
+		if (dev->destroy != NULL)
+			dev->destroy(dev->ctx);
+	}
 	for (unsigned i = 0; i < m->num_cpus; i++)
 		m->cpus[i]->ops->destroy(m->cpus[i]);
 	bus_destroy(m->bus);
@@ -43,8 +49,27 @@ bool machine_add_cpu(Machine *m, Cpu *cpu)
 	return true;
 }
 
+bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
+                        void (*destroy)(void *ctx))
+{
+	if (m->num_devices == MACHINE_MAX_DEVICES)
+		return false;
+	m->devices[m->num_devices++] = (MachineDevice){
+		.ctx = ctx,
+		.reset = reset,
+		.destroy = destroy,
+	};
+	return true;
+}
+
 void machine_reset(Machine *m)
 {
+	for (unsigned i = 0; i < m->num_devices; i++) {
+		MachineDevice *dev = &m->devices[i];
+
+		if (dev->reset != NULL)
+			dev->reset(dev->ctx);
+	}
 	for (unsigned i = 0; i < m->num_cpus; i++)
 		m->cpus[i]->ops->reset(m->cpus[i]);
 }

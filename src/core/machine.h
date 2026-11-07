@@ -37,11 +37,25 @@ typedef enum MachineStop {
 	MACHINE_STOP_ERROR,    /* emulation error; see stop_message */
 } MachineStop;
 
+#define MACHINE_MAX_DEVICES 32
+
+/*
+ * Something else the machine owns: a device model, or a back end that a
+ * device uses. The functions take ctx and may be NULL.
+ */
+typedef struct MachineDevice {
+	void *ctx;
+	void (*reset)(void *ctx);
+	void (*destroy)(void *ctx);
+} MachineDevice;
+
 struct Machine {
 	Bus *bus;
 	EventQueue events;
 	Cpu *cpus[MACHINE_MAX_CPUS];
 	unsigned num_cpus;
+	MachineDevice devices[MACHINE_MAX_DEVICES];
+	unsigned num_devices;
 	uint64_t insns; /* instructions run so far, by all CPUs */
 	MachineStop stop;
 	char stop_message[256];
@@ -50,7 +64,10 @@ struct Machine {
 /* Create a machine with an empty bus. Returns NULL when out of memory. */
 Machine *machine_create(void);
 
-/* Destroy the CPUs, the bus and the machine. m may be NULL. */
+/*
+ * Destroy the devices, newest first, then the CPUs, the bus and the
+ * machine. m may be NULL.
+ */
 void machine_destroy(Machine *m);
 
 /*
@@ -59,7 +76,16 @@ void machine_destroy(Machine *m);
  */
 bool machine_add_cpu(Machine *m, Cpu *cpu);
 
-/* Reset every CPU. */
+/*
+ * Make the machine own a device or back end. Add a back end before the
+ * devices that use it, so that it is destroyed after them. Returns false,
+ * and the caller keeps ctx, when the machine already has
+ * MACHINE_MAX_DEVICES of them.
+ */
+bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
+                        void (*destroy)(void *ctx));
+
+/* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);
 
 /*

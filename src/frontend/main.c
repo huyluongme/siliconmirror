@@ -4,25 +4,45 @@
 /*
  * smirror command-line front end.
  *
- * Options follow QEMU conventions: they start with a single dash. A double
- * dash is accepted as well, so -version and --version mean the same thing.
+ * Options follow QEMU conventions: they start with a single dash, and an
+ * option that takes a value reads it from the next argument. A double
+ * dash is accepted as well, so -version and --version mean the same
+ * thing.
  */
 
+#include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "backend/char/file.h"
+#include "core/machine.h"
+#include "machine/board.h"
+
 #ifndef SMIRROR_VERSION
 #error "SMIRROR_VERSION must be defined by the build system"
 #endif
+
+typedef struct Options {
+	const char *machine; /* -M */
+	const char *kernel;  /* -kernel */
+	const char *serial;  /* -serial */
+} Options;
 
 static void print_usage(FILE *out)
 {
 	fputs("Usage: smirror [options]\n"
 	      "\n"
 	      "Options:\n"
-	      "  -h, -help    Show this help and exit\n"
-	      "  -version     Show version information and exit\n"
+	      "  -M, -machine NAME  Board to emulate; -M help lists them\n"
+	      "  -kernel FILE       Image to boot, loaded as the board's "
+	      "firmware would\n"
+	      "  -serial DEV        Where the first UART goes: stdio (the "
+	      "default),\n"
+	      "                     null or file:PATH\n"
+	      "  -h, -help          Show this help and exit\n"
+	      "  -version           Show version information and exit\n"
 	      "\n"
 	      "Options may also start with a double dash, for example "
 	      "--version.\n",
@@ -40,6 +60,13 @@ static void print_version(void)
 	       SMIRROR_VERSION);
 }
 
+static void print_machines(void)
+{
+	puts("Supported machines are:");
+	for (const Board *const *b = board_list; *b != NULL; b++)
+		printf("%-20s %s\n", (*b)->name, (*b)->description);
+}
+
 /*
  * Return the option name without its leading dashes, or NULL if the
  * argument is not an option.
@@ -54,8 +81,68 @@ static const char *option_name(const char *arg)
 	return arg;
 }
 
+/* Where the value of an option goes, or NULL if it takes no value. */
+static const char **option_value(Options *options, const char *name)
+{
+	if (strcmp(name, "M") == 0 || strcmp(name, "machine") == 0)
+		return &options->machine;
+	if (strcmp(name, "kernel") == 0)
+		return &options->kernel;
+	if (strcmp(name, "serial") == 0)
+		return &options->serial;
+	return NULL;
+}
+
+/*
+ * Open the back end that -serial names. "null" leaves the UART
+ * unconnected, which is a NULL stream. Returns false after printing a
+ * message.
+ */
+static bool open_serial(const char *spec, CharStream **stream)
+{
+	*stream = NULL;
+	if (strcmp(spec, "null") == 0)
+		return true;
+
+	if (strcmp(spec, "stdio") == 0) {
+		*stream = char_stdio_create();
+	} else if (strncmp(spec, "file:", 5) == 0) {
+		FILE *file = fopen(spec + 5, "wb");
+
+		if (file == NULL) {
+			fprintf(stderr, "smirror: %s: %s\n", spec + 5, strerror(errno));
+			return false;
+		}
+		*stream = char_file_create(file, true);
+		if (*stream == NULL)
+			fclose(file);
+	} else {
+		fprintf(stderr, "smirror: unknown -serial device '%s'\n", spec);
+		return false;
+	}
+
+	if (*stream == NULL) {
+		fputs("smirror: out of memory\n", stderr);
+		return false;
+	}
+	return true;
+}
+
+/* Run the machine and return the exit status that its stop calls for. */
+static int run(Machine *m)
+{
+	MachineStop stop = machine_run(m, 0);
+
+	fprintf(stderr, "smirror: %s: %s\n", machine_stop_str(stop),
+	        m->stop_message);
+	return stop == MACHINE_STOP_ERROR ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
+	Options options = {.serial = "stdio"};
+	bool serial_given = false;
+
 	for (int i = 1; i < argc; i++) {
 		const char *name = option_name(argv[i]);
 
@@ -71,12 +158,62 @@ int main(int argc, char **argv)
 			print_version();
 			return EXIT_SUCCESS;
 		}
-		fprintf(stderr, "smirror: unknown option '%s'\n", argv[i]);
-		fputs("Try 'smirror -help' for more information.\n", stderr);
+
+		const char **value = option_value(&options, name);
+
+		if (value == NULL) {
+			fprintf(stderr, "smirror: unknown option '%s'\n", argv[i]);
+			fputs("Try 'smirror -help' for more information.\n", stderr);
+			return EXIT_FAILURE;
+		}
+		if (i + 1 == argc) {
+			fprintf(stderr, "smirror: option '%s' needs a value\n", argv[i]);
+			return EXIT_FAILURE;
+		}
+		if (value == &options.serial) {
+			if (serial_given) {
+				fputs("smirror: only one -serial is supported\n", stderr);
+				return EXIT_FAILURE;
+			}
+			serial_given = true;
+		}
+		*value = argv[++i];
+	}
+
+	if (options.machine == NULL) {
+		fputs("smirror: no machine given: use -M NAME "
+		      "(-M help lists them)\n",
+		      stderr);
+		return EXIT_FAILURE;
+	}
+	if (strcmp(options.machine, "help") == 0) {
+		print_machines();
+		return EXIT_SUCCESS;
+	}
+
+	const Board *board = board_find(options.machine);
+
+	if (board == NULL) {
+		fprintf(stderr, "smirror: unknown machine '%s' (-M help lists them)\n",
+		        options.machine);
 		return EXIT_FAILURE;
 	}
 
-	/* Nothing can run yet: no machine has been implemented. */
-	print_usage(stderr);
-	return EXIT_FAILURE;
+	BoardOptions board_options = {.kernel = options.kernel};
+	char error[512];
+
+	if (!open_serial(options.serial, &board_options.serial))
+		return EXIT_FAILURE;
+
+	Machine *m = board->create(&board_options, error, sizeof(error));
+
+	if (m == NULL) {
+		fprintf(stderr, "smirror: %s: %s\n", board->name, error);
+		return EXIT_FAILURE;
+	}
+
+	int status = run(m);
+
+	machine_destroy(m);
+	return status;
 }

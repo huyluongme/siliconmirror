@@ -37,6 +37,14 @@ add_executable(test_pl011 test_pl011.c)
 target_link_libraries(test_pl011 PRIVATE hw)
 add_test(NAME unit.pl011 COMMAND test_pl011)
 
+add_executable(test_boot_direct test_boot_direct.c)
+target_link_libraries(test_boot_direct PRIVATE boot)
+add_test(NAME unit.boot_direct COMMAND test_boot_direct)
+
+add_executable(test_raspi3b test_raspi3b.c)
+target_link_libraries(test_raspi3b PRIVATE machine backend)
+add_test(NAME unit.raspi3b COMMAND test_raspi3b)
+
 add_executable(test_arm64_cpu test_arm64_cpu.c)
 target_link_libraries(test_arm64_cpu PRIVATE cpu)
 add_test(NAME unit.arm64_cpu COMMAND test_arm64_cpu)
