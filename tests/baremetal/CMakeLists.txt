@@ -4,7 +4,8 @@
 # AArch64 programs that run inside the emulator, through the smirror
 # command line. They are built with the GNU binutils for AArch64, the
 # binutils-aarch64-linux-gnu package on Debian and Ubuntu. Without them,
-# these tests are skipped.
+# these tests are skipped, except on GitHub Actions: CI must run them,
+# so there a missing tool is an error.
 
 find_program(AARCH64_AS NAMES aarch64-linux-gnu-as aarch64-none-elf-as)
 find_program(AARCH64_LD NAMES aarch64-linux-gnu-ld aarch64-none-elf-ld)
@@ -12,6 +13,11 @@ find_program(AARCH64_OBJCOPY
 	NAMES aarch64-linux-gnu-objcopy aarch64-none-elf-objcopy)
 
 if(NOT AARCH64_AS OR NOT AARCH64_LD OR NOT AARCH64_OBJCOPY)
+	# GitHub Actions sets GITHUB_ACTIONS to true in every workflow.
+	if("$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		message(FATAL_ERROR
+			"AArch64 binutils not found: CI must run the bare-metal tests")
+	endif()
 	message(STATUS "AArch64 binutils not found: skipping bare-metal tests")
 	return()
 endif()

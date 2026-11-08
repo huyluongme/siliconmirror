@@ -78,7 +78,9 @@ make check-format
 
 The bare-metal tests in `tests/baremetal/` run small AArch64 programs
 through the `smirror` command line. They need the GNU binutils for
-AArch64; CMake skips them, with a message, when it cannot find them.
+AArch64; CMake skips them, with a message, when it cannot find them,
+except on GitHub Actions, where CI must run them and a missing tool is
+an error.
 
 ## Coding style
 
