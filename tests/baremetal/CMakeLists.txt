@@ -38,6 +38,7 @@ add_baremetal_program(hello)
 add_baremetal_program(unimplemented)
 add_baremetal_program(exceptions)
 add_baremetal_program(boot)
+add_baremetal_program(timer)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -80,6 +81,13 @@ add_expect_test(baremetal.boot
 	STDOUT "^boot state ok\n123\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel boot.bin)
+
+# The Generic Timer as the boot stub sets it up: its frequency, how fast
+# the counts go, a timer and an event stream. See timer.s.
+add_expect_test(baremetal.timer
+	STDOUT "^timer ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel timer.bin)
 
 # smirror is built from src/machine/raspi3b_stub.inc; this build has
 # assembled raspi3b_stub.s again (see src/machine/CMakeLists.txt). If

@@ -37,6 +37,10 @@ add_executable(test_pl011 test_pl011.c)
 target_link_libraries(test_pl011 PRIVATE hw)
 add_test(NAME unit.pl011 COMMAND test_pl011)
 
+add_executable(test_bcm2836_local test_bcm2836_local.c)
+target_link_libraries(test_bcm2836_local PRIVATE hw)
+add_test(NAME unit.bcm2836_local COMMAND test_bcm2836_local)
+
 add_executable(test_boot_direct test_boot_direct.c)
 target_link_libraries(test_boot_direct PRIVATE boot)
 add_test(NAME unit.boot_direct COMMAND test_boot_direct)
@@ -56,6 +60,10 @@ add_test(NAME unit.arm64_dp_imm COMMAND test_arm64_dp_imm)
 add_executable(test_arm64_dp_reg test_arm64_dp_reg.c)
 target_link_libraries(test_arm64_dp_reg PRIVATE cpu)
 add_test(NAME unit.arm64_dp_reg COMMAND test_arm64_dp_reg)
+
+add_executable(test_arm64_timer test_arm64_timer.c)
+target_link_libraries(test_arm64_timer PRIVATE cpu)
+add_test(NAME unit.arm64_timer COMMAND test_arm64_timer)
 
 add_executable(test_arm64_exception test_arm64_exception.c)
 target_link_libraries(test_arm64_exception PRIVATE cpu)

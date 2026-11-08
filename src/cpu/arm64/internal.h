@@ -260,6 +260,28 @@ void arm64_illegal_state(Arm64Cpu *c);
 void arm64_send_event(Arm64Cpu *c);
 
 /*
+ * SetEventRegister(), from cpu.c: an event for this PE only, such as one
+ * from an event stream of the Generic Timer. A PE waiting in WFE wakes.
+ */
+void arm64_set_event_register(Arm64Cpu *c);
+
+/*
+ * The Generic Timer, from timer.c. arm64_timer_init() sets up the
+ * timers' events and listens to the system counter; it fails when the
+ * counter has too many listeners. arm64_timer_trap() returns where an
+ * MRS or MSR of a Generic Timer register traps to, 0 if it does not, or
+ * -1 if it is UNDEFINED; the caller has checked the lowest Exception
+ * level and whether the register is read-only. arm64_timer_read() and
+ * arm64_timer_write() access a register without checks; they return
+ * false for an encoding that is not a Generic Timer register.
+ */
+bool arm64_timer_init(Arm64Cpu *c);
+void arm64_timer_reset(Arm64Cpu *c);
+int arm64_timer_trap(const Arm64Cpu *c, uint16_t encoding, bool read);
+bool arm64_timer_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
+bool arm64_timer_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
+
+/*
  * System registers, from sysreg.c: MRS and MSR (register), MSR
  * (immediate), and the reset values. arm64_sysreg_name() returns NULL
  * for an encoding that the model does not implement.

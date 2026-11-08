@@ -10,7 +10,8 @@
  *
  * The model runs in AArch64 state only: AArch32 is not supported. It
  * takes synchronous exceptions to AArch64 state; interrupts and SErrors
- * are not implemented yet.
+ * are not implemented yet. It has the Generic Timer, which counts from
+ * the system counter that the board connects.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.
@@ -22,7 +23,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "core/counter.h"
 #include "core/cpu.h"
+#include "core/event.h"
+#include "core/irq.h"
 
 /* PSTATE.{N,Z,C,V}, in their positions in the NZCV register. */
 #define ARM64_NZCV_V (1u << 28)
@@ -41,6 +45,7 @@
 #define ARM64_SCR_SMD (1u << 7)              /* SMC disabled */
 #define ARM64_SCR_HCE (1u << 8)              /* HVC enabled */
 #define ARM64_SCR_RW (1u << 10)              /* EL2, or EL1, uses AArch64 */
+#define ARM64_SCR_ST (1u << 11)              /* Secure EL1 has CNTPS_* */
 #define ARM64_SCR_TWI (1u << 12)             /* trap WFI to EL3 */
 #define ARM64_SCR_TWE (1u << 13)             /* trap WFE to EL3 */
 #define ARM64_HCR_TWI (1u << 13)             /* HCR_EL2: trap WFI to EL2 */
@@ -193,7 +198,47 @@ typedef struct Arm64Config {
 	 * one core.
 	 */
 	Arm64Cluster *cluster;
+
+	/*
+	 * The system counter that the Generic Timer counts from, which must
+	 * stay valid while the core exists. NULL gives a counter stuck at 0.
+	 */
+	SystemCounter *counter;
 } Arm64Config;
+
+/*
+ * The timers of the Generic Timer of an Armv8.0 PE with EL3 and EL2,
+ * D12.2.4. Each one has an interrupt output; the names in the comments
+ * are those of the Cortex-A53's signals.
+ */
+typedef enum Arm64TimerId {
+	ARM64_TIMER_PHYS,   /* EL1 physical timer, CNTP_*: nCNTPNSIRQ */
+	ARM64_TIMER_VIRT,   /* EL1 virtual timer, CNTV_*: nCNTVIRQ */
+	ARM64_TIMER_HYP,    /* EL2 physical timer, CNTHP_*: nCNTHPIRQ */
+	ARM64_TIMER_SECURE, /* EL3 physical timer, CNTPS_*: nCNTPSIRQ */
+	ARM64_NUM_TIMERS,
+} Arm64TimerId;
+
+/* One timer: its registers, and the event of its condition being met. */
+typedef struct Arm64Timer {
+	struct Arm64Cpu *cpu;
+	uint64_t ctl;  /* ENABLE and IMASK; ISTATUS is computed when read */
+	uint64_t cval; /* the CompareValue */
+	Event event;   /* when the condition will be met */
+	IrqLine *irq;  /* the interrupt output, NULL when not connected */
+} Arm64Timer;
+
+/* The Generic Timer registers of a PE, and its state. */
+typedef struct Arm64GenericTimer {
+	uint64_t cntfrq_el0, cntkctl_el1, cnthctl_el2, cntvoff_el2;
+	Arm64Timer timers[ARM64_NUM_TIMERS];
+	/*
+	 * The next event of each event stream, D12.2.3: [0] from the
+	 * virtual count, under CNTKCTL_EL1; [1] from the physical count,
+	 * under CNTHCTL_EL2.
+	 */
+	Event streams[2];
+} Arm64GenericTimer;
 
 /*
  * The System registers that are stored as they are written. The arrays
@@ -261,6 +306,7 @@ typedef struct Arm64Cpu {
 	char detail[64];
 
 	Arm64SysRegs sys;
+	Arm64GenericTimer timer;
 } Arm64Cpu;
 
 /*
@@ -282,5 +328,11 @@ Arm64Cpu *arm64_cpu_of(Cpu *cpu);
  */
 bool arm64_cpu_read_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
 bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value);
+
+/*
+ * Connect the interrupt output of a timer to line, or disconnect it with
+ * NULL. The line takes the output's current level.
+ */
+void arm64_cpu_connect_timer(Arm64Cpu *c, Arm64TimerId id, IrqLine *line);
 
 #endif /* CPU_ARM64_CPU_H */

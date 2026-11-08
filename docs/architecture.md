@@ -22,9 +22,9 @@ src/
   util/               Generic helpers: bit operations, byte order,
                       MBR/FAT reading, device tree building
   core/               Board-independent core: memory bus, interrupt
-                      lines, virtual time and timed events, the CPU
-                      and character stream interfaces, the machine
-                      main loop
+                      lines, virtual time and timed events, the system
+                      counter, the CPU and character stream interfaces,
+                      the machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -150,8 +150,16 @@ the machine stops with `MACHINE_STOP_IDLE`.
 
 Known limits, to be handled when the devices that need it arrive:
 
-- While a CPU runs, devices see the time at the start of the turn, so
-  they observe time in steps of up to 1 µs.
+- While a CPU runs, `machine_now()` gives its own time: the start of
+  the turn plus the instructions it has run in it. The CPUs take turns
+  through the same stretch of time, so one that runs later in a turn
+  can reach a device at an earlier time than the one before it; a
+  device whose state follows time, like a counter, then keeps the later
+  time.
+- An event that a CPU schedules during its turn fires at the end of the
+  turn at the earliest, up to 1 µs late. A timer's state that software
+  reads, such as `ISTATUS`, is computed at the time of the read, so it
+  is exact; only the interrupt is late.
 - Input from the host, such as a terminal connected to a UART, can wake
   a waiting machine, so such a machine must wait for input instead of
   stopping as idle.

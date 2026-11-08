@@ -45,6 +45,12 @@ struct Cpu {
 	Machine *machine; /* set by machine_add_cpu() */
 	unsigned index;   /* position in the machine, from 0 */
 	CpuState state;
+
+	/*
+	 * Instructions completed so far in the current call of run(), which
+	 * sets it to 0 and keeps it up to date: machine_now() needs it.
+	 */
+	uint64_t executed;
 };
 
 /* Set up the Cpu part of a CPU model. The CPU starts running. */
@@ -54,6 +60,7 @@ static inline void cpu_init(Cpu *cpu, const CpuOps *ops)
 	cpu->machine = NULL;
 	cpu->index = 0;
 	cpu->state = CPU_RUNNING;
+	cpu->executed = 0;
 }
 
 #endif /* CORE_CPU_H */

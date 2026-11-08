@@ -107,8 +107,8 @@ pages in [docs/boards/](docs/boards/) describe how each board boots.
 ## Documentation
 
 - [Architecture](docs/architecture.md): source tree, layers and naming.
-- [Raspberry Pi 3 Model B](docs/boards/raspi3b.md): memory map, boot and
-  differences from the real board.
+- [Raspberry Pi 3 Model B](docs/boards/raspi3b.md): memory map, Generic
+  Timer, boot and differences from the real board.
 
 ## Roadmap
 

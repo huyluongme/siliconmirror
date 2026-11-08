@@ -186,7 +186,18 @@ static void test_state_before_the_stub(void)
 		/* MPIDR_EL1.Aff0 numbers the cores of the one cluster. */
 		CHECK(arm64_cpu_read_sysreg(c, ARM64_MPIDR_EL1, &value));
 		CHECK_EQ(value, 0x80000000u + i);
+		/* The Generic Timer is not set up, and its counter stopped. */
+		CHECK(arm64_cpu_read_sysreg(c, ARM64_CNTFRQ_EL0, &value));
+		CHECK_EQ(value, 0);
 	}
+
+	/* The ARM local peripherals reset with the core timer stopped. */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_LOCAL_BASE + 0x08, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	event_queue_run_until(&m->events, 1000000);
+	CHECK(arm64_cpu_read_sysreg(arm64_cpu_of(m->cpus[0]), ARM64_CNTPCT_EL0,
+	                            &value));
+	CHECK_EQ(value, 0);
 
 	CHECK_EQ(bus_read(m->bus, RASPI3B_KERNEL_ADDRESS, 4, &value), BUS_OK);
 	CHECK_EQ(value, park[0]);
@@ -242,6 +253,8 @@ static void test_state_after_the_stub(void)
 		{ARM64_SYSREG(3, 1, 11, 0, 2), 0x03000000},
 		{ARM64_SCTLR_EL2, 0x30c50830},
 		{ARM64_SPSR_EL3, 0x3c9},
+		{ARM64_CNTFRQ_EL0, 19200000},
+		{ARM64_CNTVOFF_EL2, 0},
 	};
 	FILE *out;
 	Machine *m = boot(park, ARRAY_SIZE(park), &out);
@@ -274,6 +287,20 @@ static void test_state_after_the_stub(void)
 			CHECK_EQ(c->x[6], i);
 		}
 	}
+
+	/*
+	 * The core timer counts the 19.2 MHz crystal. The stub started it
+	 * before its first tick, at 52 ns, so the count is the number of
+	 * ticks since time 0.
+	 */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_LOCAL_BASE, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_LOCAL_BASE + 0x08, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x80000000);
+	CHECK(arm64_cpu_read_sysreg(arm64_cpu_of(m->cpus[1]), ARM64_CNTPCT_EL0,
+	                            &value));
+	CHECK(value > 0);
+	CHECK_EQ(value, machine_now(m) * 192 / 10000);
 
 	machine_destroy(m);
 	fclose(out);

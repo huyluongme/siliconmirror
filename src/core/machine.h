@@ -56,6 +56,7 @@ struct Machine {
 	unsigned num_cpus;
 	MachineDevice devices[MACHINE_MAX_DEVICES];
 	unsigned num_devices;
+	Cpu *running;   /* the CPU in its turn, or NULL between turns */
 	uint64_t insns; /* instructions run so far, by all CPUs */
 	MachineStop stop;
 	char stop_message[256];
@@ -94,6 +95,15 @@ void machine_reset(Machine *m);
  * machine_run() again carries on from where it stopped.
  */
 MachineStop machine_run(Machine *m, uint64_t max_insns);
+
+/*
+ * The current virtual time. In a CPU's turn, the CPUs take turns running
+ * through the same stretch of time, and this is the time of the running
+ * CPU: the start of the turn, plus the time of the instructions it has
+ * completed in the turn (Cpu.executed). Between turns, while events and
+ * devices run, it is the time of the event queue.
+ */
+uint64_t machine_now(const Machine *m);
 
 /*
  * Ask the main loop to stop as soon as the current CPU returns, with a

@@ -110,7 +110,9 @@ static bool run_cpus(Machine *m, uint64_t end, uint64_t limit)
 		if (budget == 0)
 			continue;
 
+		m->running = cpu;
 		m->insns += cpu->ops->run(cpu, budget);
+		m->running = NULL;
 		if (m->stop != MACHINE_STOP_NONE)
 			break;
 	}
@@ -154,6 +156,15 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			             m->insns);
 	}
 	return m->stop;
+}
+
+uint64_t machine_now(const Machine *m)
+{
+	uint64_t now = event_queue_now(&m->events);
+
+	if (m->running != NULL)
+		now += m->running->executed * MACHINE_NS_PER_INSN;
+	return now;
 }
 
 const char *machine_stop_str(MachineStop stop)

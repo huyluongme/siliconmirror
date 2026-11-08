@@ -37,6 +37,7 @@ static void arm64_reset(Cpu *base)
 	c->next_pc = c->pc;
 	c->event_register = false;
 	arm64_sysreg_reset(c);
+	arm64_timer_reset(c);
 	base->state = CPU_RUNNING;
 }
 
@@ -120,11 +121,12 @@ static uint64_t arm64_run(Cpu *base, uint64_t max_insns)
 	Arm64Cpu *c = arm64_cpu_of(base);
 	uint64_t n = 0;
 
+	base->executed = 0;
 	while (n < max_insns && base->state == CPU_RUNNING &&
 	       base->machine->stop == MACHINE_STOP_NONE) {
 		if (!step(c))
 			break;
-		n++;
+		base->executed = ++n;
 	}
 	return n;
 }
@@ -153,17 +155,20 @@ void arm64_send_event(Arm64Cpu *c)
 
 	for (unsigned i = 0; i < m->num_cpus; i++) {
 		Cpu *cpu = m->cpus[i];
-		Arm64Cpu *pe;
 
 		if (cpu->ops != &arm64_ops || cpu->state == CPU_OFF)
 			continue;
-		pe = arm64_cpu_of(cpu);
-		if (cpu->state == CPU_HALTED && pe->wait == ARM64_WAIT_EVENT) {
-			cpu->state = CPU_RUNNING;
-			pe->event_register = false;
-		} else {
-			pe->event_register = true;
-		}
+		arm64_set_event_register(arm64_cpu_of(cpu));
+	}
+}
+
+void arm64_set_event_register(Arm64Cpu *c)
+{
+	if (c->cpu.state == CPU_HALTED && c->wait == ARM64_WAIT_EVENT) {
+		c->cpu.state = CPU_RUNNING;
+		c->event_register = false;
+	} else {
+		c->event_register = true;
 	}
 }
 
@@ -182,6 +187,10 @@ Cpu *arm64_cpu_create(const Arm64Config *config)
 		return NULL;
 	cpu_init(&c->cpu, &arm64_ops);
 	c->config = *config;
+	if (!arm64_timer_init(c)) {
+		free(c);
+		return NULL;
+	}
 	arm64_reset(&c->cpu);
 	return &c->cpu;
 }

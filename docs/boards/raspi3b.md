@@ -44,7 +44,7 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   same L2, smirror assumes it.
 
 A System register that the Cortex-A53 has but smirror does not
-implement yet, such as `CNTFRQ_EL0` of the Generic Timer, stops the
+implement yet, such as `PMCR_EL0` of the performance monitors, stops the
 machine with the register's name. Encodings that the core does not have
 are UNDEFINED.
 
@@ -58,11 +58,59 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x00000000` | 1008 MB | RAM                                                         | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                                 | Partly                     |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                          | Yes, without its interrupt |
-| `0x40000000` | 4 KB    | Arm local peripherals: interrupt routing, timers, mailboxes | Not yet                    |
+| `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes    | Partly: the core timer     |
 
 Accessing an address where nothing is modelled stops the machine with
 an error that names the access: what the real board does there is not
-known.
+known. So does a register of the ARM local peripherals that is not
+modelled yet.
+
+## The Generic Timer
+
+The Generic Timers of the four cores count from one 64-bit counter: the
+core timer of the ARM local peripherals (BCM2836 ARM-local peripherals,
+section 3.1), at `0x40000000`. It counts the edges of a clock through a
+prescaler that divides by 2^31 / prescaler:
+
+| Register     | Offset | Meaning                                                            |
+|--------------|--------|--------------------------------------------------------------------|
+| Control      | `0x00` | bit 8: the APB clock instead of the crystal; bit 9: steps of 2     |
+| Prescaler    | `0x08` | `0x80000000` divides by 1; 0 stops the timer                       |
+| Timer, low   | `0x1c` | reading it latches the high half; writing it holds the value       |
+| Timer, high  | `0x20` | reads the latched half; writing it sets the timer to both halves   |
+
+All four reset to 0, so the timer is stopped until the boot stub writes
+the prescaler. The crystal runs at 19.2 MHz. The APB clock runs at half
+the ARM clock, which is 1.2 GHz on the Raspberry Pi 3 Model B: 600 MHz.
+
+smirror's time is virtual: one instruction takes 1 ns, and when every
+core waits, time jumps to the next thing that can wake one. A program
+that counts 2,000,000 instructions sees the counter go up by 38,400
+ticks of 19.2 MHz, but on the host it takes as long as smirror needs
+to run those instructions: a loop that waits for one second of the
+counter takes longer than a second.
+
+Each core has the four timers of an Armv8.0 core with EL3 and EL2
+(`CNTP_*`, `CNTV_*`, `CNTHP_*` and `CNTPS_*`), the counter registers,
+`CNTKCTL_EL1`, `CNTHCTL_EL2` and `CNTVOFF_EL2`, with the access rules of
+the Arm Architecture Reference Manual, and the two event streams that
+wake `WFE`. A timer's interrupt output follows `ENABLE`, `IMASK` and
+`ISTATUS`, but it is not connected yet: software can poll `ISTATUS`,
+and interrupts come with the interrupt controllers.
+
+The document does not say how the prescaler works inside. smirror
+treats it as an accumulator: each clock edge adds the prescaler, and
+each time the sum reaches 2^31 the timer steps. Its other choices:
+
+- Writing the high half "sets the pre-scaler to zero" (section 3.1.2).
+  smirror reads this as the divider starting over, not as the prescaler
+  register becoming 0, which would stop the timer.
+- A prescaler above 2^31, which the document says not to use, stops the
+  machine, and so do accesses other than 32-bit ones.
+- The cores take turns running through the same stretch of virtual
+  time, up to 1 µs. When a core accesses the block at an earlier time
+  than the last change, the block uses the time of that change: its
+  time never goes back.
 
 ## Boot with `-kernel`
 
@@ -103,11 +151,13 @@ core 3. After loading the stub, the board clears them, as armstub8's
 comments say the firmware does, and writes `0x80000` and 0 (no device
 tree yet) into the last two words.
 
-At EL3, every core writes these System registers:
+At EL3, every core writes these System registers, in this order:
 
 | Register       | Value              | Meaning                                                      |
 |----------------|--------------------|--------------------------------------------------------------|
 | `L2CTLR_EL1`   | bits 5 and 1 set   | asks for slower L2 RAM; the Cortex-A53 ignores it            |
+| `CNTFRQ_EL0`   | `19200000`         | tells software the counter's frequency                       |
+| `CNTVOFF_EL2`  | `0`                | the virtual count is the physical count                      |
 | `CPTR_EL3`     | `0`                | no traps to EL3, of FP and SIMD or anything else             |
 | `SCR_EL3`      | `0x5b1`            | EL2 and EL1 are Non-secure and AArch64; `HVC` on, `SMC` off  |
 | `ACTLR_EL3`    | `0x73`             | EL2 may write the Cortex-A53 configuration registers         |
@@ -115,11 +165,10 @@ At EL3, every core writes these System registers:
 | `SCTLR_EL2`    | `0x30c50830`       | MMU, caches and alignment checks off, stack alignment too    |
 | `SPSR_EL3`     | `0x3c9`            | for the `ERET` to EL2: EL2h, with D, A, I and F masked       |
 
-armstub8 also sets the Generic Timer's frequency, `CNTFRQ_EL0`, to
-19.2 MHz and `CNTVOFF_EL2` to 0, and sets up the timer of the ARM local
-peripherals: 0 at `0x40000000` (control) and `0x80000000` at
-`0x40000008` (prescaler). smirror's stub does not yet: it will when the
-Generic Timer and the ARM local peripherals are modelled.
+Before them, each core starts the core timer of the ARM local
+peripherals: it writes 0 to the control register at `0x40000000`, to
+count the crystal by 1, and `0x80000000` to the prescaler at
+`0x40000008`, to divide by 1.
 
 On EL2, core 0 reads the two addresses from the stub's data and jumps.
 Cores 1 to 3 take their number from `MPIDR_EL1` and, as in armstub8,
@@ -137,8 +186,9 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 ## Differences from the real board
 
 - No device tree is passed yet: X0 is 0.
-- The boot stub does not set up the Generic Timer and the ARM local
-  peripherals yet, which are not modelled yet.
+- Time is virtual, as described under The Generic Timer: the counter
+  follows the instructions that smirror runs, not the host's clock.
+- The timers' interrupts are not delivered yet.
 - The GPU's share of the RAM, a firmware setting, is not modelled: all
   of the RAM below the peripherals is free.
 - GPIO pin functions are not modelled, and UART0 always goes to
@@ -163,12 +213,16 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - [Arm Cortex-A53 MPCore Processor Technical Reference Manual](https://developer.arm.com/documentation/ddi0500/j/),
   ARM DDI 0500J, chapter 4: identification and reset values, the
   configuration registers and the `ACTLR` bits that control them
-  (`ACTLR_EL3` 4.3.33, `L2CTLR_EL1` 4.3.64, `CPUECTLR_EL1` 4.3.79).
+  (`ACTLR_EL3` 4.3.33, `L2CTLR_EL1` 4.3.64, `CPUECTLR_EL1` 4.3.79),
+  and the reset values of the Generic Timer registers (4.3).
 - `/proc/cpuinfo` of a Raspberry Pi 3, for example in
   [this gist](https://gist.github.com/fawick/d142633de52b31d0dade):
   CPU part `0xd03`, revision 4, so a Cortex-A53 r0p4.
 - [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf),
   section 13: the PL011 and its FIFOs.
+- [BCM2836 ARM-local peripherals](https://datasheets.raspberrypi.com/bcm2836/bcm2836-peripherals.pdf)
+  (Quad-A7 control, rev 3.4), sections 3.1, 4.2 and 4.3: the core timer.
+  The BCM2837 has the same block.
 - [Trusted Firmware-A, Raspberry Pi 3](https://github.com/ARM-software/arm-trusted-firmware/blob/master/docs/plat/rpi3.rst):
   RAM size, and the default stub that starts `kernel8.img` at EL2.
 - The default stub,
@@ -180,10 +234,14 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - [Arm Architecture Reference Manual for A-profile architecture](https://developer.arm.com/documentation/ddi0487/latest),
   ARM DDI 0487 issue M.d: `SCR_EL3` (D24.2.168), `SCTLR_EL2`
   (D24.2.175), `CPTR_EL3` (D24.2.38), `MPIDR_EL1` (D24.2.137),
-  `SPSR_EL3` (C5.2.23) and the Event Register (D1.7.1.1).
+  `SPSR_EL3` (C5.2.23) and the Event Register (D1.7.1.1); the Generic
+  Timer (D12) and its registers (D24.10).
 - Raspberry Pi documentation, `kernel_address` in the
   [2021 version of the config.txt boot options](https://github.com/raspberrypi/documentation/blob/16480247dcac12d1f828c0f2556a3bc430de3c90/configuration/config-txt/boot.md):
   64-bit kernels load at `0x80000`.
+- Raspberry Pi documentation, `arm_freq` in
+  [config.txt, Overclocking options](https://www.raspberrypi.com/documentation/computers/config_txt.html#overclocking-options):
+  the Raspberry Pi 3 runs its cores at 1200 MHz.
 - Raspberry Pi documentation,
   [Configure UARTs](https://www.raspberrypi.com/documentation/computers/configuration.html#configure-uarts):
   which UART is on GPIO 14 and 15.

@@ -18,10 +18,6 @@
 // smirror does not assemble this file when it is built: it loads the
 // bytes kept in raspi3b_stub.inc. After changing this file, run
 // `make stub` to update raspi3b_stub.inc; a test fails until then.
-//
-// Not done yet, because the hardware is not modelled yet: setting the
-// Generic Timer frequency (CNTFRQ_EL0, 19.2 MHz), CNTVOFF_EL2, and the
-// timer prescaler of the ARM local peripherals at 0x40000000.
 
 	// SCR_EL3 (Arm ARM D24.2.168): EL2 and EL1 are Non-secure (NS,
 	// bit 0) and use AArch64 (RW, bit 10); HVC is enabled (HCE, bit 8)
@@ -45,9 +41,28 @@
 	// and the D, A, I and F interrupt masks set.
 	.equ	SPSR_EL2H_DAIF, 0x3c9
 
+	// The ARM local peripherals (BCM2836 ARM-local peripherals, rev
+	// 3.4, sections 4.2 and 4.3): the control register, and the
+	// prescaler of the 64-bit core timer, which the Generic Timers of
+	// all four cores count from.
+	.equ	LOCAL_CONTROL, 0x40000000
+	.equ	LOCAL_PRESCALER, 0x40000008
+
+	// The crystal, 19.2 MHz: the frequency of the core timer once the
+	// prescaler divides by 1.
+	.equ	CRYSTAL_HZ, 19200000
+
 	.text
 	.globl	_start
 _start:
+	// The core timer counts the crystal (control bit 8 clear) by 1
+	// (bit 9 clear); a prescaler of 2^31 divides by 1. Until it is
+	// written, the prescaler is 0 and the timer stopped.
+	ldr	x0, =LOCAL_CONTROL
+	str	wzr, [x0]
+	mov	w1, #0x80000000
+	str	w1, [x0, #(LOCAL_PRESCALER - LOCAL_CONTROL)]
+
 	// L2CTLR_EL1 (A53 TRM 4.3.64): armstub8 sets bits 5 and 1 to ask
 	// for slower L2 RAM. On the Cortex-A53 the latency fields are
 	// fixed when the chip is made and ignore writes, so this changes
@@ -58,6 +73,13 @@ _start:
 	mov	x1, #0x22
 	orr	x0, x0, x1
 	msr	s3_1_c11_c0_2, x0
+
+	// CNTFRQ_EL0 (Arm ARM D24.10.1) tells software the frequency of the
+	// system counter; only the highest Exception level can write it.
+	// CNTVOFF_EL2 (D24.10.27): the virtual count is the physical one.
+	ldr	x0, =CRYSTAL_HZ
+	msr	cntfrq_el0, x0
+	msr	cntvoff_el2, xzr
 
 	// CPTR_EL3 (Arm ARM D24.2.38): trap nothing to EL3, in particular
 	// not the floating-point and SIMD instructions.
@@ -110,6 +132,9 @@ jump:	mov	x1, #0
 	mov	x2, #0
 	mov	x3, #0
 	br	x4
+
+	// The constants of the LDR instructions above.
+	.ltorg
 
 	// The data, at the offsets of armstub8. The assembler stops with
 	// an error if the code above grows past 0xd8.

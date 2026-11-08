@@ -3,6 +3,7 @@
 
 # Device models, grouped by kind. See docs/architecture.md.
 add_library(hw STATIC
-	char/pl011.c)
+	char/pl011.c
+	intc/bcm2836_local.c)
 
 target_link_libraries(hw PUBLIC core)

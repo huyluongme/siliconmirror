@@ -12,6 +12,7 @@ add_library(cpu STATIC
 	arm64/exception.c
 	arm64/load_store.c
 	arm64/mem.c
-	arm64/sysreg.c)
+	arm64/sysreg.c
+	arm64/timer.c)
 
 target_link_libraries(cpu PUBLIC core)

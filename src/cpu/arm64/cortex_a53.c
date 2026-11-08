@@ -101,10 +101,9 @@ static const Arm64ImpDefReg bcm2837_impdef[] = {
 
 /*
  * Registers of the core that the emulator does not implement yet: the
- * Generic Timer (section 10.3), debug (section 11.3) and performance
- * monitor (section 12.4) registers, FPCR and FPSR, and the registers that
- * hold AArch32 state. Their encodings come from the GNU assembler. The
- * list is sorted by encoding.
+ * debug (section 11.3) and performance monitor (section 12.4) registers,
+ * FPCR and FPSR, and the registers that hold AArch32 state. Their
+ * encodings come from the GNU assembler. The list is sorted by encoding.
  */
 static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 0, 0, 0, 2), "OSDTRRX_EL1"},
@@ -146,7 +145,6 @@ static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 4, 0, 7, 0), "DBGVCR32_EL2"},
 	{ARM64_SYSREG(3, 0, 9, 14, 1), "PMINTENSET_EL1"},
 	{ARM64_SYSREG(3, 0, 9, 14, 2), "PMINTENCLR_EL1"},
-	{ARM64_SYSREG(3, 0, 14, 1, 0), "CNTKCTL_EL1"},
 	{ARM64_SYSREG(3, 3, 4, 4, 0), "FPCR"},
 	{ARM64_SYSREG(3, 3, 4, 4, 1), "FPSR"},
 	{ARM64_SYSREG(3, 3, 9, 12, 0), "PMCR_EL0"},
@@ -162,15 +160,6 @@ static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(3, 3, 9, 13, 2), "PMXEVCNTR_EL0"},
 	{ARM64_SYSREG(3, 3, 9, 14, 0), "PMUSERENR_EL0"},
 	{ARM64_SYSREG(3, 3, 9, 14, 3), "PMOVSSET_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 0, 0), "CNTFRQ_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 0, 1), "CNTPCT_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 0, 2), "CNTVCT_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 2, 0), "CNTP_TVAL_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 2, 1), "CNTP_CTL_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 2, 2), "CNTP_CVAL_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 3, 0), "CNTV_TVAL_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 3, 1), "CNTV_CTL_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 3, 2), "CNTV_CVAL_EL0"},
 	{ARM64_SYSREG(3, 3, 14, 8, 0), "PMEVCNTR0_EL0"},
 	{ARM64_SYSREG(3, 3, 14, 8, 1), "PMEVCNTR1_EL0"},
 	{ARM64_SYSREG(3, 3, 14, 8, 2), "PMEVCNTR2_EL0"},
@@ -191,14 +180,6 @@ static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(3, 4, 4, 3, 3), "SPSR_fiq"},
 	{ARM64_SYSREG(3, 4, 5, 0, 1), "IFSR32_EL2"},
 	{ARM64_SYSREG(3, 4, 5, 3, 0), "FPEXC32_EL2"},
-	{ARM64_SYSREG(3, 4, 14, 0, 3), "CNTVOFF_EL2"},
-	{ARM64_SYSREG(3, 4, 14, 1, 0), "CNTHCTL_EL2"},
-	{ARM64_SYSREG(3, 4, 14, 2, 0), "CNTHP_TVAL_EL2"},
-	{ARM64_SYSREG(3, 4, 14, 2, 1), "CNTHP_CTL_EL2"},
-	{ARM64_SYSREG(3, 4, 14, 2, 2), "CNTHP_CVAL_EL2"},
-	{ARM64_SYSREG(3, 7, 14, 2, 0), "CNTPS_TVAL_EL1"},
-	{ARM64_SYSREG(3, 7, 14, 2, 1), "CNTPS_CTL_EL1"},
-	{ARM64_SYSREG(3, 7, 14, 2, 2), "CNTPS_CVAL_EL1"},
 };
 
 const Arm64CpuModel arm64_cortex_a53_bcm2837 = {

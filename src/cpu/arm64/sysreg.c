@@ -10,11 +10,12 @@
  * one (C5.2 and D24): the lowest Exception level that may use it, and the
  * controls that trap its use at a lower level to a higher one. The CPU
  * model gives the values of the ID registers, the reset values and the
- * IMPLEMENTATION DEFINED registers.
+ * IMPLEMENTATION DEFINED registers. The Generic Timer registers have
+ * their own access rules and values, in timer.c.
  *
  * A core has registers that this model does not implement yet: debug,
- * performance monitors, Generic Timer, floating-point, and the System
- * registers of AArch32. The CPU model lists them, and using one stops
+ * performance monitors, floating-point, and the System registers of
+ * AArch32. The CPU model lists them, and using one stops
  * the machine as "not implemented yet". Other encodings are UNDEFINED.
  *
  * Writing SCTLR_ELx to turn on the MMU or big-endian data for the current
@@ -48,6 +49,7 @@ typedef enum Kind {
 	KIND_ISR,    /* pending interrupts: none can be pending yet */
 	KIND_RVBAR,  /* the reset address */
 	KIND_ZERO,   /* reads as 0 */
+	KIND_TIMER,  /* a Generic Timer register, timer.c */
 } Kind;
 
 /* Access rules. */
@@ -80,6 +82,7 @@ typedef struct SysReg {
 #define FIELD(enc, name, el, flags, field)                                     \
 	{enc, name, el, flags, KIND_FIELD, offsetof(Arm64Cpu, field)}
 #define SPECIAL(enc, name, el, flags, kind) {enc, name, el, flags, kind, 0}
+#define TIMER(enc, name, el, flags) {enc, name, el, flags, KIND_TIMER, 0}
 
 /* Sorted by encoding, for the binary search in find_sysreg(). */
 static const SysReg sysregs[] = {
@@ -146,6 +149,7 @@ static const SysReg sysregs[] = {
 	FIELD(ARM64_CONTEXTIDR_EL1, "CONTEXTIDR_EL1", 1, TRAP_TVM,
           sys.contextidr_el1),
 	FIELD(ARM64_TPIDR_EL1, "TPIDR_EL1", 1, 0, sys.tpidr[1]),
+	TIMER(ARM64_CNTKCTL_EL1, "CNTKCTL_EL1", 1, 0),
 	SPECIAL(ARM64_CCSIDR_EL1, "CCSIDR_EL1", 1, RO | TRAP_TID2, KIND_CCSIDR),
 	SPECIAL(ARM64_CLIDR_EL1, "CLIDR_EL1", 1, RO | TRAP_TID2, KIND_ID),
 	SPECIAL(ARM64_AIDR_EL1, "AIDR_EL1", 1, RO | TRAP_TID1, KIND_ID),
@@ -156,6 +160,15 @@ static const SysReg sysregs[] = {
 	SPECIAL(ARM64_DAIF, "DAIF", 0, EL0_UMA, KIND_DAIF),
 	FIELD(ARM64_TPIDR_EL0, "TPIDR_EL0", 0, 0, sys.tpidr[0]),
 	FIELD(ARM64_TPIDRRO_EL0, "TPIDRRO_EL0", 0, EL0_RO, sys.tpidrro_el0),
+	TIMER(ARM64_CNTFRQ_EL0, "CNTFRQ_EL0", 0, 0),
+	TIMER(ARM64_CNTPCT_EL0, "CNTPCT_EL0", 0, RO),
+	TIMER(ARM64_CNTVCT_EL0, "CNTVCT_EL0", 0, RO),
+	TIMER(ARM64_CNTP_TVAL_EL0, "CNTP_TVAL_EL0", 0, 0),
+	TIMER(ARM64_CNTP_CTL_EL0, "CNTP_CTL_EL0", 0, 0),
+	TIMER(ARM64_CNTP_CVAL_EL0, "CNTP_CVAL_EL0", 0, 0),
+	TIMER(ARM64_CNTV_TVAL_EL0, "CNTV_TVAL_EL0", 0, 0),
+	TIMER(ARM64_CNTV_CTL_EL0, "CNTV_CTL_EL0", 0, 0),
+	TIMER(ARM64_CNTV_CVAL_EL0, "CNTV_CVAL_EL0", 0, 0),
 	FIELD(ARM64_VPIDR_EL2, "VPIDR_EL2", 2, 0, sys.vpidr_el2),
 	FIELD(ARM64_VMPIDR_EL2, "VMPIDR_EL2", 2, 0, sys.vmpidr_el2),
 	FIELD(ARM64_SCTLR_EL2, "SCTLR_EL2", 2, SCTLR, sys.sctlr[2]),
@@ -181,6 +194,11 @@ static const SysReg sysregs[] = {
 	FIELD(ARM64_AMAIR_EL2, "AMAIR_EL2", 2, 0, sys.amair[2]),
 	FIELD(ARM64_VBAR_EL2, "VBAR_EL2", 2, 0, sys.vbar[2]),
 	FIELD(ARM64_TPIDR_EL2, "TPIDR_EL2", 2, 0, sys.tpidr[2]),
+	TIMER(ARM64_CNTVOFF_EL2, "CNTVOFF_EL2", 2, 0),
+	TIMER(ARM64_CNTHCTL_EL2, "CNTHCTL_EL2", 2, 0),
+	TIMER(ARM64_CNTHP_TVAL_EL2, "CNTHP_TVAL_EL2", 2, 0),
+	TIMER(ARM64_CNTHP_CTL_EL2, "CNTHP_CTL_EL2", 2, 0),
+	TIMER(ARM64_CNTHP_CVAL_EL2, "CNTHP_CVAL_EL2", 2, 0),
 	FIELD(ARM64_SCTLR_EL3, "SCTLR_EL3", 3, SCTLR, sys.sctlr[3]),
 	FIELD(ARM64_ACTLR_EL3, "ACTLR_EL3", 3, 0, sys.actlr[3]),
 	FIELD(ARM64_SCR_EL3, "SCR_EL3", 3, 0, sys.scr_el3),
@@ -202,6 +220,9 @@ static const SysReg sysregs[] = {
 	SPECIAL(ARM64_RVBAR_EL3, "RVBAR_EL3", 3, RO, KIND_RVBAR),
 	FIELD(ARM64_RMR_EL3, "RMR_EL3", 3, RMR, sys.rmr_el3),
 	FIELD(ARM64_TPIDR_EL3, "TPIDR_EL3", 3, 0, sys.tpidr[3]),
+	TIMER(ARM64_CNTPS_TVAL_EL1, "CNTPS_TVAL_EL1", 1, 0),
+	TIMER(ARM64_CNTPS_CTL_EL1, "CNTPS_CTL_EL1", 1, 0),
+	TIMER(ARM64_CNTPS_CVAL_EL1, "CNTPS_CVAL_EL1", 1, 0),
 };
 
 static const SysReg *find_sysreg(uint16_t encoding)
@@ -385,6 +406,8 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 	case KIND_ZERO:
 		*value = 0;
 		return true;
+	case KIND_TIMER:
+		return arm64_timer_read(c, r->encoding, value);
 	}
 	return false;
 }
@@ -428,6 +451,9 @@ static Arm64Exec write_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t value)
 	case KIND_SP_EL2:
 		c->sp_el[2] = value;
 		return ARM64_EXEC_OK;
+	case KIND_TIMER:
+		arm64_timer_write(c, r->encoding, value);
+		return ARM64_EXEC_OK;
 	default: /* the read-only kinds never get here */
 		return ARM64_EXEC_UNDEFINED;
 	}
@@ -465,7 +491,17 @@ static Arm64Exec access_sysreg(Arm64Cpu *c, const SysReg *r, uint32_t insn)
 	if (!read && ((r->flags & RO) || (c->el == 0 && (r->flags & EL0_RO))))
 		return ARM64_EXEC_UNDEFINED;
 
-	unsigned target = trap_target(c, r, read);
+	unsigned target;
+
+	if (r->kind == KIND_TIMER) {
+		int timer_target = arm64_timer_trap(c, r->encoding, read);
+
+		if (timer_target < 0)
+			return ARM64_EXEC_UNDEFINED;
+		target = (unsigned)timer_target;
+	} else {
+		target = trap_target(c, r, read);
+	}
 
 	if (target != 0)
 		return arm64_sys_trap(c, target, insn);
@@ -665,6 +701,8 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value)
 		case KIND_SP_EL1:
 		case KIND_SP_EL2:
 			return write_sysreg(c, r, value) == ARM64_EXEC_OK;
+		case KIND_TIMER: /* false for CNTPCT_EL0 and CNTVCT_EL0 */
+			return arm64_timer_write(c, r->encoding, value);
 		default:
 			return false;
 		}

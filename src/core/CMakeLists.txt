@@ -5,6 +5,7 @@
 # smirror and the unit tests link.
 add_library(core STATIC
 	bus.c
+	counter.c
 	event.c
 	irq.c
 	machine.c)

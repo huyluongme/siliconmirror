@@ -21,6 +21,8 @@ typedef struct FakeCpu {
 	uint64_t executed; /* instructions executed so far */
 	uint64_t halt_at;  /* halt when executed reaches this */
 	uint64_t error_at; /* stop the machine with an error here */
+	uint64_t probe_at; /* read machine_now() before this instruction */
+	uint64_t now_then; /* what it returned */
 	unsigned runs;     /* calls to run() */
 	unsigned resets;
 } FakeCpu;
@@ -49,7 +51,10 @@ static uint64_t fake_run(Cpu *cpu, uint64_t max_insns)
 		turns[num_turns] = cpu->index;
 	num_turns++;
 
+	cpu->executed = 0;
 	while (n < max_insns) {
+		if (f->executed == f->probe_at)
+			f->now_then = machine_now(cpu->machine);
 		if (f->executed == f->error_at) {
 			machine_stop(cpu->machine, MACHINE_STOP_ERROR,
 			             "fake error after %" PRIu64 " instructions",
@@ -57,7 +62,7 @@ static uint64_t fake_run(Cpu *cpu, uint64_t max_insns)
 			break;
 		}
 		f->executed++;
-		n++;
+		cpu->executed = ++n;
 		if (f->executed == f->halt_at) {
 			cpu->state = CPU_HALTED;
 			break;
@@ -85,6 +90,7 @@ static FakeCpu *add_fake_cpu(Machine *m, uint64_t halt_at)
 	cpu_init(&f->cpu, &fake_ops);
 	f->halt_at = halt_at;
 	f->error_at = UINT64_MAX;
+	f->probe_at = UINT64_MAX;
 	CHECK(machine_add_cpu(m, &f->cpu));
 	return f;
 }
@@ -189,11 +195,14 @@ typedef struct Probe {
 	uint64_t executed_then;
 } Probe;
 
+static uint64_t event_now;
+
 static void probe(void *ctx)
 {
 	Probe *p = ctx;
 
 	p->executed_then = p->cpu->executed;
+	event_now = machine_now(p->cpu->cpu.machine);
 }
 
 static void test_turn_ends_at_next_event(void)
@@ -208,6 +217,26 @@ static void test_turn_ends_at_next_event(void)
 	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
 	CHECK_EQ(p.executed_then, 1500);
 	CHECK_EQ(f->executed, 3000);
+	CHECK_EQ(event_now, 1500); /* between turns: the event's time */
+	machine_destroy(m);
+}
+
+/*
+ * In a turn, the time is the running CPU's: the turn's start plus its
+ * completed instructions, whichever CPU ran before it in the turn.
+ */
+static void test_now_in_a_turn(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *a = add_fake_cpu(m, 3000);
+	FakeCpu *b = add_fake_cpu(m, 3000);
+
+	a->probe_at = 1300; /* 300 into its second turn, from 1000 */
+	b->probe_at = 2700; /* 700 into its third turn, from 2000 */
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(a->now_then, 1300 * MACHINE_NS_PER_INSN);
+	CHECK_EQ(b->now_then, 2700 * MACHINE_NS_PER_INSN);
+	CHECK_EQ(machine_now(m), 3000 * MACHINE_NS_PER_INSN);
 	machine_destroy(m);
 }
 
@@ -363,6 +392,7 @@ int main(void)
 	RUN_TEST(test_first_stop_reason_wins);
 	RUN_TEST(test_reset_and_cpu_limit);
 	RUN_TEST(test_devices);
+	RUN_TEST(test_now_in_a_turn);
 	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
 	return test_summary();

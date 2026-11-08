@@ -18,15 +18,18 @@
 #include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
 #include "hw/char/pl011.h"
+#include "hw/intc/bcm2836_local.h"
 #include "util/macros.h"
 
 /*
  * All cores reset at address 0, and the Cortex-A53 implements EL3. Core
  * n has MPIDR_EL1 0x80000000 + n: bit 31 is RES1, and the cores form one
  * cluster with affinity 0 (the reg properties of Linux's bcm2837.dtsi),
- * which shares one L2 memory system.
+ * which shares one L2 memory system. Their Generic Timers count from
+ * the core timer of the ARM local peripherals.
  */
-static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster)
+static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster,
+                              SystemCounter *counter)
 {
 	return (Arm64Config){
 		.reset_pc = RASPI3B_STUB_ADDRESS,
@@ -34,8 +37,19 @@ static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster)
 		.model = &arm64_cortex_a53_bcm2837,
 		.mpidr = 0x80000000u | core,
 		.cluster = cluster,
+		.counter = counter,
 	};
 }
+
+/*
+ * The clocks of the ARM local peripherals: the 19.2 MHz crystal, and the
+ * APB clock at half the ARM clock, which is 1.2 GHz on the Raspberry
+ * Pi 3 Model B (arm_freq in the config.txt documentation).
+ */
+static const Bcm2836LocalConfig bcm2837_local = {
+	.crystal_hz = 19200000,
+	.apb_hz = 600000000,
+};
 
 /*
  * The PL011 of the BCM2835 has 16-entry FIFOs (BCM2835 ARM Peripherals,
@@ -68,6 +82,16 @@ static void reset_cluster(void *ctx)
 static void destroy_cluster(void *ctx)
 {
 	arm64_cluster_destroy(ctx);
+}
+
+static void reset_local(void *ctx)
+{
+	bcm2836_local_reset(ctx);
+}
+
+static void destroy_local(void *ctx)
+{
+	bcm2836_local_destroy(ctx);
 }
 
 static void reset_uart(void *ctx)
@@ -134,6 +158,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Machine *m = machine_create();
 	BusStatus status;
 	Arm64Cluster *cluster;
+	Bcm2836Local *local;
 	Pl011 *uart;
 
 	if (m == NULL) {
@@ -160,8 +185,22 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		arm64_cluster_destroy(cluster);
 		goto out_of_memory;
 	}
+	local = bcm2836_local_create(m, &bcm2837_local);
+	if (local == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, local, reset_local, destroy_local)) {
+		bcm2836_local_destroy(local);
+		goto out_of_memory;
+	}
+	status = bcm2836_local_map(local, m->bus, "local", RASPI3B_LOCAL_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the ARM local peripherals: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
 	for (unsigned i = 0; i < RASPI3B_NUM_CPUS; i++) {
-		Arm64Config config = cortex_a53(i, cluster);
+		Arm64Config config =
+			cortex_a53(i, cluster, bcm2836_local_counter(local));
 		Cpu *cpu = arm64_cpu_create(&config);
 
 		if (cpu == NULL)

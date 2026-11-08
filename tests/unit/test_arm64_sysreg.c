@@ -535,11 +535,10 @@ static void test_unimplemented_bits_stop(void)
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_RMR_EL3, 1)), MACHINE_STOP_LIMIT);
 
 	/* A register of the core that is not implemented yet is named. */
-	CHECK_EQ(arm64_test_step(m, c, mrs(ARM64_SYSREG(3, 3, 14, 0, 0), 0)),
+	CHECK_EQ(arm64_test_step(m, c, mrs(ARM64_SYSREG(3, 3, 9, 12, 0), 0)),
 	         MACHINE_STOP_ERROR);
 	CHECK(strstr(m->stop_message,
-	             "is not implemented yet (System register CNTFRQ_EL0)") !=
-	      NULL);
+	             "is not implemented yet (System register PMCR_EL0)") != NULL);
 
 	/* The detail of one instruction does not stay for the next one. */
 	CHECK_EQ(arm64_test_step(m, c, 0x1e622820), /* FADD D0, D1, D2 */
@@ -597,7 +596,7 @@ static void test_without_a_model(void)
 	CHECK_EQ(read_reg(c, ARM64_CCSIDR_EL1), 0);
 	CHECK_EQ(read_reg(c, ARM64_SCTLR_EL1), 0);
 	CHECK_EQ(arm64_execute(c, mrs(CPUECTLR_EL1, 0)), ARM64_EXEC_UNDEFINED);
-	CHECK_EQ(arm64_execute(c, mrs(ARM64_SYSREG(3, 3, 14, 0, 0), 0)),
+	CHECK_EQ(arm64_execute(c, mrs(ARM64_SYSREG(3, 3, 9, 12, 0), 0)),
 	         ARM64_EXEC_UNDEFINED);
 	CHECK(arm64_sysreg_name(c, CPUECTLR_EL1) == NULL);
 	CHECK(strcmp(arm64_sysreg_name(c, ARM64_SCTLR_EL1), "SCTLR_EL1") == 0);
