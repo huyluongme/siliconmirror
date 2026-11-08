@@ -259,22 +259,7 @@ static uint64_t *field_of(Arm64Cpu *c, const SysReg *r)
 	return (uint64_t *)((char *)c + r->offset);
 }
 
-/*
- * EL2Enabled(): EL2 is implemented and the lower Exception levels are
- * Non-secure, the only state that has EL2 in Armv8.0.
- */
-static bool el2_enabled(const Arm64Cpu *c)
-{
-	if (c->config.highest_el < 2)
-		return false;
-	return c->config.highest_el == 2 || (c->sys.scr_el3 & ARM64_SCR_NS);
-}
-
-/*
- * Raise an exception for a trapped MRS, MSR or System instruction: EC
- * 0x18, with the fields of the instruction as the ISS, D24.2.44.
- */
-static Arm64Exec trap(Arm64Cpu *c, unsigned target_el, uint32_t insn)
+Arm64Exec arm64_sys_trap(Arm64Cpu *c, unsigned target_el, uint32_t insn)
 {
 	uint32_t iss = field32(insn, 20, 19) << 20 | /* Op0 */
 	               field32(insn, 7, 5) << 17 |   /* Op2 */
@@ -284,32 +269,30 @@ static Arm64Exec trap(Arm64Cpu *c, unsigned target_el, uint32_t insn)
 	               field32(insn, 11, 8) << 1 |   /* CRm */
 	               bit32(insn, 21);              /* Direction: 1 for a read */
 
-	c->exception.target_el = target_el;
-	c->exception.esr = 0x18u << 26 | 1u << 25 | iss; /* EC, IL, ISS */
-	return ARM64_EXEC_EXCEPTION;
+	return arm64_raise(c, target_el, ARM64_EC_SYSREG, iss);
 }
 
-/*
- * AArch64_SystemAccessTraptoEL1orEL2(): an EL0 trap goes to EL1, or to
- * EL2 when HCR_EL2.TGE routes EL0 exceptions there.
- */
-static unsigned el0_trap_target(const Arm64Cpu *c)
+bool arm64_tidcp_traps(const Arm64Cpu *c, uint32_t insn)
 {
-	return el2_enabled(c) && (c->sys.hcr_el2 & ARM64_HCR_TGE) ? 2 : 1;
+	unsigned op0 = field32(insn, 20, 19);
+	unsigned crn = field32(insn, 15, 12);
+
+	return (op0 == 1 || op0 == 3) && (crn == 11 || crn == 15) && c->el == 1 &&
+	       arm64_el2_enabled(c) && (c->sys.hcr_el2 & ARM64_HCR_TIDCP);
 }
 
 /* The Exception level that an access traps to, or 0 if it does not trap. */
 static unsigned trap_target(const Arm64Cpu *c, const SysReg *r, bool read)
 {
-	uint64_t hcr = el2_enabled(c) ? c->sys.hcr_el2 : 0;
+	uint64_t hcr = arm64_el2_enabled(c) ? c->sys.hcr_el2 : 0;
 	bool el3 = c->config.highest_el == 3;
 
 	switch (c->el) {
 	case 0:
 		if ((r->flags & EL0_UMA) && !(c->sys.sctlr[1] & ARM64_SCTLR_UMA))
-			return el0_trap_target(c);
+			return arm64_el1_target(c);
 		if ((r->flags & EL0_UCT) && !(c->sys.sctlr[1] & ARM64_SCTLR_UCT))
-			return el0_trap_target(c);
+			return arm64_el1_target(c);
 		if ((r->flags & TRAP_TID2) && (hcr & ARM64_HCR_TID2))
 			return 2;
 		return 0;
@@ -325,7 +308,7 @@ static unsigned trap_target(const Arm64Cpu *c, const SysReg *r, bool read)
 		if ((r->flags & TRAP_TVM) &&
 		    (hcr & (read ? ARM64_HCR_TRVM : ARM64_HCR_TVM)))
 			return 2;
-		if ((r->flags & TRAP_CPACR) && el2_enabled(c) &&
+		if ((r->flags & TRAP_CPACR) && arm64_el2_enabled(c) &&
 		    (c->sys.cptr_el2 & ARM64_CPTR_TCPAC))
 			return 2;
 		if ((r->flags & TRAP_CPACR) && el3 &&
@@ -348,7 +331,7 @@ static unsigned trap_target(const Arm64Cpu *c, const SysReg *r, bool read)
 /* Read a register; false if the read is UNDEFINED. */
 static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 {
-	bool virtual_id = c->el == 1 && el2_enabled(c);
+	bool virtual_id = c->el == 1 && arm64_el2_enabled(c);
 
 	switch (r->kind) {
 	case KIND_FIELD:
@@ -485,7 +468,7 @@ static Arm64Exec access_sysreg(Arm64Cpu *c, const SysReg *r, uint32_t insn)
 	unsigned target = trap_target(c, r, read);
 
 	if (target != 0)
-		return trap(c, target, insn);
+		return arm64_sys_trap(c, target, insn);
 	if (!read)
 		return write_sysreg(c, r, get_x(c, t));
 
@@ -514,9 +497,9 @@ static Arm64Exec access_impdef(Arm64Cpu *c, int index, uint32_t insn)
 		uint64_t bit = (uint64_t)1 << d->actlr_bit;
 
 		if (c->config.highest_el == 3 && !(c->sys.actlr[3] & bit))
-			return trap(c, 3, insn);
-		if (c->el == 1 && el2_enabled(c) && !(c->sys.actlr[2] & bit))
-			return trap(c, 2, insn);
+			return arm64_sys_trap(c, 3, insn);
+		if (c->el == 1 && arm64_el2_enabled(c) && !(c->sys.actlr[2] & bit))
+			return arm64_sys_trap(c, 2, insn);
 	}
 	*impdef_value(c, index) = d->fixed_write ? d->write_value : get_x(c, t);
 	return ARM64_EXEC_OK;
@@ -540,6 +523,9 @@ Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn)
 	const char *missing;
 	int index;
 
+	/* Priority 19 of D1.4.5.6: ahead of UNDEFINED and the other traps. */
+	if (arm64_tidcp_traps(c, insn))
+		return arm64_sys_trap(c, 2, insn);
 	if (r != NULL)
 		return access_sysreg(c, r, insn);
 	index = find_impdef(c, encoding);
@@ -587,7 +573,7 @@ Arm64Exec arm64_exec_msr_imm(Arm64Cpu *c, uint32_t insn)
 	case 0x1f: /* DAIFClr */
 		/* AArch64_CheckDAIFAccess(): EL0 needs SCTLR_EL1.UMA. */
 		if (c->el == 0 && !(c->sys.sctlr[1] & ARM64_SCTLR_UMA))
-			return trap(c, el0_trap_target(c), insn);
+			return arm64_sys_trap(c, arm64_el1_target(c), insn);
 		if (op2 == 6)
 			c->daif |= bits;
 		else

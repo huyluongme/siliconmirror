@@ -39,6 +39,7 @@ endfunction()
 
 add_baremetal_program(hello)
 add_baremetal_program(unimplemented)
+add_baremetal_program(exceptions)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -66,6 +67,14 @@ set_tests_properties(baremetal.hello-serial-file PROPERTIES
 	FIXTURES_SETUP hello_out)
 set_tests_properties(baremetal.hello-serial-file-contents PROPERTIES
 	FIXTURES_REQUIRED hello_out)
+
+# Exceptions at EL2, EL1 and EL0, and the returns from them. The handler
+# prints each one as "<Exception level>:<exception class>"; see the
+# comments in exceptions.s.
+add_expect_test(baremetal.exceptions
+	STDOUT "^2:15\n2:3c\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel exceptions.bin)
 
 # An instruction that is not implemented stops the machine with an error.
 add_expect_test(baremetal.unimplemented

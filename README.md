@@ -96,7 +96,10 @@ contains `compile_commands.json` for editors and language servers.
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does
 something that is not emulated yet. It then prints why on standard
-error, and exits with a failure status in the second case. The board
+error, and exits with a failure status in the second case. Exceptions,
+such as an undefined instruction or a misaligned access, are taken as
+the real CPU takes them: a program that has not set up its vector table
+jumps to whatever is there, and may run forever, as on the real board. The board
 pages in [docs/boards/](docs/boards/) describe how each board boots.
 
 ## Documentation

@@ -45,7 +45,11 @@ static inline void arm64_test_exec(Machine *m, Arm64Cpu *c, uint32_t insn)
 	CHECK_EQ(arm64_test_step(m, c, insn), MACHINE_STOP_LIMIT);
 }
 
-/* Check that each instruction stops a new machine as UNDEFINED. */
+/*
+ * Check that each instruction is UNDEFINED. On a new machine, it takes an
+ * Undefined Instruction exception (EC 0) to EL3, through the vector for
+ * the current level with SP_EL3: 0x200, as VBAR_EL3 is 0.
+ */
 static inline void arm64_test_check_undefined(const uint32_t *insns,
                                               unsigned count)
 {
@@ -53,8 +57,9 @@ static inline void arm64_test_check_undefined(const uint32_t *insns,
 		Arm64Cpu *c;
 		Machine *m = arm64_test_machine(&c);
 
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		if (strstr(m->stop_message, "undefined instruction") == NULL) {
+		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_LIMIT);
+		if (c->pc != 0x200 || c->sys.esr[3] != 0x02000000 ||
+		    c->sys.elr[3] != RESET_PC) {
 			fprintf(stderr, "0x%08" PRIx32 " is not UNDEFINED\n", insns[i]);
 			test_failures++;
 		}

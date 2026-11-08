@@ -8,9 +8,9 @@
  * architecture (ARM DDI 0487), issue M.d. Section numbers in the source
  * refer to that manual.
  *
- * The model runs in AArch64 state only: AArch32 is not supported.
- * Exceptions are not implemented yet; anything that would take one stops
- * the machine with an error message instead.
+ * The model runs in AArch64 state only: AArch32 is not supported. It
+ * takes synchronous exceptions to AArch64 state; interrupts and SErrors
+ * are not implemented yet.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.
@@ -38,19 +38,35 @@
 
 /* Fields of System registers that the model acts on. */
 #define ARM64_SCR_NS (1u << 0)               /* SCR_EL3: lower ELs Non-secure */
-#define ARM64_HCR_TID1 (1u << 16)            /* HCR_EL2: trap ID group 1 */
+#define ARM64_SCR_SMD (1u << 7)              /* SMC disabled */
+#define ARM64_SCR_HCE (1u << 8)              /* HVC enabled */
+#define ARM64_SCR_RW (1u << 10)              /* EL2, or EL1, uses AArch64 */
+#define ARM64_SCR_TWI (1u << 12)             /* trap WFI to EL3 */
+#define ARM64_SCR_TWE (1u << 13)             /* trap WFE to EL3 */
+#define ARM64_HCR_TWI (1u << 13)             /* HCR_EL2: trap WFI to EL2 */
+#define ARM64_HCR_TWE (1u << 14)             /* trap WFE to EL2 */
+#define ARM64_HCR_TID1 (1u << 16)            /* trap ID group 1 */
 #define ARM64_HCR_TID2 (1u << 17)            /* ID group 2 */
 #define ARM64_HCR_TID3 (1u << 18)            /* ID group 3 */
+#define ARM64_HCR_TSC (1u << 19)             /* trap SMC to EL2 */
+#define ARM64_HCR_TIDCP (1u << 20)           /* IMPLEMENTATION DEFINED regs */
 #define ARM64_HCR_TACR (1u << 21)            /* ACTLR_EL1 */
 #define ARM64_HCR_TVM (1u << 26)             /* writes of the VM registers */
 #define ARM64_HCR_TGE (1u << 27)             /* EL0 traps go to EL2 */
+#define ARM64_HCR_HCD (1u << 29)             /* HVC disabled, without EL3 */
 #define ARM64_HCR_TRVM (1u << 30)            /* reads of the VM registers */
+#define ARM64_HCR_RW (UINT32_C(1) << 31)     /* EL1 uses AArch64 */
 #define ARM64_SCTLR_M (1u << 0)              /* MMU enable */
+#define ARM64_SCTLR_SA (1u << 3)             /* SP alignment check */
+#define ARM64_SCTLR_SA0 (1u << 4)            /* SP alignment check at EL0 */
 #define ARM64_SCTLR_UMA (1u << 9)            /* EL0 access to DAIF */
 #define ARM64_SCTLR_UCT (1u << 15)           /* EL0 access to CTR_EL0 */
+#define ARM64_SCTLR_NTWI (1u << 16)          /* EL0 WFI not trapped */
+#define ARM64_SCTLR_NTWE (1u << 18)          /* EL0 WFE not trapped */
 #define ARM64_SCTLR_E0E (1u << 24)           /* EL0 big-endian */
 #define ARM64_SCTLR_EE (1u << 25)            /* big-endian */
 #define ARM64_CPTR_TCPAC (UINT32_C(1) << 31) /* CPTR_EL2, CPTR_EL3: CPACR */
+#define ARM64_MDCR_TDE (1u << 8)             /* MDCR_EL2: debug to EL2 */
 #define ARM64_MDCR_TDA (1u << 9)             /* MDCR_EL3: debug registers */
 
 /* What a CPU_HALTED CPU waits for, D1.7. */
@@ -210,6 +226,7 @@ typedef struct Arm64Cpu {
 	uint32_t daif; /* D, A, I and F in bits 9:6, as in DAIF */
 	unsigned el;   /* PSTATE.EL, the current Exception level */
 	bool sp_sel;   /* PSTATE.SP: false selects SP_EL0, true SP_ELx */
+	bool il;       /* PSTATE.IL: Illegal Execution state */
 
 	/* The Event Register of WFE and SEV, D1.7.1.1. */
 	bool event_register;
@@ -227,12 +244,17 @@ typedef struct Arm64Cpu {
 	} data_abort;
 
 	/*
-	 * The exception that an instruction raised: the target Exception
-	 * level and the syndrome for ESR_ELx.
+	 * The synchronous exception that an instruction raised: the target
+	 * Exception level, the syndrome for ESR_ELx, the preferred return
+	 * address for ELR_ELx, and the faulting address for FAR_ELx when the
+	 * exception has one.
 	 */
 	struct {
 		unsigned target_el;
 		uint32_t esr;
+		uint64_t return_address;
+		bool far_valid;
+		uint64_t far;
 	} exception;
 
 	/* What is not implemented, when an instruction says so; or "". */

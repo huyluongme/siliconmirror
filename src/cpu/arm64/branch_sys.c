@@ -7,10 +7,11 @@
  * description in C6.2.
  *
  * Implemented so far: the branches, the hints, the DMB, DSB and ISB
- * barriers, and the System register moves and PSTATE moves, which are
- * in sysreg.c. The exception generating instructions, ERET, the System
- * instructions and CLREX are not implemented yet. Classes that only hold
- * instructions newer than Armv8.0 are UNDEFINED.
+ * barriers, the System register moves and PSTATE moves, which are in
+ * sysreg.c, and the exception generating instructions and ERET, which
+ * are in exception.c. The System instructions and CLREX are not
+ * implemented yet. Classes that only hold instructions newer than
+ * Armv8.0 are UNDEFINED.
  *
  * A branch target is used as it is. AArch64_BranchAddr() would remove a
  * tag from its top byte when TCR_ELx.TBI says so, but the MMU, which
@@ -96,7 +97,7 @@ static Arm64Exec branch_register(Arm64Cpu *c, uint32_t insn)
 		return ARM64_EXEC_OK;
 	}
 	case 4: /* ERET */
-		return n == 31 ? ARM64_EXEC_UNIMPLEMENTED : ARM64_EXEC_UNDEFINED;
+		return n == 31 ? arm64_exec_eret(c) : ARM64_EXEC_UNDEFINED;
 	default:
 		/* DRPS is UNDEFINED outside Debug state; the rest UNALLOCATED. */
 		return ARM64_EXEC_UNDEFINED;
@@ -111,18 +112,30 @@ static Arm64Exec branch_register(Arm64Cpu *c, uint32_t insn)
 static Arm64Exec hint(Arm64Cpu *c, uint32_t insn)
 {
 	switch (field32(insn, 11, 5)) { /* CRm:op2 */
-	case 0x02: /* WFE, C6.2.502: Hint_WFE() without traps */
+	case 0x02: {                    /* WFE, C6.2.502: Hint_WFE() */
+		Arm64Exec trap;
+
 		if (c->event_register) {
 			c->event_register = false;
-		} else {
-			c->wait = ARM64_WAIT_EVENT;
-			c->cpu.state = CPU_HALTED;
+			return ARM64_EXEC_OK;
 		}
+		trap = arm64_check_wfx_trap(c, true);
+		if (trap != ARM64_EXEC_OK)
+			return trap;
+		c->wait = ARM64_WAIT_EVENT;
+		c->cpu.state = CPU_HALTED;
 		return ARM64_EXEC_OK;
-	case 0x03: /* WFI, C6.2.504: no interrupt can be pending yet */
+	}
+	case 0x03: { /* WFI, C6.2.504: Hint_WFI(), no interrupt can be pending yet
+		          */
+		Arm64Exec trap = arm64_check_wfx_trap(c, false);
+
+		if (trap != ARM64_EXEC_OK)
+			return trap;
 		c->wait = ARM64_WAIT_INTERRUPT;
 		c->cpu.state = CPU_HALTED;
 		return ARM64_EXEC_OK;
+	}
 	case 0x04: /* SEV, C6.2.367 */
 		arm64_send_event(c);
 		return ARM64_EXEC_OK;
@@ -169,8 +182,11 @@ static Arm64Exec system_space(Arm64Cpu *c, uint32_t insn)
 	unsigned op1 = field32(insn, 18, 16);
 	unsigned crn = field32(insn, 15, 12);
 
-	if (op0 == 1) /* SYS, SYSL: cache, TLB and address translation */
+	if (op0 == 1) { /* SYS, SYSL: cache, TLB and address translation */
+		if (arm64_tidcp_traps(c, insn))
+			return arm64_sys_trap(c, 2, insn);
 		return ARM64_EXEC_UNIMPLEMENTED;
+	}
 	if (op0 >= 2) /* MRS, MSR (register) */
 		return arm64_exec_sysreg(c, insn);
 	if (l == 0 && crn == 4) /* PSTATE: MSR (immediate) */
@@ -215,7 +231,7 @@ Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn)
 	if (bit32(insn, 25))
 		return branch_register(c, insn);
 	if (!bit32(insn, 24)) /* SVC, HVC, SMC, BRK, HLT, DCPS */
-		return ARM64_EXEC_UNIMPLEMENTED;
+		return arm64_exec_exception_gen(c, insn);
 	/*
 	 * Bits 25:22 = 0100 is the System instruction space. 0101 holds the
 	 * 128-bit System instructions (FEAT_SYSINSTR128, FEAT_SYSREG128);

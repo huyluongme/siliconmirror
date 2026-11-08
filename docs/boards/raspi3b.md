@@ -60,8 +60,9 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                          | Yes, without its interrupt |
 | `0x40000000` | 4 KB    | Arm local peripherals: interrupt routing, timers, mailboxes | Not yet                    |
 
-Accessing an address that is not modelled stops the machine with a data
-abort message.
+Accessing an address where nothing is modelled stops the machine with
+an error that names the access: what the real board does there is not
+known.
 
 ## Boot with `-kernel`
 
@@ -77,9 +78,9 @@ For `kernel8.img`, the Raspberry Pi firmware does the following:
    writes an address there and executes `SEV`, the core jumps to that
    address with X0 to X3 zero.
 
-smirror cannot run the stub yet: it needs exception returns. Instead,
-the board starts each core directly in the state that the stub leaves
-it in, with the System registers that the stub sets up:
+smirror does not run the stub yet. Instead, the board starts each core
+directly in the state that the stub leaves it in, with the System
+registers that the stub sets up:
 
 | Register       | Value        | Meaning                                                      |
 |----------------|--------------|--------------------------------------------------------------|

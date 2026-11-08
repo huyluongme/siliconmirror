@@ -58,6 +58,17 @@ static inline void set_xsp(Arm64Cpu *c, unsigned n, uint64_t value)
 		c->x[n] = value;
 }
 
+/*
+ * EL2Enabled(): EL2 is implemented and the lower Exception levels are
+ * Non-secure, the only state that has EL2 in Armv8.0.
+ */
+static inline bool arm64_el2_enabled(const Arm64Cpu *c)
+{
+	if (c->config.highest_el < 2)
+		return false;
+	return c->config.highest_el == 2 || (c->sys.scr_el3 & ARM64_SCR_NS);
+}
+
 /* All ones in the low datasize bits; datasize is 32 or 64. */
 static inline uint64_t datasize_mask(unsigned datasize)
 {
@@ -174,15 +185,48 @@ const char *arm64_group_name(Arm64Group group);
 typedef enum Arm64Exec {
 	/* Executed; next_pc holds the address of the next instruction. */
 	ARM64_EXEC_OK,
-	/* UNDEFINED by the architecture, or by this CPU's feature set. */
+	/*
+	 * UNDEFINED by the architecture, or by this CPU's feature set: the
+	 * CPU takes an Undefined Instruction exception.
+	 */
 	ARM64_EXEC_UNDEFINED,
 	/* Valid, but this model does not implement it yet. */
 	ARM64_EXEC_UNIMPLEMENTED,
-	/* A data access failed; c->data_abort describes it. */
+	/*
+	 * A data access reached an address where the machine emulates
+	 * nothing; c->data_abort describes it. What the real board does there
+	 * is not known, so the machine stops.
+	 */
 	ARM64_EXEC_DATA_ABORT,
 	/* The instruction raised an exception; c->exception describes it. */
 	ARM64_EXEC_EXCEPTION,
 } Arm64Exec;
+
+/* Exception classes for ESR_ELx.EC, D24.2.44. */
+#define ARM64_EC_UNKNOWN 0x00
+#define ARM64_EC_WFX 0x01
+#define ARM64_EC_ILLEGAL_STATE 0x0e
+#define ARM64_EC_SVC 0x15
+#define ARM64_EC_HVC 0x16
+#define ARM64_EC_SMC 0x17
+#define ARM64_EC_SYSREG 0x18
+#define ARM64_EC_PC_ALIGNMENT 0x22
+#define ARM64_EC_DATA_ABORT_LOWER 0x24
+#define ARM64_EC_DATA_ABORT_SAME 0x25
+#define ARM64_EC_SP_ALIGNMENT 0x26
+#define ARM64_EC_BRK 0x3c
+
+/* The Data Fault Status Code of an Alignment fault, ESR_ELx.ISS[5:0]. */
+#define ARM64_DFSC_ALIGNMENT 0x21
+
+/*
+ * An ESR_ELx value for an exception from AArch64 state: IL is 1, as every
+ * A64 instruction is 32 bits long (AArch64_ExceptionClass(), J1.2.2.27).
+ */
+static inline uint32_t arm64_esr(unsigned ec, uint32_t iss)
+{
+	return (uint32_t)ec << 26 | UINT32_C(1) << 25 | iss;
+}
 
 /* Decode and execute one instruction; c->pc is its address. */
 Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
@@ -192,6 +236,25 @@ Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_dp_reg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
+
+/*
+ * Exceptions, from exception.c. arm64_raise() makes the current
+ * instruction raise a synchronous exception that returns to it, and
+ * returns ARM64_EXEC_EXCEPTION; arm64_take_exception() then takes the
+ * exception that c->exception describes. arm64_el1_target() is where an
+ * Undefined Instruction exception goes.
+ */
+Arm64Exec arm64_raise(Arm64Cpu *c, unsigned target_el, unsigned ec,
+                      uint32_t iss);
+void arm64_take_exception(Arm64Cpu *c);
+unsigned arm64_el1_target(const Arm64Cpu *c);
+Arm64Exec arm64_exec_exception_gen(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_eret(Arm64Cpu *c);
+Arm64Exec arm64_check_wfx_trap(Arm64Cpu *c, bool wfe);
+Arm64Exec arm64_check_sp_alignment(Arm64Cpu *c);
+Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write);
+void arm64_pc_alignment_fault(Arm64Cpu *c);
+void arm64_illegal_state(Arm64Cpu *c);
 
 /* SEV, from cpu.c: signal an event to every PE of the machine. */
 void arm64_send_event(Arm64Cpu *c);
@@ -204,17 +267,32 @@ void arm64_send_event(Arm64Cpu *c);
 Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_msr_imm(Arm64Cpu *c, uint32_t insn);
 void arm64_sysreg_reset(Arm64Cpu *c);
+
+/*
+ * The trap of an MRS, MSR or System instruction to target_el: EC 0x18,
+ * with the fields of the instruction as the ISS (D24.2.44).
+ */
+Arm64Exec arm64_sys_trap(Arm64Cpu *c, unsigned target_el, uint32_t insn);
+
+/*
+ * Whether HCR_EL2.TIDCP traps this MRS, MSR or System instruction from
+ * EL1: the encodings reserved for IMPLEMENTATION DEFINED functionality,
+ * with op0 = 3 or 1 and CRn = 11 or 15. Whether it traps them from EL0 is
+ * IMPLEMENTATION DEFINED; this model leaves them UNDEFINED there.
+ */
+bool arm64_tidcp_traps(const Arm64Cpu *c, uint32_t insn);
 const char *arm64_sysreg_name(const Arm64Cpu *c, uint16_t encoding);
 bool arm64_sysreg_table_is_sorted(void);
 
 /*
- * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. On failure they
- * fill in c->data_abort and return false; the instruction then returns
- * ARM64_EXEC_DATA_ABORT.
+ * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. They return
+ * ARM64_EXEC_OK, ARM64_EXEC_EXCEPTION for an Alignment fault, or
+ * ARM64_EXEC_DATA_ABORT where the machine emulates nothing; the
+ * instruction then returns the same.
  */
-bool arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
-                    uint64_t *value);
-bool arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
-                     uint64_t value);
+Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
+                         uint64_t *value);
+Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
+                          uint64_t value);
 
 #endif /* CPU_ARM64_INTERNAL_H */

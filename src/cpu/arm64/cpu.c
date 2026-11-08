@@ -31,6 +31,7 @@ static void arm64_reset(Cpu *base)
 	c->nzcv = 0;
 	c->el = c->config.highest_el;
 	c->sp_sel = true; /* PSTATE.SP = '1' */
+	c->il = false;
 	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
 	c->pc = c->config.reset_pc;
 	c->next_pc = c->pc;
@@ -44,16 +45,34 @@ static void arm64_reset(Cpu *base)
 	machine_stop((c)->cpu.machine, MACHINE_STOP_ERROR, "cpu%u: " fmt,          \
 	             (c)->cpu.index, __VA_ARGS__)
 
-/* Fetch, decode and execute one instruction. Returns false on error. */
+/* Take the Undefined Instruction exception, AArch64_Undefined(). */
+static void take_undefined(Arm64Cpu *c)
+{
+	arm64_raise(c, arm64_el1_target(c), ARM64_EC_UNKNOWN, 0);
+	arm64_take_exception(c);
+}
+
+/*
+ * Fetch, decode and execute one instruction, or take the exception that
+ * it raises. Returns false when the machine stops: on what the model does
+ * not emulate yet.
+ */
 static bool step(Arm64Cpu *c)
 {
-	/* D1.4.10.1: an instruction at a misaligned PC takes an exception. */
+	/*
+	 * Priorities 6 and 7 of D1.4.5.6: a PC alignment fault, then an
+	 * Illegal Execution state exception. The second may also come after
+	 * the instruction fetch, at priority 12; this model takes it first.
+	 */
 	if (c->pc & 3) {
-		cpu_error(c,
-		          "PC alignment fault at 0x%016" PRIx64
-		          " (exceptions are not implemented yet)",
-		          c->pc);
-		return false;
+		arm64_pc_alignment_fault(c);
+		arm64_take_exception(c);
+		return true;
+	}
+	if (c->il) {
+		arm64_illegal_state(c);
+		arm64_take_exception(c);
+		return true;
 	}
 
 	uint64_t insn;
@@ -72,11 +91,11 @@ static bool step(Arm64Cpu *c)
 		c->pc = c->next_pc;
 		return true;
 	case ARM64_EXEC_UNDEFINED:
-		cpu_error(c,
-		          "undefined instruction 0x%08" PRIx32 " at 0x%016" PRIx64
-		          " (exceptions are not implemented yet)",
-		          (uint32_t)insn, c->pc);
-		return false;
+		take_undefined(c);
+		return true;
+	case ARM64_EXEC_EXCEPTION:
+		arm64_take_exception(c);
+		return true;
 	case ARM64_EXEC_UNIMPLEMENTED:
 		cpu_error(c,
 		          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
@@ -86,21 +105,11 @@ static bool step(Arm64Cpu *c)
 		              ? c->detail
 		              : arm64_group_name(arm64_group((uint32_t)insn)));
 		return false;
-	case ARM64_EXEC_EXCEPTION:
-		cpu_error(c,
-		          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
-		          " takes an exception to EL%u, ESR 0x%08" PRIx32
-		          " (exceptions are not implemented yet)",
-		          (uint32_t)insn, c->pc, c->exception.target_el,
-		          c->exception.esr);
-		return false;
 	case ARM64_EXEC_DATA_ABORT:
-		cpu_error(c,
-		          "data abort at 0x%016" PRIx64 ": %u-byte %s 0x%016" PRIx64
-		          " failed: %s (exceptions are not implemented yet)",
-		          c->pc, c->data_abort.size,
-		          c->data_abort.write ? "write to" : "read from",
-		          c->data_abort.address, c->data_abort.reason);
+		cpu_error(
+			c, "%u-byte %s 0x%016" PRIx64 " at 0x%016" PRIx64 " failed: %s",
+			c->data_abort.size, c->data_abort.write ? "write to" : "read from",
+			c->data_abort.address, c->pc, c->data_abort.reason);
 		return false;
 	}
 	return false;

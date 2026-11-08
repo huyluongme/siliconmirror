@@ -547,14 +547,19 @@ static void test_unimplemented_bits_stop(void)
 	CHECK(strstr(m->stop_message, "is not implemented yet") != NULL);
 	CHECK(strstr(m->stop_message, "System register") == NULL);
 
-	/* A trap stops the machine too, until exceptions are implemented. */
-	c->sys.scr_el3 = ARM64_SCR_NS;
-	c->sys.hcr_el2 = ARM64_HCR_TVM;
+	/* A trap is an exception: here from EL1, using AArch64, to EL2. */
+	uint64_t at = c->pc;
+
+	c->sys.scr_el3 = ARM64_SCR_NS | ARM64_SCR_RW;
+	c->sys.hcr_el2 = ARM64_HCR_TVM | ARM64_HCR_RW;
+	c->sys.vbar[2] = 0x4000;
 	c->el = 1;
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL1, 1)),
-	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "takes an exception to EL2, ESR "
-	                              "0x62300420") != NULL);
+	         MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->el, 2);
+	CHECK_EQ(c->pc, 0x4400);
+	CHECK_EQ(c->sys.esr[2], 0x62300420);
+	CHECK_EQ(c->sys.elr[2], at);
 	machine_destroy(m);
 }
 

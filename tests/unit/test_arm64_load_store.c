@@ -176,9 +176,9 @@ static void test_literal(void)
 	/* A literal is only 4-byte aligned, which is not enough for LDR X. */
 	m = arm64_test_machine(&c);
 	CHECK_EQ(arm64_test_step(m, c, 0x58000020), /* LDR X0, . + 4 */
-	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "8-byte read from 0x0000000000080004 "
-	                              "failed: alignment fault") != NULL);
+	         MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->sys.esr[3], 0x96000021); /* Data Abort, Alignment fault */
+	CHECK_EQ(c->sys.far[3], RESET_PC + 4);
 	machine_destroy(m);
 }
 
@@ -361,32 +361,22 @@ static void test_constrained_unpredictable_choices(void)
 
 static void test_alignment_faults(void)
 {
-	/* D8.2.12.1 and J1.2.4.30: with the MMU off, data is Device memory. */
+	/*
+	 * D8.2.12.1 and J1.2.4.30: with the MMU off, data is Device memory.
+	 * A Data Abort from EL3 to EL3, EC 0x25, with WnR for a write and the
+	 * Alignment fault status code; FAR_EL3 holds the address.
+	 */
 	static const struct {
 		uint32_t insn;
 		uint64_t x1;
-		const char *message;
+		uint32_t esr;
+		uint64_t far;
 	} cases[] = {
-		{0xf9400020, DATA + 4, /* LDR X0, [X1] */
-	     "cpu0: data abort at 0x0000000000080000: 8-byte read from "
-	     "0x0000000000001004 failed: alignment fault, as data accesses "
-	     "use Device memory while the MMU is off (exceptions are not "
-	     "implemented yet)"},
-		{0xa9400420, DATA + 4, /* LDP X0, X1, [X1] */
-	     "cpu0: data abort at 0x0000000000080000: 8-byte read from "
-	     "0x0000000000001004 failed: alignment fault, as data accesses "
-	     "use Device memory while the MMU is off (exceptions are not "
-	     "implemented yet)"},
-		{0x79000020, DATA + 1, /* STRH W0, [X1] */
-	     "cpu0: data abort at 0x0000000000080000: 2-byte write to "
-	     "0x0000000000001001 failed: alignment fault, as data accesses "
-	     "use Device memory while the MMU is off (exceptions are not "
-	     "implemented yet)"},
-		{0xf8004020, DATA, /* STUR X0, [X1, #4] */
-	     "cpu0: data abort at 0x0000000000080000: 8-byte write to "
-	     "0x0000000000001004 failed: alignment fault, as data accesses "
-	     "use Device memory while the MMU is off (exceptions are not "
-	     "implemented yet)"},
+		{0xf9400020, DATA + 4, 0x96000021, DATA + 4},  /* LDR X0, [X1] */
+		{0xa9400420, DATA + 4, 0x96000021, DATA + 4},  /* LDP X0, X1, [X1] */
+		{0x79000020, DATA + 1, 0x96000061, DATA + 1},  /* STRH W0, [X1] */
+		{0xf8004020, DATA, 0x96000061, DATA + 4},      /* STUR X0, [X1, #4] */
+		{0xf8408c20, DATA + 4, 0x96000021, DATA + 12}, /* LDR X0, [X1, #8]! */
 	};
 
 	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
@@ -395,14 +385,14 @@ static void test_alignment_faults(void)
 
 		c->x[0] = 0x5555;
 		c->x[1] = cases[i].x1;
-		CHECK_EQ(arm64_test_step(m, c, cases[i].insn), MACHINE_STOP_ERROR);
-		if (strcmp(m->stop_message, cases[i].message) != 0) {
-			fprintf(stderr, "unexpected message: %s\n", m->stop_message);
-			test_failures++;
-		}
+		CHECK_EQ(arm64_test_step(m, c, cases[i].insn), MACHINE_STOP_LIMIT);
+		CHECK_EQ(c->sys.esr[3], cases[i].esr);
+		CHECK_EQ(c->sys.far[3], cases[i].far);
+		CHECK_EQ(c->sys.elr[3], RESET_PC);
+		CHECK_EQ(c->pc, 0x200);
+		/* Nothing changes, not even the base register of a writeback. */
 		CHECK_EQ(c->x[0], 0x5555);
-		CHECK_EQ(c->pc, RESET_PC);
-		CHECK_EQ(m->insns, 0);
+		CHECK_EQ(c->x[1], cases[i].x1);
 		machine_destroy(m);
 	}
 
@@ -420,17 +410,20 @@ static void test_bus_errors(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	/* Nothing changes, not even the base register of a writeback. */
+	/*
+	 * Nothing is emulated at the address, so the machine stops. Nothing
+	 * changes, not even the base register of a writeback.
+	 */
 	c->x[0] = 0x5555;
 	c->x[1] = 0x200000;
 	CHECK_EQ(arm64_test_step(m, c, 0xf8408c20), /* LDR X0, [X1, #8]! */
 	         MACHINE_STOP_ERROR);
 	CHECK(strcmp(m->stop_message,
-	             "cpu0: data abort at 0x0000000000080000: 8-byte read from "
-	             "0x0000000000200008 failed: no region at this address "
-	             "(exceptions are not implemented yet)") == 0);
+	             "cpu0: 8-byte read from 0x0000000000200008 at "
+	             "0x0000000000080000 failed: no region at this address") == 0);
 	CHECK_EQ(c->x[0], 0x5555);
 	CHECK_EQ(c->x[1], 0x200000);
+	CHECK_EQ(c->pc, RESET_PC);
 	machine_destroy(m);
 
 	/* A pair that runs off the end of RAM: the second register fails. */
@@ -438,8 +431,9 @@ static void test_bus_errors(void)
 	c->x[2] = 0xffff8;
 	CHECK_EQ(arm64_test_step(m, c, 0xa9000440), /* STP X0, X1, [X2] */
 	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "8-byte write to 0x0000000000100000 "
-	                              "failed: no region at this address") != NULL);
+	CHECK(strstr(m->stop_message, "8-byte write to 0x0000000000100000 at "
+	                              "0x0000000000080000 failed: no region at "
+	                              "this address") != NULL);
 	machine_destroy(m);
 }
 

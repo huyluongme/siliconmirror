@@ -9,6 +9,7 @@ add_library(cpu STATIC
 	arm64/decode.c
 	arm64/dp_imm.c
 	arm64/dp_reg.c
+	arm64/exception.c
 	arm64/load_store.c
 	arm64/mem.c
 	arm64/sysreg.c)

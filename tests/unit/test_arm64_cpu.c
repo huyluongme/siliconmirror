@@ -161,19 +161,19 @@ static void test_executed_instructions_advance_pc(void)
 	machine_destroy(m);
 }
 
-static void test_undefined_instruction_stops(void)
+static void test_undefined_instruction_takes_exception(void)
 {
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	CHECK_EQ(arm64_test_step(m, c, 0x00000000),
-	         MACHINE_STOP_ERROR); /* UDF #0 */
-	CHECK(strcmp(m->stop_message,
-	             "cpu0: undefined instruction 0x00000000 at "
-	             "0x0000000000080000 (exceptions are not implemented yet)") ==
-	      0);
-	CHECK_EQ(m->insns, 0);
-	CHECK_EQ(c->pc, RESET_PC);
+	/* UDF #0 at EL3: to EL3's vector for the current level with SP_EL3. */
+	c->nzcv = ARM64_NZCV_Z;
+	CHECK_EQ(arm64_test_step(m, c, 0x00000000), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->pc, 0x200);
+	CHECK_EQ(c->sys.esr[3], 0x02000000);  /* EC 0, IL 1 */
+	CHECK_EQ(c->sys.elr[3], RESET_PC);    /* the UDF itself */
+	CHECK_EQ(c->sys.spsr[3], 0x400003cd); /* Z; D, A, I, F; EL3 with SP_EL3 */
+	CHECK_EQ(m->insns, 1);
 	machine_destroy(m);
 }
 
@@ -182,14 +182,7 @@ static void test_features_this_cpu_lacks_are_undefined(void)
 	/* SME, SVE and UNALLOCATED encodings are all UNDEFINED here. */
 	static const uint32_t insns[] = {0x80000000, 0x04000000, 0x02000000};
 
-	for (unsigned i = 0; i < sizeof(insns) / sizeof(insns[0]); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message, "undefined instruction") != NULL);
-		machine_destroy(m);
-	}
+	arm64_test_check_undefined(insns, sizeof(insns) / sizeof(insns[0]));
 }
 
 static void test_unimplemented_instruction_stops(void)
@@ -225,12 +218,23 @@ static void test_misaligned_pc(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	/* D1.4.10.1: bits 1:0 of the PC must be 0. */
+	/*
+	 * D1.4.10.1: bits 1:0 of the PC must be 0. The PC alignment fault
+	 * comes before the fetch: nothing is fetched from the address.
+	 */
 	c->pc = RESET_PC + 2;
-	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_ERROR);
-	CHECK(strcmp(m->stop_message,
-	             "cpu0: PC alignment fault at 0x0000000000080002 (exceptions "
-	             "are not implemented yet)") == 0);
+	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->pc, 0x200);
+	CHECK_EQ(c->sys.esr[3], 0x8a000000); /* EC 0x22 */
+	CHECK_EQ(c->sys.far[3], RESET_PC + 2);
+	CHECK_EQ(c->sys.elr[3], RESET_PC + 2);
+	machine_destroy(m);
+
+	/* The same at an address where nothing is mapped. */
+	m = arm64_test_machine(&c);
+	c->pc = 0x200001;
+	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->sys.far[3], 0x200001);
 	machine_destroy(m);
 }
 
@@ -243,7 +247,7 @@ int main(void)
 	RUN_TEST(test_stack_pointer_selection);
 	RUN_TEST(test_top_level_groups);
 	RUN_TEST(test_executed_instructions_advance_pc);
-	RUN_TEST(test_undefined_instruction_stops);
+	RUN_TEST(test_undefined_instruction_takes_exception);
 	RUN_TEST(test_features_this_cpu_lacks_are_undefined);
 	RUN_TEST(test_unimplemented_instruction_stops);
 	RUN_TEST(test_fetch_from_unmapped_address);

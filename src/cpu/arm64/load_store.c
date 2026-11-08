@@ -22,8 +22,8 @@
  *  - A load pair with Rt == Rt2: the register gets the second value, one
  *    of the UNKNOWN values allowed (Constraint_UNKNOWN).
  *
- * CheckSPAlignment() is not done yet: it depends on SCTLR_ELx.SA, and
- * system registers are not implemented.
+ * A load or store whose base register is SP checks its alignment first
+ * (CheckSPAlignment()); the prefetches do not.
  */
 
 #include "cpu/arm64/internal.h"
@@ -89,6 +89,7 @@ static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
 	RegisterAccess access;
 	unsigned n = field32(insn, 9, 5);
 	unsigned t = field32(insn, 4, 0);
+	Arm64Exec result;
 
 	if (bit32(insn, 26)) /* VR = 1: SIMD&FP registers */
 		return ARM64_EXEC_UNIMPLEMENTED;
@@ -103,6 +104,8 @@ static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
 	}
 	if (wback && n == t && n != 31 && !access.store)
 		wback = false; /* Constraint_WBSUPPRESS */
+	if (n == 31 && (result = arm64_check_sp_alignment(c)) != ARM64_EXEC_OK)
+		return result;
 
 	uint64_t address = get_xsp(c, n);
 
@@ -110,13 +113,15 @@ static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
 		address += offset;
 
 	if (access.store) {
-		if (!arm64_mem_write(c, address, access.size, get_x(c, t)))
-			return ARM64_EXEC_DATA_ABORT;
+		result = arm64_mem_write(c, address, access.size, get_x(c, t));
+		if (result != ARM64_EXEC_OK)
+			return result;
 	} else {
 		uint64_t data;
 
-		if (!arm64_mem_read(c, address, access.size, &data))
-			return ARM64_EXEC_DATA_ABORT;
+		result = arm64_mem_read(c, address, access.size, &data);
+		if (result != ARM64_EXEC_OK)
+			return result;
 		set_x(c, t, loaded_value(&access, data));
 	}
 
@@ -155,8 +160,10 @@ static Arm64Exec load_literal(Arm64Cpu *c, uint32_t insn)
 		return ARM64_EXEC_OK;
 	}
 
-	if (!arm64_mem_read(c, address, access.size, &data))
-		return ARM64_EXEC_DATA_ABORT;
+	Arm64Exec result = arm64_mem_read(c, address, access.size, &data);
+
+	if (result != ARM64_EXEC_OK)
+		return result;
 	set_x(c, t, loaded_value(&access, data));
 	return ARM64_EXEC_OK;
 }
@@ -191,6 +198,11 @@ static Arm64Exec load_store_pair(Arm64Cpu *c, uint32_t insn, bool wback,
 	if (wback && (t == n || t2 == n) && n != 31 && load)
 		wback = false; /* Constraint_WBSUPPRESS */
 
+	Arm64Exec result = ARM64_EXEC_OK;
+
+	if (n == 31 && (result = arm64_check_sp_alignment(c)) != ARM64_EXEC_OK)
+		return result;
+
 	uint64_t address = get_xsp(c, n);
 
 	if (!postindex)
@@ -205,17 +217,21 @@ static Arm64Exec load_store_pair(Arm64Cpu *c, uint32_t insn, bool wback,
 		};
 		uint64_t data1, data2;
 
-		if (!arm64_mem_read(c, address, size, &data1) ||
-		    !arm64_mem_read(c, address + size, size, &data2))
-			return ARM64_EXEC_DATA_ABORT;
+		result = arm64_mem_read(c, address, size, &data1);
+		if (result == ARM64_EXEC_OK)
+			result = arm64_mem_read(c, address + size, size, &data2);
+		if (result != ARM64_EXEC_OK)
+			return result;
 		set_x(c, t, loaded_value(&access, data1));
 		set_x(c, t2, loaded_value(&access, data2)); /* wins if t == t2 */
 	} else {
 		uint64_t data1 = get_x(c, t), data2 = get_x(c, t2);
 
-		if (!arm64_mem_write(c, address, size, data1) ||
-		    !arm64_mem_write(c, address + size, size, data2))
-			return ARM64_EXEC_DATA_ABORT;
+		result = arm64_mem_write(c, address, size, data1);
+		if (result == ARM64_EXEC_OK)
+			result = arm64_mem_write(c, address + size, size, data2);
+		if (result != ARM64_EXEC_OK)
+			return result;
 	}
 
 	if (wback)
