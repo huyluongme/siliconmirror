@@ -47,6 +47,12 @@ static const uint32_t hello[] = {
 	0x00000a21, /* "!\n" */
 };
 
+/* Wait in WFI. */
+static const uint32_t park[] = {
+	0xd503207f, /* park: WFI */
+	0x17ffffff, /*       B park */
+};
+
 /*
  * Core 0 waits long enough for the other cores to sleep in WFE, then
  * releases them through the spin table and sends an event. Each of them
@@ -71,11 +77,11 @@ static uint32_t smp[] = {
 	0xd503209f, /*        SEV */
 	0xd503207f, /* done:  WFI */
 	0x17ffffff, /*        B    done */
-	/* secondary: X5 holds the address of this core's spin table entry. */
+	/* secondary: */
 	0xd2a7e401, /*        MOVZ X1, #0x3f20, LSL #16 */
 	0xf2820001, /*        MOVK X1, #0x1000 */
-	0xd10360a6, /*        SUB  X6, X5, #0xd8 */
-	0xd343fcc6, /*        LSR  X6, X6, #3: the core number */
+	0xd53800a6, /*        MRS  X6, MPIDR_EL1 */
+	0x924004c6, /*        AND  X6, X6, #3: the core number */
 	0x1100c0c6, /*        ADD  W6, W6, #'0' */
 	0xb9000026, /*        STR  W6, [X1] */
 	0xd503207f, /* park:  WFI */
@@ -160,9 +166,69 @@ static void test_kernel_is_required(void)
 	CHECK(strncmp(error, "no/such/kernel: ", 16) == 0);
 }
 
-static void test_boot_state(void)
+/*
+ * The board leaves the cores as they reset, at EL3 at the boot stub's
+ * first instruction, and loads the kernel and the stub with its data.
+ */
+static void test_state_before_the_stub(void)
 {
-	/* The System registers that armstub8.S sets up. */
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t value;
+
+	CHECK_EQ(m->num_cpus, RASPI3B_NUM_CPUS);
+	for (unsigned i = 0; i < m->num_cpus; i++) {
+		Arm64Cpu *c = arm64_cpu_of(m->cpus[i]);
+
+		CHECK_EQ(c->el, 3);
+		CHECK_EQ(c->pc, RASPI3B_STUB_ADDRESS);
+		CHECK_EQ(c->cpu.state, CPU_RUNNING);
+		/* MPIDR_EL1.Aff0 numbers the cores of the one cluster. */
+		CHECK(arm64_cpu_read_sysreg(c, ARM64_MPIDR_EL1, &value));
+		CHECK_EQ(value, 0x80000000u + i);
+	}
+
+	CHECK_EQ(bus_read(m->bus, RASPI3B_KERNEL_ADDRESS, 4, &value), BUS_OK);
+	CHECK_EQ(value, park[0]);
+	/* The stub's code, then its data. */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_STUB_ADDRESS, 4, &value), BUS_OK);
+	CHECK(value != 0);
+	/* An empty spin table: the board has cleared the magic number. */
+	for (unsigned i = 0; i < 4; i++) {
+		CHECK_EQ(bus_read(m->bus, RASPI3B_SPIN_TABLE + 8 * i, 8, &value),
+		         BUS_OK);
+		CHECK_EQ(value, 0);
+	}
+	CHECK_EQ(bus_read(m->bus, RASPI3B_STUB_DTB, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0); /* no device tree yet */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_STUB_KERNEL, 4, &value), BUS_OK);
+	CHECK_EQ(value, RASPI3B_KERNEL_ADDRESS);
+
+	/* RAM ends where the peripherals start; UART0 is mapped. */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_RAM_SIZE - 8, 8, &value), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_PERIPHERAL_BASE, 4, &value),
+	         BUS_ERR_UNMAPPED);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_UART0_BASE + 0x30, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x300); /* UARTCR after reset */
+	/* The BCM2835 datasheet does not document the identification. */
+	for (unsigned offset = 0xfe0; offset < 0x1000; offset += 4) {
+		CHECK_EQ(bus_read(m->bus, RASPI3B_UART0_BASE + offset, 4, &value),
+		         BUS_OK);
+		CHECK_EQ(value, 0);
+	}
+
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
+ * After the stub: every core at EL2, with the registers that only EL3
+ * can write set up as armstub8 sets them; core 0 in the kernel, the
+ * others asleep in the spin table.
+ */
+static void test_state_after_the_stub(void)
+{
 	static const struct {
 		uint16_t encoding;
 		uint64_t value;
@@ -172,61 +238,41 @@ static void test_boot_state(void)
 		{ARM64_SCR_EL3, 0x5b1},
 		{ARM64_ACTLR_EL3, 0x73},
 		{ARM64_SYSREG(3, 1, 15, 2, 1), 0x40}, /* CPUECTLR_EL1 */
+		/* L2CTLR_EL1: the stub's write changes nothing on an A53 */
+		{ARM64_SYSREG(3, 1, 11, 0, 2), 0x03000000},
 		{ARM64_SCTLR_EL2, 0x30c50830},
 		{ARM64_SPSR_EL3, 0x3c9},
 	};
 	FILE *out;
-	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
 	uint64_t value;
 
-	CHECK_EQ(m->num_cpus, RASPI3B_NUM_CPUS);
+	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
 	for (unsigned i = 0; i < m->num_cpus; i++) {
 		Arm64Cpu *c = arm64_cpu_of(m->cpus[i]);
 
-		/* As the firmware's stub leaves them: EL2h, interrupts masked. */
+		/* EL2h, interrupts masked, waiting. */
 		CHECK_EQ(c->el, 2);
 		CHECK(c->sp_sel);
 		CHECK_EQ(c->daif, 0x3c0);
-		CHECK_EQ(c->cpu.state, CPU_RUNNING);
+		CHECK_EQ(c->cpu.state, CPU_HALTED);
 		for (unsigned j = 0; j < ARRAY_SIZE(stub_state); j++) {
 			CHECK(arm64_cpu_read_sysreg(c, stub_state[j].encoding, &value));
 			CHECK_EQ(value, stub_state[j].value);
 		}
-		/* MPIDR_EL1.Aff0 numbers the cores of the one cluster. */
-		CHECK(arm64_cpu_read_sysreg(c, ARM64_MPIDR_EL1, &value));
-		CHECK_EQ(value, 0x80000000u + i);
 		if (i == 0) {
-			CHECK_EQ(c->pc, RASPI3B_KERNEL_ADDRESS);
-			CHECK_EQ(c->x[0], 0);
+			/* In the kernel, entered through X4, with X0 to X3 clear. */
+			CHECK(c->pc >= RASPI3B_KERNEL_ADDRESS &&
+			      c->pc < RASPI3B_KERNEL_ADDRESS + sizeof(park));
+			CHECK_EQ(c->x[4], RASPI3B_KERNEL_ADDRESS);
+			for (unsigned r = 0; r < 4; r++)
+				CHECK_EQ(c->x[r], 0);
 		} else {
-			CHECK_EQ(c->pc, RASPI3B_SPIN_LOOP);
-			CHECK_EQ(c->x[5], RASPI3B_SPIN_TABLE + 8 * i);
+			/* In the stub, waiting on its own spin table entry. */
+			CHECK(c->pc < RASPI3B_SPIN_TABLE);
+			CHECK_EQ(c->x[5], RASPI3B_SPIN_TABLE);
+			CHECK_EQ(c->x[6], i);
 		}
-	}
-
-	/* The kernel, the spin loop and the empty spin table are in RAM. */
-	CHECK_EQ(bus_read(m->bus, RASPI3B_KERNEL_ADDRESS, 4, &value), BUS_OK);
-	CHECK_EQ(value, hello[0]);
-	CHECK_EQ(bus_read(m->bus, RASPI3B_SPIN_LOOP, 4, &value), BUS_OK);
-	CHECK_EQ(value, 0xf94000a4);
-	for (unsigned i = 0; i < 4; i++) {
-		CHECK_EQ(bus_read(m->bus, RASPI3B_SPIN_TABLE + 8 * i, 8, &value),
-		         BUS_OK);
-		CHECK_EQ(value, 0);
-	}
-
-	/* RAM ends where the peripherals start; UART0 is mapped. */
-	CHECK_EQ(bus_read(m->bus, RASPI3B_RAM_SIZE - 8, 8, &value), BUS_OK);
-	CHECK_EQ(bus_read(m->bus, RASPI3B_PERIPHERAL_BASE, 4, &value),
-	         BUS_ERR_UNMAPPED);
-	CHECK_EQ(bus_read(m->bus, RASPI3B_UART0_BASE + 0x30, 4, &value), BUS_OK);
-	CHECK_EQ(value, 0x300); /* UARTCR after reset */
-
-	/* The BCM2835 datasheet does not document the identification. */
-	for (unsigned offset = 0xfe0; offset < 0x1000; offset += 4) {
-		CHECK_EQ(bus_read(m->bus, RASPI3B_UART0_BASE + offset, 4, &value),
-		         BUS_OK);
-		CHECK_EQ(value, 0);
 	}
 
 	machine_destroy(m);
@@ -313,14 +359,43 @@ static void test_reset_resets_uart(void)
 	remove(KERNEL);
 }
 
+/*
+ * Resetting the machine starts the cores in the stub again, which starts
+ * the kernel again: it is still in RAM.
+ */
+static void test_reset_runs_the_stub_again(void)
+{
+	FILE *out;
+	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
+	char text[64];
+
+	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
+	machine_reset(m);
+	for (unsigned i = 0; i < m->num_cpus; i++) {
+		Arm64Cpu *c = arm64_cpu_of(m->cpus[i]);
+
+		CHECK_EQ(c->el, 3);
+		CHECK_EQ(c->pc, RASPI3B_STUB_ADDRESS);
+	}
+	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
+	read_output(out, text, sizeof(text));
+	CHECK(strcmp(text, "Hello, world!\nHello, world!\n") == 0);
+
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 int main(void)
 {
 	RUN_TEST(test_board_list);
 	RUN_TEST(test_kernel_is_required);
-	RUN_TEST(test_boot_state);
+	RUN_TEST(test_state_before_the_stub);
+	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);
+	RUN_TEST(test_reset_runs_the_stub_again);
 	return test_summary();
 }

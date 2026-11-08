@@ -44,7 +44,8 @@ booting unmodified bootloaders and kernels.
 Requirements: a C11 compiler (GCC or Clang), GNU Make, CMake 3.25 or
 later and Ninja. The bare-metal tests also need the GNU binutils for
 AArch64 (`binutils-aarch64-linux-gnu` on Debian and Ubuntu); without
-them, those tests are skipped.
+them, those tests are skipped. `make stub` needs them too; it is only
+used after changing the AArch64 code of a board's boot stub.
 
 ```sh
 make test                  # build and run the tests
@@ -56,6 +57,7 @@ make test                  # build and run the tests
 | `make`                | Build                                   |
 | `make test`           | Build and run the tests                 |
 | `make run ARGS="..."` | Build and run `smirror` with arguments  |
+| `make stub`           | Update the raspi3b boot stub's bytes    |
 | `make format`         | Format all C sources with clang-format  |
 | `make check-format`   | Check formatting without changing files |
 | `make clean`          | Remove all build directories            |

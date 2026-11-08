@@ -2,17 +2,14 @@
 # Copyright (C) 2026 Huy Luong Duc
 
 # AArch64 programs that run inside the emulator, through the smirror
-# command line. They are built with the GNU binutils for AArch64, the
+# command line, and the check that the raspi3b boot stub's bytes are up
+# to date. They are built with the GNU binutils for AArch64, the
 # binutils-aarch64-linux-gnu package on Debian and Ubuntu. Without them,
 # these tests are skipped, except on GitHub Actions: CI must run them,
 # so there a missing tool is an error.
 
-find_program(AARCH64_AS NAMES aarch64-linux-gnu-as aarch64-none-elf-as)
-find_program(AARCH64_LD NAMES aarch64-linux-gnu-ld aarch64-none-elf-ld)
-find_program(AARCH64_OBJCOPY
-	NAMES aarch64-linux-gnu-objcopy aarch64-none-elf-objcopy)
-
-if(NOT AARCH64_AS OR NOT AARCH64_LD OR NOT AARCH64_OBJCOPY)
+# The top-level CMakeLists.txt looks for the tools.
+if(NOT AARCH64_BINUTILS_FOUND)
 	# GitHub Actions sets GITHUB_ACTIONS to true in every workflow.
 	if("$ENV{GITHUB_ACTIONS}" STREQUAL "true")
 		message(FATAL_ERROR
@@ -40,6 +37,7 @@ endfunction()
 add_baremetal_program(hello)
 add_baremetal_program(unimplemented)
 add_baremetal_program(exceptions)
+add_baremetal_program(boot)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -72,9 +70,24 @@ set_tests_properties(baremetal.hello-serial-file-contents PROPERTIES
 # prints each one as "<Exception level>:<exception class>"; see the
 # comments in exceptions.s.
 add_expect_test(baremetal.exceptions
-	STDOUT "^2:15\n2:3c\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
+	STDOUT "^2:15\n2:3c\n2:00\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel exceptions.bin)
+
+# A kernel starts in the state that the boot stub leaves the cores in,
+# and releases the other cores through the spin table. See boot.s.
+add_expect_test(baremetal.boot
+	STDOUT "^boot state ok\n123\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel boot.bin)
+
+# smirror is built from src/machine/raspi3b_stub.inc; this build has
+# assembled raspi3b_stub.s again (see src/machine/CMakeLists.txt). If
+# they differ, run `make stub`.
+add_test(NAME baremetal.raspi3b-stub-up-to-date
+	COMMAND ${CMAKE_COMMAND} -E compare_files
+		${PROJECT_BINARY_DIR}/src/machine/raspi3b_stub.inc
+		${PROJECT_SOURCE_DIR}/src/machine/raspi3b_stub.inc)
 
 # An instruction that is not implemented stops the machine with an error.
 add_expect_test(baremetal.unimplemented

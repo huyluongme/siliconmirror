@@ -82,6 +82,13 @@ AArch64; CMake skips them, with a message, when it cannot find them,
 except on GitHub Actions, where CI must run them and a missing tool is
 an error.
 
+The raspi3b board starts its cores in a boot stub written in AArch64
+assembly, `src/machine/raspi3b_stub.s`. smirror is built from its bytes
+kept in `src/machine/raspi3b_stub.inc`, so that building it needs no
+AArch64 tools. After changing the stub, run `make stub` to update that
+file and commit both; the test `baremetal.raspi3b-stub-up-to-date`
+fails until they match.
+
 ## Coding style
 
 - C11.

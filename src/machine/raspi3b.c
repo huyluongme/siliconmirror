@@ -17,7 +17,6 @@
 
 #include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
-#include "cpu/arm64/sysreg.h"
 #include "hw/char/pl011.h"
 #include "util/macros.h"
 
@@ -30,7 +29,7 @@
 static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster)
 {
 	return (Arm64Config){
-		.reset_pc = 0,
+		.reset_pc = RASPI3B_STUB_ADDRESS,
 		.highest_el = 3,
 		.model = &arm64_cortex_a53_bcm2837,
 		.mpidr = 0x80000000u | core,
@@ -47,18 +46,14 @@ static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster)
 static const Pl011Config bcm2835_pl011 = {.fifo_depth = 16, .periph_id = 0};
 
 /*
- * Where the secondary cores wait until the OS writes an address to their
- * spin table entry, which X5 points to, and sends an event. They then
- * jump to it with X0 to X3 clear, as Linux's spin-table method expects.
+ * The boot stub, assembled from raspi3b_stub.s: run `make stub` after
+ * changing that file.
  */
-static const uint32_t spin_loop[] = {
-	0xf94000a4, /* spin: LDR  X4, [X5] */
-	0xb5000064, /*       CBNZ X4, go */
-	0xd503205f, /*       WFE */
-	0x17fffffd, /*       B    spin */
-	0xd2800000, /* go:   MOV  X0, #0 */
-	0xd61f0080, /*       BR   X4 */
+static const uint32_t stub[] = {
+#include "machine/raspi3b_stub.inc"
 };
+
+static_assert(sizeof(stub) == RASPI3B_STUB_SIZE, "the stub has the wrong size");
 
 static void destroy_serial(void *ctx)
 {
@@ -85,45 +80,25 @@ static void destroy_uart(void *ctx)
 	pl011_destroy(ctx);
 }
 
-/*
- * Leave a core as the firmware's stub leaves it after switching from EL3
- * to EL2: at EL2, using SP_EL2, with D, A, I and F masked, and with the
- * System registers that the stub sets up. The values are the ones that
- * armstub8.S writes for the Raspberry Pi 3; the Generic Timer ones come
- * with the timer.
- */
-static void enter_el2(Arm64Cpu *c, uint64_t pc)
+static bool write_word(Machine *m, uint64_t address, unsigned size,
+                       uint64_t value, char *error, size_t error_size)
 {
-	static const struct {
-		uint16_t encoding;
-		uint64_t value;
-	} stub_state[] = {
-		{ARM64_CPTR_EL3, 0},
-		/* RW, HCE, SMD, RES1 bits 5 and 4, NS: lower ELs Non-secure */
-		{ARM64_SCR_EL3, 0x5b1},
-		/* EL2 may write the A53's CPUACTLR, CPUECTLR and L2 registers */
-		{ARM64_ACTLR_EL3, 0x73},
-		{ARM64_SYSREG(3, 1, 15, 2, 1), 0x40}, /* CPUECTLR_EL1.SMPEN */
-		{ARM64_SCTLR_EL2, 0x30c50830},
-		{ARM64_SPSR_EL3, 0x3c9}, /* the ERET into EL2, D, A, I, F masked */
-	};
+	BusStatus status = bus_write(m->bus, address, size, value);
 
-	for (unsigned i = 0; i < ARRAY_SIZE(stub_state); i++) {
-		bool ok = arm64_cpu_write_sysreg(c, stub_state[i].encoding,
-		                                 stub_state[i].value);
-
-		assert(ok);
-		(void)ok;
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot write the boot stub: %s",
+		         bus_status_str(status));
+		return false;
 	}
-	c->el = 2;
-	c->sp_sel = true;
-	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
-	c->pc = pc;
+	return true;
 }
 
 /*
- * Do what the firmware does for kernel8.img: load it, start core 0 in it
- * and park the other cores in the spin loop.
+ * Do what the firmware does for kernel8.img: load it at 0x80000 and the
+ * boot stub at 0, and tell the stub where the kernel and the device tree
+ * are. The cores are left as they reset, at EL3 at the stub's first
+ * instruction: running the stub moves them to EL2, and starts core 0 in
+ * the kernel.
  */
 static bool boot(Machine *m, const char *kernel, char *error, size_t error_size)
 {
@@ -137,29 +112,20 @@ static bool boot(Machine *m, const char *kernel, char *error, size_t error_size)
 	                      RASPI3B_RAM_SIZE, error, error_size))
 		return false;
 
-	for (unsigned i = 0; i < ARRAY_SIZE(spin_loop); i++) {
-		BusStatus status =
-			bus_write(m->bus, RASPI3B_SPIN_LOOP + 4 * i, 4, spin_loop[i]);
-
-		if (status != BUS_OK) {
-			snprintf(error, error_size, "cannot write the spin loop: %s",
-			         bus_status_str(status));
+	for (unsigned i = 0; i < ARRAY_SIZE(stub); i++) {
+		if (!write_word(m, RASPI3B_STUB_ADDRESS + 4 * i, 4, stub[i], error,
+		                error_size))
 			return false;
-		}
 	}
-
-	for (unsigned i = 0; i < m->num_cpus; i++) {
-		Arm64Cpu *c = arm64_cpu_of(m->cpus[i]);
-
-		if (i == 0) {
-			enter_el2(c, RASPI3B_KERNEL_ADDRESS);
-			c->x[0] = 0; /* no device tree yet */
-		} else {
-			enter_el2(c, RASPI3B_SPIN_LOOP);
-			c->x[5] = RASPI3B_SPIN_TABLE + 8 * i;
-		}
-	}
-	return true;
+	/*
+	 * The magic number and the version are also the spin table entry of
+	 * core 3, which must read 0 until the operating system releases it.
+	 * There is no device tree yet: its address is 0.
+	 */
+	return write_word(m, RASPI3B_STUB_MAGIC, 8, 0, error, error_size) &&
+	       write_word(m, RASPI3B_STUB_DTB, 4, 0, error, error_size) &&
+	       write_word(m, RASPI3B_STUB_KERNEL, 4, RASPI3B_KERNEL_ADDRESS, error,
+	                  error_size);
 }
 
 static Machine *raspi3b_create(const BoardOptions *options, char *error,

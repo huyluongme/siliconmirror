@@ -39,6 +39,7 @@ _start:
 	svc	#0			// 2:15  SVC at EL2
 	brk	#0			// 2:3c  BRK
 	.inst	0x00000000		// 2:00  UDF #0, an unknown instruction
+	smc	#0			// 2:00  SMC: UNDEFINED, SCR_EL3.SMD is set
 
 	// Go down to EL1, using AArch64, with ACTLR_EL1 trapped to EL2.
 	movz	x0, #((HCR_RW | HCR_TACR) >> 16), lsl #16

@@ -18,7 +18,7 @@ endif
 # C sources tracked by git, plus new files not yet added.
 C_SOURCES = git ls-files --cached --others --exclude-standard '*.c' '*.h'
 
-.PHONY: all build test run format check-format clean help
+.PHONY: all build test run stub format check-format clean help
 
 all: build
 
@@ -30,6 +30,11 @@ test: build
 
 run: build
 	./$(BUILD_DIR)/smirror $(ARGS)
+
+# Assemble the raspi3b boot stub and update src/machine/raspi3b_stub.inc,
+# after changing src/machine/raspi3b_stub.s. Needs the AArch64 binutils.
+stub: $(BUILD_DIR)/CMakeCache.txt
+	cmake --build $(BUILD_DIR) --target stub
 
 # Configure only once. After that, CMake reconfigures by itself whenever
 # a CMakeLists.txt changes.
@@ -50,6 +55,8 @@ help:
 	@echo "  make                  Build (same as 'make build')"
 	@echo "  make test             Build and run the tests"
 	@echo "  make run ARGS=\"...\"   Build and run smirror with arguments"
+	@echo "  make stub             Update the raspi3b boot stub's bytes after"
+	@echo "                        changing src/machine/raspi3b_stub.s"
 	@echo "  make format           Format all C sources with clang-format"
 	@echo "  make check-format     Check formatting without changing files"
 	@echo "  make clean            Remove all build directories"

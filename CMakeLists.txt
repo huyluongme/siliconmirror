@@ -38,6 +38,22 @@ endif()
 
 include(GNUInstallDirs)
 
+# The GNU binutils for AArch64 (the binutils-aarch64-linux-gnu package on
+# Debian and Ubuntu) assemble code that runs inside the emulator: the
+# bare-metal tests, and the boot stub of the raspi3b board. They are
+# optional: smirror is built from the stub bytes kept in the source tree.
+# find_program() stores the tool's full path in the variable, or
+# <name>-NOTFOUND, which if() treats as false.
+find_program(AARCH64_AS NAMES aarch64-linux-gnu-as aarch64-none-elf-as)
+find_program(AARCH64_LD NAMES aarch64-linux-gnu-ld aarch64-none-elf-ld)
+find_program(AARCH64_OBJCOPY
+	NAMES aarch64-linux-gnu-objcopy aarch64-none-elf-objcopy)
+if(AARCH64_AS AND AARCH64_LD AND AARCH64_OBJCOPY)
+	set(AARCH64_BINUTILS_FOUND TRUE)
+else()
+	set(AARCH64_BINUTILS_FOUND FALSE)
+endif()
+
 add_subdirectory(src)
 
 enable_testing()

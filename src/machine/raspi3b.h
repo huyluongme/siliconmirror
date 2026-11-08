@@ -19,12 +19,23 @@
 #define RASPI3B_KERNEL_ADDRESS 0x80000
 
 /*
- * The spin table: core n waits for an address to jump to in the 64-bit
- * word at RASPI3B_SPIN_TABLE + 8 * n (cpu-release-addr in Linux's
- * bcm2837.dtsi). The loop that waits lives at RASPI3B_SPIN_LOOP.
+ * The boot stub, raspi3b_stub.s, which the cores run from reset at EL3.
+ * It ends with data at the offsets of the firmware's armstub8:
+ *
+ * - The spin table: core n waits for an address to jump to in the
+ *   64-bit word at RASPI3B_SPIN_TABLE + 8 * n (cpu-release-addr in
+ *   Linux's bcm2837.dtsi).
+ * - At RASPI3B_STUB_MAGIC, a magic number and a version, which overlap
+ *   the spin table entry of core 3; the board clears them.
+ * - The 32-bit addresses of the device tree and of the kernel, which the
+ *   board writes and core 0 reads.
  */
+#define RASPI3B_STUB_ADDRESS 0x0 /* RVBAR_EL3, where the cores start */
+#define RASPI3B_STUB_SIZE 0x100
 #define RASPI3B_SPIN_TABLE 0xd8
-#define RASPI3B_SPIN_LOOP 0x0
+#define RASPI3B_STUB_MAGIC 0xf0
+#define RASPI3B_STUB_DTB 0xf8
+#define RASPI3B_STUB_KERNEL 0xfc
 
 extern const Board raspi3b_board;
 

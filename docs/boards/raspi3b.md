@@ -68,34 +68,68 @@ known.
 
 For `kernel8.img`, the Raspberry Pi firmware does the following:
 
-1. It loads the image at `0x80000`.
-2. All four cores start at address 0, at EL3, in a small stub of Arm
-   code. The stub moves each core to EL2, with D, A, I and F masked.
-3. Core 0 jumps to the image with X0 holding the address of the device
+1. It loads the image at `0x80000`, and a small stub of Arm code,
+   armstub8, at address 0. It writes the addresses of the kernel and of
+   the device tree into the stub.
+2. It starts all four cores at address 0, at EL3, in the stub.
+3. The stub sets up the registers that only EL3 can write, and moves
+   each core to EL2 with D, A, I and F masked.
+4. Core 0 jumps to the image with X0 holding the address of the device
    tree and X1 to X3 zero.
-4. Cores 1 to 3 wait in a loop. Core *n* reads the 64-bit word at
+5. Cores 1 to 3 wait in a loop. Core *n* reads the 64-bit word at
    `0xd8 + 8 * n`, its entry in the spin table. When the operating system
    writes an address there and executes `SEV`, the core jumps to that
    address with X0 to X3 zero.
 
-smirror does not run the stub yet. Instead, the board starts each core
-directly in the state that the stub leaves it in, with the System
-registers that the stub sets up:
+smirror does the same with a stub of its own,
+[raspi3b_stub.s](../../src/machine/raspi3b_stub.s), written from what
+armstub8 does. To leave the cores exactly as the real stub does, it
+executes the same instructions in the same order and with the same
+registers, so a kernel also finds the same values in X4 to X6. Its
+labels, comments and constant names are smirror's own. The cores start
+in it from reset, so resetting the machine runs it again. Like armstub8,
+it is 256 bytes long and ends with its data:
 
-| Register       | Value        | Meaning                                                      |
-|----------------|--------------|--------------------------------------------------------------|
-| `SCR_EL3`      | `0x5b1`      | EL2 and EL1 are Non-secure and AArch64; `HVC` on, `SMC` off  |
-| `ACTLR_EL3`    | `0x73`       | EL2 may write the Cortex-A53 configuration registers         |
-| `CPUECTLR_EL1` | `0x40`       | SMPEN: the core takes part in cache coherency                |
-| `CPTR_EL3`     | `0`          | no traps to EL3, of FP and SIMD or anything else             |
-| `SCTLR_EL2`    | `0x30c50830` | MMU, caches and alignment checks off, stack alignment too    |
-| `SPSR_EL3`     | `0x3c9`      | what the `ERET` to EL2 used: EL2h, with D, A, I and F masked |
+| Address | Size  | Contents                                                       |
+|---------|-------|----------------------------------------------------------------|
+| `0xd8`  | 4 × 8 | the spin table, one entry for each core (core 0's is not used) |
+| `0xf0`  | 4     | the magic number `0x5afe570b`                                  |
+| `0xf4`  | 4     | the stub's version, 0                                          |
+| `0xf8`  | 4     | the address of the device tree                                 |
+| `0xfc`  | 4     | the address of the kernel                                      |
 
-The stub also sets `CNTFRQ_EL0` and `CNTVOFF_EL2`; they come with the
-Generic Timer. The board also writes a waiting loop of its own at
-address 0, which follows the same spin-table protocol: X5 holds the
-address of the core's spin table entry, and the loop checks the entry
-before each `WFE`.
+The magic number and the version overlap the spin table entry of
+core 3. After loading the stub, the board clears them, as armstub8's
+comments say the firmware does, and writes `0x80000` and 0 (no device
+tree yet) into the last two words.
+
+At EL3, every core writes these System registers:
+
+| Register       | Value              | Meaning                                                      |
+|----------------|--------------------|--------------------------------------------------------------|
+| `L2CTLR_EL1`   | bits 5 and 1 set   | asks for slower L2 RAM; the Cortex-A53 ignores it            |
+| `CPTR_EL3`     | `0`                | no traps to EL3, of FP and SIMD or anything else             |
+| `SCR_EL3`      | `0x5b1`            | EL2 and EL1 are Non-secure and AArch64; `HVC` on, `SMC` off  |
+| `ACTLR_EL3`    | `0x73`             | EL2 may write the Cortex-A53 configuration registers         |
+| `CPUECTLR_EL1` | `0x40`             | SMPEN: the core takes part in cache coherency                |
+| `SCTLR_EL2`    | `0x30c50830`       | MMU, caches and alignment checks off, stack alignment too    |
+| `SPSR_EL3`     | `0x3c9`            | for the `ERET` to EL2: EL2h, with D, A, I and F masked       |
+
+armstub8 also sets the Generic Timer's frequency, `CNTFRQ_EL0`, to
+19.2 MHz and `CNTVOFF_EL2` to 0, and sets up the timer of the ARM local
+peripherals: 0 at `0x40000000` (control) and `0x80000000` at
+`0x40000008` (prescaler). smirror's stub does not yet: it will when the
+Generic Timer and the ARM local peripherals are modelled.
+
+On EL2, core 0 reads the two addresses from the stub's data and jumps.
+Cores 1 to 3 take their number from `MPIDR_EL1` and, as in armstub8,
+execute `WFE` before each read of their spin table entry. The `ERET` to
+EL2 has set the Event Register, so the first `WFE` does not wait and the
+entry is read once before the core sleeps.
+
+smirror is built from the stub's bytes, kept in `raspi3b_stub.inc`, so
+that building it needs no AArch64 tools; `make stub` updates them after
+a change to the stub (see CONTRIBUTING.md).
 
 The machine stops when every core waits in `WFI` or `WFE` and nothing can
 wake them, so a program that ends with a `WFI` loop makes smirror exit.
@@ -103,6 +137,8 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 ## Differences from the real board
 
 - No device tree is passed yet: X0 is 0.
+- The boot stub does not set up the Generic Timer and the ARM local
+  peripherals yet, which are not modelled yet.
 - The GPU's share of the RAM, a firmware setting, is not modelled: all
   of the RAM below the peripherals is free.
 - GPIO pin functions are not modelled, and UART0 always goes to
@@ -126,7 +162,8 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   peripheral addresses, cores and their spin table entries, UART0.
 - [Arm Cortex-A53 MPCore Processor Technical Reference Manual](https://developer.arm.com/documentation/ddi0500/j/),
   ARM DDI 0500J, chapter 4: identification and reset values, the
-  configuration registers and the `ACTLR` bits that control them.
+  configuration registers and the `ACTLR` bits that control them
+  (`ACTLR_EL3` 4.3.33, `L2CTLR_EL1` 4.3.64, `CPUECTLR_EL1` 4.3.79).
 - `/proc/cpuinfo` of a Raspberry Pi 3, for example in
   [this gist](https://gist.github.com/fawick/d142633de52b31d0dade):
   CPU part `0xd03`, revision 4, so a Cortex-A53 r0p4.
@@ -136,7 +173,14 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   RAM size, and the default stub that starts `kernel8.img` at EL2.
 - The default stub,
   [armstub8.S](https://github.com/raspberrypi/tools/blob/master/armstubs/armstub8.S),
-  read for its behavior and the register values it writes only.
+  (BSD-3-Clause, copyright Raspberry Pi (Trading) Ltd. and Stephen
+  Warren): smirror's stub follows its instructions, register values and
+  data layout one for one, as described above; the source text is
+  smirror's own.
+- [Arm Architecture Reference Manual for A-profile architecture](https://developer.arm.com/documentation/ddi0487/latest),
+  ARM DDI 0487 issue M.d: `SCR_EL3` (D24.2.168), `SCTLR_EL2`
+  (D24.2.175), `CPTR_EL3` (D24.2.38), `MPIDR_EL1` (D24.2.137),
+  `SPSR_EL3` (C5.2.23) and the Event Register (D1.7.1.1).
 - Raspberry Pi documentation, `kernel_address` in the
   [2021 version of the config.txt boot options](https://github.com/raspberrypi/documentation/blob/16480247dcac12d1f828c0f2556a3bc430de3c90/configuration/config-txt/boot.md):
   64-bit kernels load at `0x80000`.
