@@ -35,6 +35,7 @@ static void arm64_reset(Cpu *base)
 	c->pc = c->config.reset_pc;
 	c->next_pc = c->pc;
 	c->event_register = false;
+	arm64_sysreg_reset(c);
 	base->state = CPU_RUNNING;
 }
 
@@ -65,6 +66,7 @@ static bool step(Arm64Cpu *c)
 	}
 
 	c->next_pc = c->pc + 4;
+	c->detail[0] = '\0';
 	switch (arm64_execute(c, (uint32_t)insn)) {
 	case ARM64_EXEC_OK:
 		c->pc = c->next_pc;
@@ -80,7 +82,17 @@ static bool step(Arm64Cpu *c)
 		          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
 		          " is not implemented yet (%s)",
 		          (uint32_t)insn, c->pc,
-		          arm64_group_name(arm64_group((uint32_t)insn)));
+		          c->detail[0] != '\0'
+		              ? c->detail
+		              : arm64_group_name(arm64_group((uint32_t)insn)));
+		return false;
+	case ARM64_EXEC_EXCEPTION:
+		cpu_error(c,
+		          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
+		          " takes an exception to EL%u, ESR 0x%08" PRIx32
+		          " (exceptions are not implemented yet)",
+		          (uint32_t)insn, c->pc, c->exception.target_el,
+		          c->exception.esr);
 		return false;
 	case ARM64_EXEC_DATA_ABORT:
 		cpu_error(c,
@@ -149,6 +161,8 @@ void arm64_send_event(Arm64Cpu *c)
 Cpu *arm64_cpu_create(const Arm64Config *config)
 {
 	if (config->highest_el < 1 || config->highest_el > 3)
+		return NULL;
+	if (config->model != NULL && config->model->num_impdef > ARM64_MAX_IMPDEF)
 		return NULL;
 
 	Arm64Cpu *c = calloc(1, sizeof(*c));

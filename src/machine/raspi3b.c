@@ -12,15 +12,29 @@
 
 #include "machine/raspi3b.h"
 
+#include <assert.h>
 #include <stdio.h>
 
 #include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
+#include "cpu/arm64/sysreg.h"
 #include "hw/char/pl011.h"
 #include "util/macros.h"
 
-/* All cores reset at address 0, and the Cortex-A53 implements EL3. */
-static const Arm64Config cortex_a53 = {.reset_pc = 0, .highest_el = 3};
+/*
+ * All cores reset at address 0, and the Cortex-A53 implements EL3. Core
+ * n has MPIDR_EL1 0x80000000 + n: bit 31 is RES1, and the cores form one
+ * cluster with affinity 0 (the reg properties of Linux's bcm2837.dtsi).
+ */
+static Arm64Config cortex_a53(unsigned core)
+{
+	return (Arm64Config){
+		.reset_pc = 0,
+		.highest_el = 3,
+		.model = &arm64_cortex_a53_bcm2837,
+		.mpidr = 0x80000000u | core,
+	};
+}
 
 /*
  * The PL011 of the BCM2835 has 16-entry FIFOs (BCM2835 ARM Peripherals,
@@ -61,10 +75,34 @@ static void destroy_uart(void *ctx)
 
 /*
  * Leave a core as the firmware's stub leaves it after switching from EL3
- * to EL2: at EL2, using SP_EL2, with D, A, I and F masked.
+ * to EL2: at EL2, using SP_EL2, with D, A, I and F masked, and with the
+ * System registers that the stub sets up. The values are the ones that
+ * armstub8.S writes for the Raspberry Pi 3; the Generic Timer ones come
+ * with the timer.
  */
 static void enter_el2(Arm64Cpu *c, uint64_t pc)
 {
+	static const struct {
+		uint16_t encoding;
+		uint64_t value;
+	} stub_state[] = {
+		{ARM64_CPTR_EL3, 0},
+		/* RW, HCE, SMD, RES1 bits 5 and 4, NS: lower ELs Non-secure */
+		{ARM64_SCR_EL3, 0x5b1},
+		/* EL2 may write the A53's CPUACTLR, CPUECTLR and L2 registers */
+		{ARM64_ACTLR_EL3, 0x73},
+		{ARM64_SYSREG(3, 1, 15, 2, 1), 0x40}, /* CPUECTLR_EL1.SMPEN */
+		{ARM64_SCTLR_EL2, 0x30c50830},
+		{ARM64_SPSR_EL3, 0x3c9}, /* the ERET into EL2, D, A, I, F masked */
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(stub_state); i++) {
+		bool ok = arm64_cpu_write_sysreg(c, stub_state[i].encoding,
+		                                 stub_state[i].value);
+
+		assert(ok);
+		(void)ok;
+	}
 	c->el = 2;
 	c->sp_sel = true;
 	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
@@ -136,7 +174,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	}
 
 	for (unsigned i = 0; i < RASPI3B_NUM_CPUS; i++) {
-		Cpu *cpu = arm64_cpu_create(&cortex_a53);
+		Arm64Config config = cortex_a53(i);
+		Cpu *cpu = arm64_cpu_create(&config);
 
 		if (cpu == NULL)
 			goto out_of_memory;

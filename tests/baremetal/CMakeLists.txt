@@ -70,5 +70,5 @@ set_tests_properties(baremetal.hello-serial-file-contents PROPERTIES
 # An instruction that is not implemented stops the machine with an error.
 add_expect_test(baremetal.unimplemented
 	STATUS 1
-	STDERR "^smirror: error: cpu0: instruction 0xd5384240 at 0x0000000000080000 is not implemented yet"
+	STDERR "^smirror: error: cpu0: instruction 0x1e622820 at 0x0000000000080000 is not implemented yet"
 	COMMAND ${smirror} -M raspi3b -kernel unimplemented.bin)

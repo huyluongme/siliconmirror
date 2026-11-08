@@ -13,6 +13,7 @@
 
 #include "backend/char/file.h"
 #include "cpu/arm64/cpu.h"
+#include "cpu/arm64/sysreg.h"
 #include "machine/board.h"
 #include "machine/raspi3b.h"
 #include "test.h"
@@ -161,6 +162,19 @@ static void test_kernel_is_required(void)
 
 static void test_boot_state(void)
 {
+	/* The System registers that armstub8.S sets up. */
+	static const struct {
+		uint16_t encoding;
+		uint64_t value;
+	} stub_state[] = {
+		{ARM64_MIDR_EL1, 0x410fd034}, /* a Cortex-A53 r0p4 */
+		{ARM64_CPTR_EL3, 0},
+		{ARM64_SCR_EL3, 0x5b1},
+		{ARM64_ACTLR_EL3, 0x73},
+		{ARM64_SYSREG(3, 1, 15, 2, 1), 0x40}, /* CPUECTLR_EL1 */
+		{ARM64_SCTLR_EL2, 0x30c50830},
+		{ARM64_SPSR_EL3, 0x3c9},
+	};
 	FILE *out;
 	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
 	uint64_t value;
@@ -174,6 +188,13 @@ static void test_boot_state(void)
 		CHECK(c->sp_sel);
 		CHECK_EQ(c->daif, 0x3c0);
 		CHECK_EQ(c->cpu.state, CPU_RUNNING);
+		for (unsigned j = 0; j < ARRAY_SIZE(stub_state); j++) {
+			CHECK(arm64_cpu_read_sysreg(c, stub_state[j].encoding, &value));
+			CHECK_EQ(value, stub_state[j].value);
+		}
+		/* MPIDR_EL1.Aff0 numbers the cores of the one cluster. */
+		CHECK(arm64_cpu_read_sysreg(c, ARM64_MPIDR_EL1, &value));
+		CHECK_EQ(value, 0x80000000u + i);
 		if (i == 0) {
 			CHECK_EQ(c->pc, RASPI3B_KERNEL_ADDRESS);
 			CHECK_EQ(c->x[0], 0);

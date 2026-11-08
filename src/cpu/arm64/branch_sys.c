@@ -6,15 +6,15 @@
  * instructions of C4.1 with bits 28:26 set to 101. Each one follows its
  * description in C6.2.
  *
- * Implemented so far: the branches, the hints and the DMB, DSB and ISB
- * barriers. The exception generating instructions, ERET, the System
- * register moves, the System instructions, the PSTATE moves and CLREX
- * are not implemented yet. Classes that only hold instructions newer
- * than Armv8.0 are UNDEFINED.
+ * Implemented so far: the branches, the hints, the DMB, DSB and ISB
+ * barriers, and the System register moves and PSTATE moves, which are
+ * in sysreg.c. The exception generating instructions, ERET, the System
+ * instructions and CLREX are not implemented yet. Classes that only hold
+ * instructions newer than Armv8.0 are UNDEFINED.
  *
  * A branch target is used as it is. AArch64_BranchAddr() would remove a
- * tag from its top byte when TCR_ELx.TBI says so, but System registers
- * are not implemented yet.
+ * tag from its top byte when TCR_ELx.TBI says so, but the MMU, which
+ * TCR_ELx belongs to, is not implemented yet.
  */
 
 #include "cpu/arm64/internal.h"
@@ -172,9 +172,9 @@ static Arm64Exec system_space(Arm64Cpu *c, uint32_t insn)
 	if (op0 == 1) /* SYS, SYSL: cache, TLB and address translation */
 		return ARM64_EXEC_UNIMPLEMENTED;
 	if (op0 >= 2) /* MRS, MSR (register) */
-		return ARM64_EXEC_UNIMPLEMENTED;
+		return arm64_exec_sysreg(c, insn);
 	if (l == 0 && crn == 4) /* PSTATE: MSR (immediate) */
-		return ARM64_EXEC_UNIMPLEMENTED;
+		return arm64_exec_msr_imm(c, insn);
 	if (l == 0 && op1 == 3 && crn == 2 && field32(insn, 4, 0) == 0x1f)
 		return hint(c, insn);
 	if (l == 0 && op1 == 3 && crn == 3)

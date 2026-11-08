@@ -180,6 +180,8 @@ typedef enum Arm64Exec {
 	ARM64_EXEC_UNIMPLEMENTED,
 	/* A data access failed; c->data_abort describes it. */
 	ARM64_EXEC_DATA_ABORT,
+	/* The instruction raised an exception; c->exception describes it. */
+	ARM64_EXEC_EXCEPTION,
 } Arm64Exec;
 
 /* Decode and execute one instruction; c->pc is its address. */
@@ -193,6 +195,17 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
 
 /* SEV, from cpu.c: signal an event to every PE of the machine. */
 void arm64_send_event(Arm64Cpu *c);
+
+/*
+ * System registers, from sysreg.c: MRS and MSR (register), MSR
+ * (immediate), and the reset values. arm64_sysreg_name() returns NULL
+ * for an encoding that the model does not implement.
+ */
+Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_msr_imm(Arm64Cpu *c, uint32_t insn);
+void arm64_sysreg_reset(Arm64Cpu *c);
+const char *arm64_sysreg_name(const Arm64Cpu *c, uint16_t encoding);
+bool arm64_sysreg_table_is_sorted(void);
 
 /*
  * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. On failure they

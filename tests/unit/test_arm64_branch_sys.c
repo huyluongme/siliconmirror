@@ -427,8 +427,6 @@ static void test_not_implemented_yet(void)
 		0xd4000002, /* HVC #0 */
 		0xd4000003, /* SMC #0 */
 		0xd69f03e0, /* ERET */
-		0xd5384240, /* MRS X0, CurrentEL */
-		0xd50342df, /* MSR DAIFSet, #2 */
 		0xd50b7e20, /* DC CIVAC, X0 */
 		0xd508871f, /* TLBI VMALLE1 */
 		0xd5033f5f, /* CLREX */
