@@ -25,6 +25,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpu/arm64/internal.h"
@@ -229,6 +230,17 @@ static int find_impdef(const Arm64Cpu *c, uint16_t encoding)
 		if (model->impdef[i].encoding == encoding)
 			return (int)i;
 	return -1;
+}
+
+/*
+ * Where the IMPLEMENTATION DEFINED register at index is stored: in the
+ * cluster for a cluster register, unless the core has no cluster.
+ */
+static uint64_t *impdef_value(Arm64Cpu *c, int index)
+{
+	if (c->config.model->impdef[index].cluster && c->config.cluster != NULL)
+		return &c->config.cluster->impdef[index];
+	return &c->sys.impdef[index];
 }
 
 /* The value the CPU model gives for a register, or 0. */
@@ -493,7 +505,7 @@ static Arm64Exec access_impdef(Arm64Cpu *c, int index, uint32_t insn)
 	if (c->el < 1)
 		return ARM64_EXEC_UNDEFINED;
 	if (bit32(insn, 21)) {
-		set_x(c, t, c->sys.impdef[index]);
+		set_x(c, t, *impdef_value(c, index));
 		return ARM64_EXEC_OK;
 	}
 	if (d->read_only)
@@ -506,7 +518,7 @@ static Arm64Exec access_impdef(Arm64Cpu *c, int index, uint32_t insn)
 		if (c->el == 1 && el2_enabled(c) && !(c->sys.actlr[2] & bit))
 			return trap(c, 2, insn);
 	}
-	c->sys.impdef[index] = d->fixed_write ? d->write_value : get_x(c, t);
+	*impdef_value(c, index) = d->fixed_write ? d->write_value : get_x(c, t);
 	return ARM64_EXEC_OK;
 }
 
@@ -600,6 +612,34 @@ void arm64_sysreg_reset(Arm64Cpu *c)
 		c->sys.impdef[i] = model->impdef[i].reset;
 }
 
+Arm64Cluster *arm64_cluster_create(const Arm64CpuModel *model)
+{
+	if (model == NULL || model->num_impdef > ARM64_MAX_IMPDEF)
+		return NULL;
+
+	Arm64Cluster *cluster = calloc(1, sizeof(*cluster));
+
+	if (cluster == NULL)
+		return NULL;
+	cluster->model = model;
+	arm64_cluster_reset(cluster);
+	return cluster;
+}
+
+void arm64_cluster_reset(Arm64Cluster *cluster)
+{
+	const Arm64CpuModel *model = cluster->model;
+
+	for (unsigned i = 0; i < model->num_impdef; i++)
+		cluster->impdef[i] =
+			model->impdef[i].cluster ? model->impdef[i].reset : 0;
+}
+
+void arm64_cluster_destroy(Arm64Cluster *cluster)
+{
+	free(cluster);
+}
+
 bool arm64_cpu_read_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t *value)
 {
 	const SysReg *r = find_sysreg(encoding);
@@ -616,7 +656,7 @@ bool arm64_cpu_read_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t *value)
 	index = find_impdef(c, encoding);
 	if (index < 0)
 		return false;
-	*value = c->sys.impdef[index];
+	*value = *impdef_value(c, index);
 	return true;
 }
 
@@ -651,7 +691,7 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value)
 
 	if (d->read_only)
 		return false;
-	c->sys.impdef[index] = d->fixed_write ? d->write_value : value;
+	*impdef_value(c, index) = d->fixed_write ? d->write_value : value;
 	return true;
 }
 

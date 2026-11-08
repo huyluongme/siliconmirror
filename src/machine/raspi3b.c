@@ -24,15 +24,17 @@
 /*
  * All cores reset at address 0, and the Cortex-A53 implements EL3. Core
  * n has MPIDR_EL1 0x80000000 + n: bit 31 is RES1, and the cores form one
- * cluster with affinity 0 (the reg properties of Linux's bcm2837.dtsi).
+ * cluster with affinity 0 (the reg properties of Linux's bcm2837.dtsi),
+ * which shares one L2 memory system.
  */
-static Arm64Config cortex_a53(unsigned core)
+static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster)
 {
 	return (Arm64Config){
 		.reset_pc = 0,
 		.highest_el = 3,
 		.model = &arm64_cortex_a53_bcm2837,
 		.mpidr = 0x80000000u | core,
+		.cluster = cluster,
 	};
 }
 
@@ -61,6 +63,16 @@ static const uint32_t spin_loop[] = {
 static void destroy_serial(void *ctx)
 {
 	char_stream_destroy(ctx);
+}
+
+static void reset_cluster(void *ctx)
+{
+	arm64_cluster_reset(ctx);
+}
+
+static void destroy_cluster(void *ctx)
+{
+	arm64_cluster_destroy(ctx);
 }
 
 static void reset_uart(void *ctx)
@@ -155,6 +167,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 {
 	Machine *m = machine_create();
 	BusStatus status;
+	Arm64Cluster *cluster;
 	Pl011 *uart;
 
 	if (m == NULL) {
@@ -173,8 +186,16 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		goto fail;
 	}
 
+	/* The machine resets the cluster before the cores, and frees it. */
+	cluster = arm64_cluster_create(&arm64_cortex_a53_bcm2837);
+	if (cluster == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, cluster, reset_cluster, destroy_cluster)) {
+		arm64_cluster_destroy(cluster);
+		goto out_of_memory;
+	}
 	for (unsigned i = 0; i < RASPI3B_NUM_CPUS; i++) {
-		Arm64Config config = cortex_a53(i);
+		Arm64Config config = cortex_a53(i, cluster);
 		Cpu *cpu = arm64_cpu_create(&config);
 
 		if (cpu == NULL)

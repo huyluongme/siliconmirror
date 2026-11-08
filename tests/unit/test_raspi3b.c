@@ -275,6 +275,29 @@ static void test_secondary_cores(void)
 	remove(KERNEL);
 }
 
+static void test_shared_l2_registers(void)
+{
+	FILE *out;
+	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
+	Arm64Cpu *core0 = arm64_cpu_of(m->cpus[0]);
+	Arm64Cpu *core3 = arm64_cpu_of(m->cpus[3]);
+	uint16_t l2ectlr = ARM64_SYSREG(3, 1, 11, 0, 3);
+	uint64_t value;
+
+	/* The four cores share one L2 memory system and its registers. */
+	CHECK(arm64_cpu_write_sysreg(core0, l2ectlr, 7));
+	CHECK(arm64_cpu_read_sysreg(core3, l2ectlr, &value));
+	CHECK_EQ(value, 7);
+
+	/* Resetting the machine resets the cluster too. */
+	machine_reset(m);
+	CHECK(arm64_cpu_read_sysreg(core3, l2ectlr, &value));
+	CHECK_EQ(value, 0);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -297,6 +320,7 @@ int main(void)
 	RUN_TEST(test_boot_state);
 	RUN_TEST(test_hello);
 	RUN_TEST(test_secondary_cores);
+	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);
 	return test_summary();
 }

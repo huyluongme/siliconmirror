@@ -89,6 +89,12 @@ typedef struct Arm64ImpDefReg {
 	uint64_t write_value;
 
 	int actlr_bit;
+
+	/*
+	 * One copy for all the cores of a cluster, such as a register of a
+	 * shared L2 memory system: see Arm64Cluster.
+	 */
+	bool cluster;
 } Arm64ImpDefReg;
 
 #define ARM64_MAX_IMPDEF 8
@@ -126,6 +132,25 @@ typedef struct Arm64CpuModel {
 /* The Cortex-A53 r0p4 as the BCM2837 of the Raspberry Pi 3 has it. */
 extern const Arm64CpuModel arm64_cortex_a53_bcm2837;
 
+/*
+ * What the cores of one cluster share: the IMPLEMENTATION DEFINED
+ * registers that their model marks as cluster registers. The cluster
+ * resets on its own, as the cluster-wide reset of a real cluster does:
+ * resetting a core leaves them alone.
+ */
+typedef struct Arm64Cluster {
+	const Arm64CpuModel *model;
+	uint64_t impdef[ARM64_MAX_IMPDEF]; /* indexed as model->impdef */
+} Arm64Cluster;
+
+/*
+ * Create a cluster of cores of the given model, in its reset state.
+ * Returns NULL when model is NULL or invalid, or memory runs out.
+ */
+Arm64Cluster *arm64_cluster_create(const Arm64CpuModel *model);
+void arm64_cluster_reset(Arm64Cluster *cluster);
+void arm64_cluster_destroy(Arm64Cluster *cluster);
+
 typedef struct Arm64Config {
 	/*
 	 * Address of the first instruction after reset: the IMPLEMENTATION
@@ -144,6 +169,14 @@ typedef struct Arm64Config {
 
 	/* MPIDR_EL1: where this core sits in the system. */
 	uint64_t mpidr;
+
+	/*
+	 * The cluster of the core, of the same model, which must stay valid
+	 * while the core runs. NULL gives the core its own copy of the
+	 * cluster registers, which then reset with the core: a cluster of
+	 * one core.
+	 */
+	Arm64Cluster *cluster;
 } Arm64Config;
 
 /*

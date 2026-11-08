@@ -20,6 +20,8 @@
 
 #define CPUECTLR_EL1 ARM64_SYSREG(3, 1, 15, 2, 1)
 #define L2CTLR_EL1 ARM64_SYSREG(3, 1, 11, 0, 2)
+#define L2ECTLR_EL1 ARM64_SYSREG(3, 1, 11, 0, 3)
+#define L2ACTLR_EL1 ARM64_SYSREG(3, 1, 15, 0, 0)
 #define CBAR_EL1 ARM64_SYSREG(3, 1, 15, 3, 0)
 #define CPUMERRSR_EL1 ARM64_SYSREG(3, 1, 15, 2, 2)
 #define L2MERRSR_EL1 ARM64_SYSREG(3, 1, 15, 2, 3)
@@ -611,6 +613,60 @@ static void test_without_el2(void)
 	destroy(c);
 }
 
+static void test_cluster(void)
+{
+	Arm64Cluster *cluster = arm64_cluster_create(&arm64_cortex_a53_bcm2837);
+	Arm64Config config = {
+		.reset_pc = 0x8000,
+		.highest_el = 3,
+		.model = &arm64_cortex_a53_bcm2837,
+		.mpidr = 0x80000000,
+		.cluster = cluster,
+	};
+	Arm64Cpu *a, *b;
+	uint64_t value;
+
+	CHECK(cluster != NULL);
+	a = arm64_cpu_of(arm64_cpu_create(&config));
+	config.mpidr = 0x80000001;
+	b = arm64_cpu_of(arm64_cpu_create(&config));
+
+	/* A new cluster is in its reset state. */
+	CHECK_EQ(read_reg(a, L2CTLR_EL1), 0x03000000);
+	CHECK_EQ(read_reg(a, L2ACTLR_EL1), 0x80000000);
+
+	/* The cores share one copy of the L2 registers, not of CPUECTLR. */
+	CHECK_EQ(write_reg(a, L2ECTLR_EL1, 7), ARM64_EXEC_OK);
+	CHECK_EQ(write_reg(a, CPUECTLR_EL1, 0x40), ARM64_EXEC_OK);
+	CHECK_EQ(write_reg(a, ARM64_SYSREG(3, 1, 15, 2, 0), 0), ARM64_EXEC_OK);
+	CHECK_EQ(read_reg(b, ARM64_SYSREG(3, 1, 15, 2, 0)), 0x090ca000);
+	CHECK_EQ(write_reg(a, L2MERRSR_EL1, 0), ARM64_EXEC_OK);
+	CHECK_EQ(read_reg(b, L2ECTLR_EL1), 7);
+	CHECK_EQ(read_reg(b, CPUECTLR_EL1), 0);
+	CHECK_EQ(read_reg(b, L2MERRSR_EL1), 0x10000000);
+	CHECK(arm64_cpu_write_sysreg(b, L2ACTLR_EL1, 0x80000008));
+	CHECK(arm64_cpu_read_sysreg(a, L2ACTLR_EL1, &value));
+	CHECK_EQ(value, 0x80000008);
+
+	/* A core reset leaves them alone; the cluster reset resets them. */
+	a->cpu.ops->reset(&a->cpu);
+	CHECK_EQ(read_reg(a, CPUECTLR_EL1), 0);
+	CHECK_EQ(read_reg(a, L2ECTLR_EL1), 7);
+	arm64_cluster_reset(cluster);
+	CHECK_EQ(read_reg(a, L2ECTLR_EL1), 0);
+	CHECK_EQ(read_reg(b, L2ACTLR_EL1), 0x80000000);
+	CHECK_EQ(read_reg(b, L2MERRSR_EL1), 0);
+	CHECK_EQ(read_reg(b, L2CTLR_EL1), 0x03000000);
+
+	/* A core of another model cannot join the cluster. */
+	config.model = NULL;
+	CHECK(arm64_cpu_create(&config) == NULL);
+	destroy(a);
+	destroy(b);
+	arm64_cluster_destroy(cluster);
+	CHECK(arm64_cluster_create(NULL) == NULL);
+}
+
 static void test_impdef_limit(void)
 {
 	static const Arm64ImpDefReg regs[ARM64_MAX_IMPDEF + 1];
@@ -632,6 +688,12 @@ static void test_impdef_limit(void)
 		base->ops->destroy(base);
 	config.model = &too_many;
 	CHECK(arm64_cpu_create(&config) == NULL);
+	CHECK(arm64_cluster_create(&too_many) == NULL);
+
+	Arm64Cluster *cluster = arm64_cluster_create(&most);
+
+	CHECK(cluster != NULL);
+	arm64_cluster_destroy(cluster);
 }
 
 static void test_direct_access(void)
@@ -675,6 +737,7 @@ int main(void)
 	RUN_TEST(test_undefined_encodings);
 	RUN_TEST(test_without_a_model);
 	RUN_TEST(test_without_el2);
+	RUN_TEST(test_cluster);
 	RUN_TEST(test_impdef_limit);
 	RUN_TEST(test_direct_access);
 	return test_summary();

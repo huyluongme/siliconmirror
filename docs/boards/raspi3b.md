@@ -29,11 +29,19 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   behaves as if there were none.
 - The Cortex-A53 registers for its own configuration exist:
   `CPUACTLR_EL1`, `CPUECTLR_EL1`, `L2CTLR_EL1`, `L2ECTLR_EL1`,
-  `L2ACTLR_EL1` and `CBAR_EL1`. They hold what is written to them, but
-  writing them changes nothing else.
+  `L2ACTLR_EL1` and `CBAR_EL1`. They hold what is written to them,
+  except `L2CTLR_EL1`, whose fields software cannot change, and the
+  read-only `CBAR_EL1`; writing them changes nothing else.
 - The memory error registers `CPUMERRSR_EL1` and `L2MERRSR_EL1` record
   no errors: memory never fails in smirror. A write clears them, as on
   the real core.
+- As on the real chip, the four cores share one L2 memory system, and
+  so one copy of its registers: `L2CTLR_EL1`, `L2ECTLR_EL1`,
+  `L2ACTLR_EL1` and `L2MERRSR_EL1`. A value that one core writes there,
+  the others read. These registers reset with the cluster, not when a
+  single core resets. The manual says so outright for `L2CTLR_EL1` and
+  `L2ECTLR_EL1`; for the other two, which control and report on the
+  same L2, smirror assumes it.
 
 A System register that the Cortex-A53 has but smirror does not
 implement yet, such as `CNTFRQ_EL0` of the Generic Timer, stops the
@@ -104,10 +112,6 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   allow a lower Exception level to write the configuration registers,
   but not what happens when the bit is 0. smirror traps the write to
   the Exception level whose `ACTLR` forbids it.
-- On the real chip, the four cores share one copy of the L2 registers
-  (`L2CTLR_EL1`, `L2ECTLR_EL1`, `L2ACTLR_EL1`, `L2MERRSR_EL1`). In smirror
-  each core has its own copy, so a value one core writes is not seen by
-  the others.
 - The firmware initializes the UART that it uses for its console. With
   `-kernel`, the program must set up UART0 itself. In particular, the
   PL011 resets to 5-bit characters: set UARTLCR_H to 8 bits first.

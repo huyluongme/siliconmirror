@@ -69,24 +69,34 @@ static const uint32_t bcm2837_ccsidr[] = {0x700fe01a, 0x201fe00a, 0x703fe07a};
  * registers record none; a write of any value sets them to the value of
  * sections 4.3.80 and 4.3.81. CBAR_EL1 holds the PERIPHBASE input, not
  * documented for the BCM2837, which has no GIC: it reads as 0.
+ *
+ * The four cores share a single L2 memory system (section 1.1), so the
+ * cluster has one copy of its registers, which nL2RESET resets on its
+ * own, apart from the cores (section 2.3.3). The TRM says so outright
+ * for L2CTLR_EL1 and L2ECTLR_EL1 (sections 4.3.64 and 4.3.65); for
+ * L2ACTLR_EL1 and L2MERRSR_EL1, which control and report on that same
+ * L2 memory system, this model assumes it.
  */
-#define RW(encoding, name, reset, actlr_bit)                                   \
-	{encoding, name, reset, false, false, 0, actlr_bit}
-#define FIXED(encoding, name, reset, written, actlr_bit)                       \
-	{encoding, name, reset, false, true, written, actlr_bit}
+#define RW(encoding, name, reset, actlr_bit, cluster)                          \
+	{encoding, name, reset, false, false, 0, actlr_bit, cluster}
+#define FIXED(encoding, name, reset, written, actlr_bit, cluster)              \
+	{encoding, name, reset, false, true, written, actlr_bit, cluster}
 #define READ_ONLY(encoding, name, reset)                                       \
-	{encoding, name, reset, true, false, 0, -1}
+	{encoding, name, reset, true, false, 0, -1, false}
+#define S3_1(crn, crm, op2) ARM64_SYSREG(3, 1, crn, crm, op2)
+#define CORE false
+#define CLUSTER true
 #define L2CTLR 0x03000000 /* four cores */
 
 static const Arm64ImpDefReg bcm2837_impdef[] = {
-	FIXED(ARM64_SYSREG(3, 1, 11, 0, 2), "L2CTLR_EL1", L2CTLR, L2CTLR, 4),
-	RW(ARM64_SYSREG(3, 1, 11, 0, 3), "L2ECTLR_EL1", 0, 5),
-	RW(ARM64_SYSREG(3, 1, 15, 0, 0), "L2ACTLR_EL1", 0x80000000, 6),
-	RW(ARM64_SYSREG(3, 1, 15, 2, 0), "CPUACTLR_EL1", 0x090ca000, 0),
-	RW(ARM64_SYSREG(3, 1, 15, 2, 1), "CPUECTLR_EL1", 0, 1),
-	FIXED(ARM64_SYSREG(3, 1, 15, 2, 2), "CPUMERRSR_EL1", 0, 0, -1),
-	FIXED(ARM64_SYSREG(3, 1, 15, 2, 3), "L2MERRSR_EL1", 0, 0x10000000, -1),
-	READ_ONLY(ARM64_SYSREG(3, 1, 15, 3, 0), "CBAR_EL1", 0),
+	FIXED(S3_1(11, 0, 2), "L2CTLR_EL1", L2CTLR, L2CTLR, 4, CLUSTER),
+	RW(S3_1(11, 0, 3), "L2ECTLR_EL1", 0, 5, CLUSTER),
+	RW(S3_1(15, 0, 0), "L2ACTLR_EL1", 0x80000000, 6, CLUSTER),
+	RW(S3_1(15, 2, 0), "CPUACTLR_EL1", 0x090ca000, 0, CORE),
+	RW(S3_1(15, 2, 1), "CPUECTLR_EL1", 0, 1, CORE),
+	FIXED(S3_1(15, 2, 2), "CPUMERRSR_EL1", 0, 0, -1, CORE),
+	FIXED(S3_1(15, 2, 3), "L2MERRSR_EL1", 0, 0x10000000, -1, CLUSTER),
+	READ_ONLY(S3_1(15, 3, 0), "CBAR_EL1", 0),
 };
 
 /*

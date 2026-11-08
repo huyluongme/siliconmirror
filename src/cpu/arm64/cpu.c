@@ -164,6 +164,8 @@ Cpu *arm64_cpu_create(const Arm64Config *config)
 		return NULL;
 	if (config->model != NULL && config->model->num_impdef > ARM64_MAX_IMPDEF)
 		return NULL;
+	if (config->cluster != NULL && config->cluster->model != config->model)
+		return NULL;
 
 	Arm64Cpu *c = calloc(1, sizeof(*c));
 
