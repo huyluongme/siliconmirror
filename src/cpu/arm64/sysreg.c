@@ -46,7 +46,7 @@ typedef enum Kind {
 	KIND_MIDR,   /* VPIDR_EL2 when read at EL1 with EL2 enabled */
 	KIND_MPIDR,  /* VMPIDR_EL2 likewise */
 	KIND_CCSIDR, /* the cache that CSSELR_EL1 selects */
-	KIND_ISR,    /* pending interrupts: none can be pending yet */
+	KIND_ISR,    /* pending interrupts, interrupt.c */
 	KIND_RVBAR,  /* the reset address */
 	KIND_ZERO,   /* reads as 0 */
 	KIND_TIMER,  /* a Generic Timer register, timer.c */
@@ -398,7 +398,7 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 		return true;
 	}
 	case KIND_ISR:
-		*value = 0;
+		*value = arm64_isr(c);
 		return true;
 	case KIND_RVBAR:
 		*value = c->config.reset_pc;

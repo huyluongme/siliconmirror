@@ -126,10 +126,12 @@ static Arm64Exec hint(Arm64Cpu *c, uint32_t insn)
 		c->cpu.state = CPU_HALTED;
 		return ARM64_EXEC_OK;
 	}
-	case 0x03: { /* WFI, C6.2.504: Hint_WFI(), no interrupt can be pending yet
-		          */
-		Arm64Exec trap = arm64_check_wfx_trap(c, false);
+	case 0x03: { /* WFI, C6.2.504: Hint_WFI() */
+		Arm64Exec trap;
 
+		if (arm64_interrupt_pending(c))
+			return ARM64_EXEC_OK;
+		trap = arm64_check_wfx_trap(c, false);
 		if (trap != ARM64_EXEC_OK)
 			return trap;
 		c->wait = ARM64_WAIT_INTERRUPT;

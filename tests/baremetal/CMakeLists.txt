@@ -39,6 +39,7 @@ add_baremetal_program(unimplemented)
 add_baremetal_program(exceptions)
 add_baremetal_program(boot)
 add_baremetal_program(timer)
+add_baremetal_program(irq)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -88,6 +89,14 @@ add_expect_test(baremetal.timer
 	STDOUT "^timer ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel timer.bin)
+
+# Interrupts through the ARM local peripherals: the Generic Timer, the
+# mailboxes, the local timer and the AXI outstanding interrupt, to IRQ
+# and FIQ, masked and not, and from core 0 to core 1. See irq.s.
+add_expect_test(baremetal.irq
+	STDOUT "^irq ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel irq.bin)
 
 # smirror is built from src/machine/raspi3b_stub.inc; this build has
 # assembled raspi3b_stub.s again (see src/machine/CMakeLists.txt). If

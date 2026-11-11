@@ -9,9 +9,11 @@
  * refer to that manual.
  *
  * The model runs in AArch64 state only: AArch32 is not supported. It
- * takes synchronous exceptions to AArch64 state; interrupts and SErrors
- * are not implemented yet. It has the Generic Timer, which counts from
- * the system counter that the board connects.
+ * takes synchronous exceptions and IRQ and FIQ interrupts to AArch64
+ * state; SErrors are not implemented yet. It has the Generic Timer, which
+ * counts from the system counter that the board connects, and the
+ * interrupt inputs of a Cortex-A53, which the board connects to an
+ * interrupt controller.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.
@@ -42,13 +44,19 @@
 
 /* Fields of System registers that the model acts on. */
 #define ARM64_SCR_NS (1u << 0)               /* SCR_EL3: lower ELs Non-secure */
+#define ARM64_SCR_IRQ (1u << 1)              /* IRQs to EL3 */
+#define ARM64_SCR_FIQ (1u << 2)              /* FIQs to EL3 */
 #define ARM64_SCR_SMD (1u << 7)              /* SMC disabled */
 #define ARM64_SCR_HCE (1u << 8)              /* HVC enabled */
 #define ARM64_SCR_RW (1u << 10)              /* EL2, or EL1, uses AArch64 */
 #define ARM64_SCR_ST (1u << 11)              /* Secure EL1 has CNTPS_* */
 #define ARM64_SCR_TWI (1u << 12)             /* trap WFI to EL3 */
 #define ARM64_SCR_TWE (1u << 13)             /* trap WFE to EL3 */
-#define ARM64_HCR_TWI (1u << 13)             /* HCR_EL2: trap WFI to EL2 */
+#define ARM64_HCR_FMO (1u << 3)              /* HCR_EL2: FIQs to EL2 */
+#define ARM64_HCR_IMO (1u << 4)              /* IRQs to EL2 */
+#define ARM64_HCR_VF (1u << 6)               /* virtual FIQ pending */
+#define ARM64_HCR_VI (1u << 7)               /* virtual IRQ pending */
+#define ARM64_HCR_TWI (1u << 13)             /* trap WFI to EL2 */
 #define ARM64_HCR_TWE (1u << 14)             /* trap WFE to EL2 */
 #define ARM64_HCR_TID1 (1u << 16)            /* trap ID group 1 */
 #define ARM64_HCR_TID2 (1u << 17)            /* ID group 2 */
@@ -73,6 +81,20 @@
 #define ARM64_CPTR_TCPAC (UINT32_C(1) << 31) /* CPTR_EL2, CPTR_EL3: CPACR */
 #define ARM64_MDCR_TDE (1u << 8)             /* MDCR_EL2: debug to EL2 */
 #define ARM64_MDCR_TDA (1u << 9)             /* MDCR_EL3: debug registers */
+
+/*
+ * The interrupt inputs of the PE, the nIRQ, nFIQ, nVIRQ and nVFIQ pins of
+ * a Cortex-A53 (Cortex-A53 TRM, A.5). A line is high while the request
+ * is asserted, which is LOW on the pins. A virtual interrupt is pending
+ * while its pin or its bit in HCR_EL2, VI or VF, requests it.
+ */
+typedef enum Arm64Input {
+	ARM64_INPUT_IRQ,
+	ARM64_INPUT_FIQ,
+	ARM64_INPUT_VIRQ,
+	ARM64_INPUT_VFIQ,
+	ARM64_NUM_INPUTS,
+} Arm64Input;
 
 /* What a CPU_HALTED CPU waits for, D1.7. */
 typedef enum Arm64Wait {
@@ -307,6 +329,8 @@ typedef struct Arm64Cpu {
 
 	Arm64SysRegs sys;
 	Arm64GenericTimer timer;
+	IrqLine inputs[ARM64_NUM_INPUTS];
+	uint32_t asserted; /* bit n set while inputs[n] is high */
 } Arm64Cpu;
 
 /*
@@ -334,5 +358,8 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value);
  * NULL. The line takes the output's current level.
  */
 void arm64_cpu_connect_timer(Arm64Cpu *c, Arm64TimerId id, IrqLine *line);
+
+/* An interrupt input of the PE, for the board to drive. */
+IrqLine *arm64_cpu_input(Arm64Cpu *c, Arm64Input input);
 
 #endif /* CPU_ARM64_CPU_H */

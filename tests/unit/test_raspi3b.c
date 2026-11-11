@@ -371,6 +371,59 @@ static void test_shared_l2_registers(void)
 	remove(KERNEL);
 }
 
+/*
+ * The four timers of each core reach the ARM local peripherals, in the
+ * bits of its source registers, and its IRQ and FIQ for the core reach
+ * the core's nIRQ and nFIQ.
+ */
+static void test_interrupt_wiring(void)
+{
+	static const struct {
+		uint16_t ctl, cval;
+	} timers[] = {
+		/* in the order of the source register bits */
+		{ARM64_CNTPS_CTL_EL1, ARM64_CNTPS_CVAL_EL1},
+		{ARM64_CNTP_CTL_EL0, ARM64_CNTP_CVAL_EL0},
+		{ARM64_CNTHP_CTL_EL2, ARM64_CNTHP_CVAL_EL2},
+		{ARM64_CNTV_CTL_EL0, ARM64_CNTV_CVAL_EL0},
+	};
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t value;
+
+	for (unsigned i = 0; i < RASPI3B_NUM_CPUS; i++) {
+		Arm64Cpu *core = arm64_cpu_of(m->cpus[i]);
+		uint64_t routing = RASPI3B_LOCAL_BASE + 0x40 + 4 * i;
+		uint64_t irq_source = RASPI3B_LOCAL_BASE + 0x60 + 4 * i;
+		uint64_t fiq_source = RASPI3B_LOCAL_BASE + 0x70 + 4 * i;
+
+		for (unsigned t = 0; t < ARRAY_SIZE(timers); t++) {
+			uint64_t isr;
+
+			/* CompareValue 0 is met at once. */
+			CHECK(arm64_cpu_write_sysreg(core, timers[t].cval, 0));
+			CHECK(arm64_cpu_write_sysreg(core, timers[t].ctl, 1));
+			CHECK_EQ(bus_write(m->bus, routing, 4, 1u << t), BUS_OK);
+			CHECK_EQ(bus_read(m->bus, irq_source, 4, &value), BUS_OK);
+			CHECK_EQ(value, 1u << t);
+			CHECK(arm64_cpu_read_sysreg(core, ARM64_ISR_EL1, &isr));
+			CHECK_EQ(isr, 0x80);
+			CHECK_EQ(bus_write(m->bus, routing, 4, 0x10u << t), BUS_OK);
+			CHECK_EQ(bus_read(m->bus, fiq_source, 4, &value), BUS_OK);
+			CHECK_EQ(value, 1u << t);
+			CHECK(arm64_cpu_read_sysreg(core, ARM64_ISR_EL1, &isr));
+			CHECK_EQ(isr, 0x40);
+			CHECK(arm64_cpu_write_sysreg(core, timers[t].ctl, 0));
+			CHECK(arm64_cpu_read_sysreg(core, ARM64_ISR_EL1, &isr));
+			CHECK_EQ(isr, 0);
+		}
+	}
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -420,6 +473,7 @@ int main(void)
 	RUN_TEST(test_state_before_the_stub);
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
+	RUN_TEST(test_interrupt_wiring);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);

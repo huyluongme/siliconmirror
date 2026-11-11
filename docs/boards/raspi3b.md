@@ -58,7 +58,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x00000000` | 1008 MB | RAM                                                         | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                                 | Partly                     |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                          | Yes, without its interrupt |
-| `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes    | Partly: the core timer     |
+| `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes    | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
 an error that names the access: what the real board does there is not
@@ -95,8 +95,7 @@ Each core has the four timers of an Armv8.0 core with EL3 and EL2
 `CNTKCTL_EL1`, `CNTHCTL_EL2` and `CNTVOFF_EL2`, with the access rules of
 the Arm Architecture Reference Manual, and the two event streams that
 wake `WFE`. A timer's interrupt output follows `ENABLE`, `IMASK` and
-`ISTATUS`, but it is not connected yet: software can poll `ISTATUS`,
-and interrupts come with the interrupt controllers.
+`ISTATUS`, and goes to the ARM local peripherals: see Interrupts.
 
 The document does not say how the prescaler works inside. smirror
 treats it as an accumulator: each clock edge adds the prescaler, and
@@ -111,6 +110,68 @@ each time the sum reaches 2^31 the timer steps. Its other choices:
   time, up to 1 µs. When a core accesses the block at an earlier time
   than the last change, the block uses the time of that change: its
   time never goes back.
+
+## Interrupts
+
+Each core has the interrupt inputs of a Cortex-A53: `nIRQ`, `nFIQ`, and
+the virtual `nVIRQ` and `nVFIQ`. The ARM local peripherals drive
+`nIRQ` and `nFIQ` of each core; their document shows no way to drive
+`nVIRQ` and `nVFIQ`, so on this board virtual interrupts come only from
+`HCR_EL2.VI` and `VF`.
+
+The cores take IRQs and FIQs as the Arm Architecture Reference Manual
+says (D1.4.6.4 and Table D1-22): `SCR_EL3.IRQ` and `FIQ` send them to
+EL3, `HCR_EL2.IMO`, `FMO` and `TGE` to EL2, and `PSTATE.I` and `F` mask
+them at their target level and on the way from EL0 to EL1. An
+interrupt that is pending and not masked is taken before the next
+instruction. `WFI` does not wait while an interrupt is pending, and an
+interrupt ends its wait; `WFE` waits on, unless the interrupt is one
+that the core takes. `ISR_EL1` shows what is pending.
+
+The ARM local peripherals (BCM2836 document, sections 3.2, 3.3 and 4.4
+to 4.11) route these interrupts to each core's IRQ or FIQ:
+
+| Source                             | Goes to                                   | Routing register  |
+|------------------------------------|-------------------------------------------|-------------------|
+| The four timers of a core          | that core                                 | `0x40` + 4 × core |
+| The four mailboxes of a core       | that core                                 | `0x50` + 4 × core |
+| The performance monitors of a core | that core                                 | `0x10`, `0x14`    |
+| GPU IRQ, GPU FIQ                   | the core in the routing                   | `0x0c`            |
+| The local timer                    | the IRQ or FIQ of the core in the routing | `0x24`            |
+| The AXI outstanding interrupt      | the IRQ of core 0                         | none              |
+
+`0x60` and `0x70` + 4 × core show the IRQ and FIQ sources of each core.
+The mailboxes, at `0x80` (write to set bits) and `0xc0` (read, write to
+clear bits), interrupt while not 0, which makes them the doorbells that
+one core rings for another. The local timer counts down 38.4 million
+times a second, on each edge of the 19.2 MHz crystal.
+
+The document leaves some things open; smirror chooses:
+
+- Reads of write-only registers and of reserved bits give 0; writes to
+  read-only registers and reserved bits are ignored. The PMU routing
+  registers, write-set at `0x10` and write-clear at `0x14`, both read
+  as the routing.
+- `0x18` and `0x3c`, unused, read as 0 and ignore writes. The document
+  does not give the contents of the deprecated `0x04` and of the
+  routing of local interrupts 8 to 15 at `0x28`: they stop the machine.
+- In the mailbox routing, the document says that bit 4 overrides bit 1;
+  every other FIQ bit overrides the IRQ bit 4 below it, and smirror
+  does the same for bit 5.
+- The local timer sets its flag every reload-value pulses, and a reload
+  value of 0 acts as 1.
+- The AXI outstanding interrupt comes when no core has had an AXI
+  transfer for the time-out. smirror has no caches, so a core that runs
+  makes transfers all the time: the bus is quiet only while every core
+  waits, and an access to the ARM local peripherals is a transfer. The
+  document does not say how the interrupt ends, and reading the source
+  registers is itself a transfer, so smirror keeps it until software
+  clears its enable bit. The outstanding counters read as one read: the
+  read of them.
+- When several interrupts are pending, the architecture leaves the
+  order to the core (D1.4.6.5). smirror takes a physical FIQ, then a
+  physical IRQ, then a virtual FIQ, then a virtual IRQ, each before the
+  instruction at the PC and any exception that it would raise.
 
 ## Boot with `-kernel`
 
@@ -188,7 +249,16 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - No device tree is passed yet: X0 is 0.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
-- The timers' interrupts are not delivered yet.
+- The GPU's interrupt controller is not modelled yet, so nothing
+  drives the GPU IRQ and FIQ of the ARM local peripherals.
+- The cores have no performance monitors, so their interrupt never
+  comes.
+- A core sees an interrupt from another core, such as a mailbox, at its
+  next instruction. The cores take turns through the same 1 µs of
+  virtual time, so a core that runs later in the turn can see it up to
+  1 µs before it was sent. smirror notices that the bus has gone quiet
+  at the end of such a turn, so the AXI outstanding interrupt can come
+  up to 1 µs late.
 - The GPU's share of the RAM, a firmware setting, is not modelled: all
   of the RAM below the peripherals is free.
 - GPIO pin functions are not modelled, and UART0 always goes to
@@ -214,15 +284,17 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   ARM DDI 0500J, chapter 4: identification and reset values, the
   configuration registers and the `ACTLR` bits that control them
   (`ACTLR_EL3` 4.3.33, `L2CTLR_EL1` 4.3.64, `CPUECTLR_EL1` 4.3.79),
-  and the reset values of the Generic Timer registers (4.3).
+  and the reset values of the Generic Timer registers (4.3); appendix
+  A.5: the interrupt inputs `nIRQ`, `nFIQ`, `nVIRQ` and `nVFIQ`.
 - `/proc/cpuinfo` of a Raspberry Pi 3, for example in
   [this gist](https://gist.github.com/fawick/d142633de52b31d0dade):
   CPU part `0xd03`, revision 4, so a Cortex-A53 r0p4.
 - [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf),
   section 13: the PL011 and its FIFOs.
 - [BCM2836 ARM-local peripherals](https://datasheets.raspberrypi.com/bcm2836/bcm2836-peripherals.pdf)
-  (Quad-A7 control, rev 3.4), sections 3.1, 4.2 and 4.3: the core timer.
-  The BCM2837 has the same block.
+  (Quad-A7 control, rev 3.4): the core timer (sections 3.1, 4.2 and
+  4.3), the interrupt routing and the mailboxes (3.2, 3.3 and 4.4 to
+  4.10), the local timer (4.11). The BCM2837 has the same block.
 - [Trusted Firmware-A, Raspberry Pi 3](https://github.com/ARM-software/arm-trusted-firmware/blob/master/docs/plat/rpi3.rst):
   RAM size, and the default stub that starts `kernel8.img` at EL2.
 - The default stub,
@@ -235,7 +307,12 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   ARM DDI 0487 issue M.d: `SCR_EL3` (D24.2.168), `SCTLR_EL2`
   (D24.2.175), `CPTR_EL3` (D24.2.38), `MPIDR_EL1` (D24.2.137),
   `SPSR_EL3` (C5.2.23) and the Event Register (D1.7.1.1); the Generic
-  Timer (D12) and its registers (D24.10).
+  Timer (D12) and its registers (D24.10); interrupts: their masking
+  and targets (D1.4.6.4, Table D1-22) and order (D1.4.6.5),
+  `AArch64_TakePhysicalIRQException()` and the functions around it
+  (J1.2.2.16 to J1.2.2.20), `Hint_WFI()` and
+  `AArch64_InterruptPending()`, the wakeup events of `WFE` and `WFI`
+  (D1.7.1.4, D1.7.2.1), and `ISR_EL1` (D24.2).
 - Raspberry Pi documentation, `kernel_address` in the
   [2021 version of the config.txt boot options](https://github.com/raspberrypi/documentation/blob/16480247dcac12d1f828c0f2556a3bc430de3c90/configuration/config-txt/boot.md):
   64-bit kernels load at `0x80000`.

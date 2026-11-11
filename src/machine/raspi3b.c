@@ -6,8 +6,10 @@
  * RAM, and the peripherals of the BCM2835 at a new address. The memory
  * map and the boot are described in docs/boards/raspi3b.md.
  *
- * Devices so far: UART0, a PL011. Its interrupt is not connected, as the
- * interrupt controllers are not modelled yet.
+ * Devices so far: the ARM local peripherals, which give the cores their
+ * system counter and route their interrupts, and UART0, a PL011. The
+ * UART's interrupt is not connected, as the GPU's interrupt controller
+ * is not modelled yet.
  */
 
 #include "machine/raspi3b.h"
@@ -82,6 +84,32 @@ static void reset_cluster(void *ctx)
 static void destroy_cluster(void *ctx)
 {
 	arm64_cluster_destroy(ctx);
+}
+
+/*
+ * Wire a core to the ARM local peripherals: the interrupt outputs of its
+ * Generic Timer to the block's inputs for the core, and the block's IRQ
+ * and FIQ for the core to its nIRQ and nFIQ. The block's document gives
+ * no way to drive nVIRQ and nVFIQ, which stay unconnected, and the model
+ * has no performance monitors to connect.
+ */
+static void connect_core(Bcm2836Local *local, Arm64Cpu *core, unsigned i)
+{
+	static const struct {
+		Arm64TimerId timer;
+		Bcm2836LocalInput input;
+	} timers[] = {
+		{ARM64_TIMER_SECURE, BCM2836_LOCAL_CNTPS},
+		{ARM64_TIMER_PHYS, BCM2836_LOCAL_CNTPNS},
+		{ARM64_TIMER_HYP, BCM2836_LOCAL_CNTHP},
+		{ARM64_TIMER_VIRT, BCM2836_LOCAL_CNTV},
+	};
+
+	for (unsigned t = 0; t < ARRAY_SIZE(timers); t++)
+		arm64_cpu_connect_timer(core, timers[t].timer,
+		                        bcm2836_local_input(local, i, timers[t].input));
+	bcm2836_local_connect(local, i, arm64_cpu_input(core, ARM64_INPUT_IRQ),
+	                      arm64_cpu_input(core, ARM64_INPUT_FIQ));
 }
 
 static void reset_local(void *ctx)
@@ -209,6 +237,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 			cpu->ops->destroy(cpu);
 			goto out_of_memory;
 		}
+		connect_core(local, arm64_cpu_of(cpu), i);
 	}
 
 	uart = pl011_create(&bcm2835_pl011, options->serial, NULL);

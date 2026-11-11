@@ -146,7 +146,11 @@ The main loop, `machine_run()` in `core/machine.c`, works in turns:
 
 When every CPU is waiting (WFI, WFE), time jumps straight to the next
 event. When no event is pending either, nothing can ever happen again, so
-the machine stops with `MACHINE_STOP_IDLE`.
+the machine stops with `MACHINE_STOP_IDLE`. At the end of a turn, the
+machine tells its idle listener, if a device set one, when every CPU
+has stopped running or one runs again: a device that watches the bus
+traffic of the CPUs, such as the AXI outstanding interrupt of the
+BCM2836, uses it.
 
 Known limits, to be handled when the devices that need it arrive:
 
@@ -160,6 +164,10 @@ Known limits, to be handled when the devices that need it arrive:
   turn at the earliest, up to 1 µs late. A timer's state that software
   reads, such as `ISTATUS`, is computed at the time of the read, so it
   is exact; only the interrupt is late.
+- An interrupt that a CPU raises for another, such as through a
+  mailbox, reaches it at its next instruction. If that CPU runs later
+  in the same turn, it sees the interrupt up to 1 µs of virtual time
+  before it was sent.
 - Input from the host, such as a terminal connected to a UART, can wake
   a waiting machine, so such a machine must wait for input instead of
   stopping as idle.

@@ -54,12 +54,15 @@ static void take_undefined(Arm64Cpu *c)
 }
 
 /*
- * Fetch, decode and execute one instruction, or take the exception that
- * it raises. Returns false when the machine stops: on what the model does
- * not emulate yet.
+ * Take a pending interrupt, or fetch, decode and execute one instruction
+ * or take the exception that it raises. Returns false when the machine stops:
+ * on what the model does not emulate yet.
  */
 static bool step(Arm64Cpu *c)
 {
+	if (arm64_interrupt_requested(c) && arm64_take_pending_interrupt(c))
+		return true;
+
 	/*
 	 * Priorities 6 and 7 of D1.4.5.6: a PC alignment fault, then an
 	 * Illegal Execution state exception. The second may also come after
@@ -187,6 +190,7 @@ Cpu *arm64_cpu_create(const Arm64Config *config)
 		return NULL;
 	cpu_init(&c->cpu, &arm64_ops);
 	c->config = *config;
+	arm64_interrupt_init(c);
 	if (!arm64_timer_init(c)) {
 		free(c);
 		return NULL;

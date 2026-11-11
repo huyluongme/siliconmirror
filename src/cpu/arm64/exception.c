@@ -2,11 +2,11 @@
 /* Copyright (C) 2026 Huy Luong Duc */
 
 /*
- * Synchronous exceptions of the AArch64 model: taking an exception
- * (D1.4.2, AArch64_TakeException() in J1.2.2.38), the exception return
- * (D1.4.4, AArch64_ExceptionReturn() in J1.2.3.36), the instructions that
- * generate exceptions, and the faults and traps that the CPU checks
- * itself.
+ * Exceptions of the AArch64 model: taking an exception (D1.4.2,
+ * AArch64_TakeException() in J1.2.2.38), synchronous or an interrupt that
+ * interrupt.c decided to take, the exception return (D1.4.4,
+ * AArch64_ExceptionReturn() in J1.2.3.36), the instructions that generate
+ * exceptions, and the faults and traps that the CPU checks itself.
  *
  * The model runs in AArch64 state only, so exceptions come from AArch64
  * state and go to it. An exception return to AArch32 state that the
@@ -108,11 +108,15 @@ static uint64_t pstate_to_spsr(const Arm64Cpu *c)
 	       (uint64_t)c->el << 2 | (c->sp_sel ? 1 : 0);
 }
 
-void arm64_take_exception(Arm64Cpu *c)
+/*
+ * AArch64_TakeException() from AArch64 state to target, with the
+ * offset of the exception type in the vector table (D1.4.1.6) and the
+ * preferred return address. An IRQ or FIQ leaves ESR_ELx and FAR_ELx
+ * alone: AArch64_ReportException() is not called for them.
+ */
+static void take(Arm64Cpu *c, unsigned target, uint64_t offset,
+                 uint64_t return_address, bool report)
 {
-	unsigned target = c->exception.target_el;
-	uint64_t offset = 0; /* synchronous exceptions, D1.4.1.6 */
-
 	if (target > c->el) {
 		bool lower_32;
 
@@ -129,17 +133,29 @@ void arm64_take_exception(Arm64Cpu *c)
 	 * AArch64_ReportException(), J1.2.2.28. FAR_ELx is ARBITRARY for the
 	 * exceptions without an address: it keeps its value.
 	 */
-	c->sys.esr[target] = c->exception.esr;
-	if (c->exception.far_valid)
-		c->sys.far[target] = c->exception.far;
+	if (report) {
+		c->sys.esr[target] = c->exception.esr;
+		if (c->exception.far_valid)
+			c->sys.far[target] = c->exception.far;
+	}
 	c->sys.spsr[target] = pstate_to_spsr(c);
-	c->sys.elr[target] = c->exception.return_address;
+	c->sys.elr[target] = return_address;
 
 	c->el = target;
 	c->sp_sel = true;
 	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
 	c->il = false;
 	c->pc = (c->sys.vbar[target] & ~(uint64_t)0x7ff) + offset;
+}
+
+void arm64_take_exception(Arm64Cpu *c)
+{
+	take(c, c->exception.target_el, 0, c->exception.return_address, true);
+}
+
+void arm64_take_interrupt(Arm64Cpu *c, unsigned target_el, bool fiq)
+{
+	take(c, target_el, fiq ? 0x100 : 0x80, c->pc, false);
 }
 
 /*

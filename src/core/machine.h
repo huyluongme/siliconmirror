@@ -49,6 +49,15 @@ typedef struct MachineDevice {
 	void (*destroy)(void *ctx);
 } MachineDevice;
 
+/*
+ * Told when the CPUs of the machine stop running or start again. idle is
+ * true when none runs any more, and since is the time the last one
+ * stopped, its last instruction done; idle is false when one runs again,
+ * and since is the start of its turn. The main loop calls it at the end
+ * of a turn, before the events of the turn fire.
+ */
+typedef void (*MachineIdleListener)(void *ctx, bool idle, uint64_t since);
+
 struct Machine {
 	Bus *bus;
 	EventQueue events;
@@ -60,6 +69,9 @@ struct Machine {
 	uint64_t insns; /* instructions run so far, by all CPUs */
 	MachineStop stop;
 	char stop_message[256];
+	bool idle; /* no CPU runs, as last told to the idle listener */
+	MachineIdleListener idle_listener;
+	void *idle_ctx;
 };
 
 /* Create a machine with an empty bus. Returns NULL when out of memory. */
@@ -85,6 +97,12 @@ bool machine_add_cpu(Machine *m, Cpu *cpu);
  */
 bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
                         void (*destroy)(void *ctx));
+
+/*
+ * Set the one idle listener of the machine, or remove it with NULL. A
+ * new machine counts as running.
+ */
+void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx);
 
 /* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);

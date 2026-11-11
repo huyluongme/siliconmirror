@@ -65,6 +65,10 @@ add_executable(test_arm64_timer test_arm64_timer.c)
 target_link_libraries(test_arm64_timer PRIVATE cpu)
 add_test(NAME unit.arm64_timer COMMAND test_arm64_timer)
 
+add_executable(test_arm64_interrupt test_arm64_interrupt.c)
+target_link_libraries(test_arm64_interrupt PRIVATE cpu)
+add_test(NAME unit.arm64_interrupt COMMAND test_arm64_interrupt)
+
 add_executable(test_arm64_exception test_arm64_exception.c)
 target_link_libraries(test_arm64_exception PRIVATE cpu)
 add_test(NAME unit.arm64_exception COMMAND test_arm64_exception)

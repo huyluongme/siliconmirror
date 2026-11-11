@@ -241,12 +241,14 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
  * Exceptions, from exception.c. arm64_raise() makes the current
  * instruction raise a synchronous exception that returns to it, and
  * returns ARM64_EXEC_EXCEPTION; arm64_take_exception() then takes the
- * exception that c->exception describes. arm64_el1_target() is where an
- * Undefined Instruction exception goes.
+ * exception that c->exception describes. arm64_take_interrupt() takes an
+ * IRQ, or FIQ, to target_el before the instruction at the PC.
+ * arm64_el1_target() is where an Undefined Instruction exception goes.
  */
 Arm64Exec arm64_raise(Arm64Cpu *c, unsigned target_el, unsigned ec,
                       uint32_t iss);
 void arm64_take_exception(Arm64Cpu *c);
+void arm64_take_interrupt(Arm64Cpu *c, unsigned target_el, bool fiq);
 unsigned arm64_el1_target(const Arm64Cpu *c);
 Arm64Exec arm64_exec_exception_gen(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_eret(Arm64Cpu *c);
@@ -255,6 +257,25 @@ Arm64Exec arm64_check_sp_alignment(Arm64Cpu *c);
 Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write);
 void arm64_pc_alignment_fault(Arm64Cpu *c);
 void arm64_illegal_state(Arm64Cpu *c);
+
+/*
+ * Interrupts, from interrupt.c. arm64_interrupt_init() sets up the
+ * inputs, low. arm64_take_pending_interrupt() takes the interrupt that
+ * is pending and not masked, if there is one, and says whether it did.
+ * arm64_interrupt_pending() is AArch64_InterruptPending(): whether any
+ * IRQ or FIQ is pending, masked or not. arm64_isr() is ISR_EL1.
+ */
+void arm64_interrupt_init(Arm64Cpu *c);
+bool arm64_take_pending_interrupt(Arm64Cpu *c);
+bool arm64_interrupt_pending(const Arm64Cpu *c);
+uint64_t arm64_isr(const Arm64Cpu *c);
+
+/* Whether an interrupt may be pending: false is the quick common case. */
+static inline bool arm64_interrupt_requested(const Arm64Cpu *c)
+{
+	return c->asserted != 0 ||
+	       (c->sys.hcr_el2 & (ARM64_HCR_VI | ARM64_HCR_VF)) != 0;
+}
 
 /* SEV, from cpu.c: signal an event to every PE of the machine. */
 void arm64_send_event(Arm64Cpu *c);

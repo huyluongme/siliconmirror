@@ -87,15 +87,25 @@ void machine_stop(Machine *m, MachineStop reason, const char *fmt, ...)
 	va_end(args);
 }
 
+void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx)
+{
+	m->idle_listener = fn;
+	m->idle_ctx = ctx;
+}
+
 /*
  * Give every running CPU one turn, covering virtual time from now to end.
- * Returns whether any CPU was running.
+ * Returns whether any CPU was running. *last becomes the latest time a
+ * CPU got to in the turn, its last instruction done, or 0 if no CPU ran
+ * an instruction.
  */
-static bool run_cpus(Machine *m, uint64_t end, uint64_t limit)
+static bool run_cpus(Machine *m, uint64_t end, uint64_t limit, uint64_t *last)
 {
-	uint64_t slice = (end - m->events.now) / MACHINE_NS_PER_INSN;
+	uint64_t start = m->events.now;
+	uint64_t slice = (end - start) / MACHINE_NS_PER_INSN;
 	bool any_running = false;
 
+	*last = 0;
 	for (unsigned i = 0; i < m->num_cpus; i++) {
 		Cpu *cpu = m->cpus[i];
 
@@ -111,12 +121,39 @@ static bool run_cpus(Machine *m, uint64_t end, uint64_t limit)
 			continue;
 
 		m->running = cpu;
-		m->insns += cpu->ops->run(cpu, budget);
+
+		uint64_t n = cpu->ops->run(cpu, budget);
+
 		m->running = NULL;
+		m->insns += n;
+		if (n > 0 && start + n * MACHINE_NS_PER_INSN > *last)
+			*last = start + n * MACHINE_NS_PER_INSN;
 		if (m->stop != MACHINE_STOP_NONE)
 			break;
 	}
 	return any_running;
+}
+
+/*
+ * After a turn that started at start: tell the idle listener if the CPUs
+ * started running, or all stopped. last is from run_cpus().
+ */
+static void track_idle(Machine *m, uint64_t start, uint64_t last)
+{
+	bool running = false;
+
+	for (unsigned i = 0; i < m->num_cpus; i++)
+		running |= m->cpus[i]->state == CPU_RUNNING;
+	if (last != 0 && m->idle) {
+		m->idle = false;
+		if (m->idle_listener != NULL)
+			m->idle_listener(m->idle_ctx, false, start);
+	}
+	if (!running && !m->idle) {
+		m->idle = true;
+		if (m->idle_listener != NULL)
+			m->idle_listener(m->idle_ctx, true, last != 0 ? last : start);
+	}
 }
 
 MachineStop machine_run(Machine *m, uint64_t max_insns)
@@ -136,7 +173,13 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 		uint64_t end =
 			next - now < MACHINE_SLICE_NS ? next : now + MACHINE_SLICE_NS;
 
-		if (!run_cpus(m, end, limit)) {
+		uint64_t last;
+		bool any_running = run_cpus(m, end, limit, &last);
+
+		track_idle(m, now, last);
+		if (!any_running) {
+			/* The idle listener may have scheduled an event. */
+			next = event_queue_next(&m->events);
 			if (next == EVENT_NEVER) {
 				machine_stop(m, MACHINE_STOP_IDLE,
 				             "every CPU is waiting and no event is pending");

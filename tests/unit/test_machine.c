@@ -169,6 +169,90 @@ static void wake(void *ctx)
 	w->cpu->cpu.state = CPU_RUNNING;
 }
 
+/* What the idle listener heard, and an event it schedules once. */
+static struct {
+	unsigned calls;
+	bool idle[8];
+	uint64_t since[8];
+	Event ev;
+	uint64_t delay; /* schedule ev this long after the first idle */
+} heard;
+
+static void listen_idle(void *ctx, bool idle, uint64_t since)
+{
+	Machine *m = ctx;
+
+	if (heard.calls < ARRAY_SIZE(heard.idle)) {
+		heard.idle[heard.calls] = idle;
+		heard.since[heard.calls] = since;
+	}
+	if (heard.calls == 0 && heard.delay != 0)
+		event_schedule(&m->events, &heard.ev, since + heard.delay);
+	heard.calls++;
+}
+
+static void test_idle_listener(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f0 = add_fake_cpu(m, 2300);
+	Waker w;
+
+	add_fake_cpu(m, 2100);
+	memset(&heard, 0, sizeof(heard));
+	w = (Waker){.cpu = f0};
+	event_init(&w.ev, wake, &w);
+	event_schedule(&m->events, &w.ev, 50000);
+	machine_set_idle_listener(m, listen_idle, m);
+
+	/*
+	 * Idle in the third turn, when the first CPU halts after its 2300th
+	 * instruction, though the second ran later in the turn and halted
+	 * after its 2100th; running again when the event wakes the first,
+	 * idle again after 10 more instructions.
+	 */
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(heard.calls, 3);
+	CHECK(heard.idle[0]);
+	CHECK_EQ(heard.since[0], 2300);
+	CHECK(!heard.idle[1]);
+	CHECK_EQ(heard.since[1], 50000);
+	CHECK(heard.idle[2]);
+	CHECK_EQ(heard.since[2], 50010);
+	CHECK(m->idle);
+
+	/* Nothing more to tell while the machine stays idle. */
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(heard.calls, 3);
+	machine_destroy(m);
+}
+
+static uint64_t fired_at;
+
+static void note_time(void *ctx)
+{
+	fired_at = machine_now(ctx);
+}
+
+/* What the idle listener schedules when no CPU runs still happens. */
+static void test_idle_listener_schedules(void)
+{
+	Machine *m = machine_create();
+
+	memset(&heard, 0, sizeof(heard));
+	heard.delay = 700;
+	fired_at = 0;
+	event_init(&heard.ev, note_time, m);
+	machine_set_idle_listener(m, listen_idle, m);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(heard.calls, 1);
+	CHECK(heard.idle[0]);
+	CHECK_EQ(heard.since[0], 0);
+	CHECK_EQ(fired_at, 700);
+	CHECK_EQ(m->events.now, 700);
+	machine_set_idle_listener(m, NULL, NULL);
+	machine_destroy(m);
+}
+
 static void test_event_wakes_halted_cpu(void)
 {
 	Machine *m = machine_create();
@@ -393,6 +477,8 @@ int main(void)
 	RUN_TEST(test_reset_and_cpu_limit);
 	RUN_TEST(test_devices);
 	RUN_TEST(test_now_in_a_turn);
+	RUN_TEST(test_idle_listener);
+	RUN_TEST(test_idle_listener_schedules);
 	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
 	return test_summary();
