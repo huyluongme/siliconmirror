@@ -9,12 +9,13 @@
  * Peripherals datasheet for the Raspberry Pi variant.
  *
  * Implemented so far: transmitting, the flag register, the control and
- * configuration registers, and the identification registers. Bytes are
- * passed to the output stream as soon as the UART may send them; the
- * time a real UART takes to shift them out is not modelled.
+ * configuration registers, the interrupt registers and the identification
+ * registers. A byte takes the time of its frame at the baud rate to go
+ * out, and reaches the output stream when its stop bits are done; the
+ * transmit interrupt follows the transmit FIFO through its trigger level.
  *
- * Not implemented yet: receiving, interrupts, loopback. The interrupt
- * registers hold their values, but no interrupt is ever raised.
+ * Not implemented yet: receiving, with its interrupts, and loopback. The
+ * modem status inputs never change, so they never interrupt.
  */
 
 #ifndef HW_CHAR_PL011_H
@@ -25,6 +26,7 @@
 #include "core/bus.h"
 #include "core/char_stream.h"
 #include "core/irq.h"
+#include "core/machine.h"
 
 /* Size of the register block. */
 #define PL011_MMIO_SIZE 0x1000
@@ -51,11 +53,15 @@ extern const Pl011Config pl011_arm_r1p5;
 typedef struct Pl011 Pl011;
 
 /*
- * Create a UART in its reset state. Bytes it sends go to out; irq is its
- * interrupt output (UARTINTR). Either may be NULL when not connected.
- * Returns NULL when out of memory.
+ * Create a UART in its reset state, with a reference clock UARTCLK of
+ * clock_hz. It takes the time from m, and stops m when software asks it
+ * to send with a baud rate divisor that the manual calls invalid. Bytes
+ * it sends go to out; irq is its interrupt output (UARTINTR). Either may
+ * be NULL when not connected. Returns NULL when config or clock_hz is
+ * invalid, or memory runs out.
  */
-Pl011 *pl011_create(const Pl011Config *config, CharStream *out, IrqLine *irq);
+Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
+                    CharStream *out, IrqLine *irq);
 
 void pl011_destroy(Pl011 *uart);
 

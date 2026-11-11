@@ -11,6 +11,7 @@
 /* Memory map, as the Arm cores see it. */
 #define RASPI3B_RAM_SIZE 0x3f000000 /* RAM from 0 up to the peripherals */
 #define RASPI3B_PERIPHERAL_BASE 0x3f000000 /* bus address 0x7e000000 */
+#define RASPI3B_IC_BASE (RASPI3B_PERIPHERAL_BASE + 0xb200) /* interrupts */
 #define RASPI3B_UART0_BASE (RASPI3B_PERIPHERAL_BASE + 0x201000)
 #define RASPI3B_LOCAL_BASE 0x40000000 /* the ARM local peripherals */
 

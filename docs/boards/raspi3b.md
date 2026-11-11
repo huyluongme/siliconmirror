@@ -53,17 +53,17 @@ are UNDEFINED.
 Addresses as the Arm cores see them. The peripherals sit at bus address
 `0x7e000000` and up, which the Arm cores see at `0x3f000000`.
 
-| Address      | Size    | Contents                                                    | Modelled                   |
-|--------------|---------|-------------------------------------------------------------|----------------------------|
-| `0x00000000` | 1008 MB | RAM                                                         | Yes                        |
-| `0x3f000000` | 16 MB   | Peripherals                                                 | Partly                     |
-| `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                          | Yes, without its interrupt |
-| `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes    | Yes, but `0x04` and `0x28` |
+| Address      | Size    | Contents                                                 | Modelled                   |
+|--------------|---------|----------------------------------------------------------|----------------------------|
+| `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
+| `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
+| `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
+| `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes, but not receiving     |
+| `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
 an error that names the access: what the real board does there is not
-known. So does a register of the ARM local peripherals that is not
-modelled yet.
+known. So does a register of a device that is not modelled yet.
 
 ## The Generic Timer
 
@@ -146,7 +146,19 @@ clear bits), interrupt while not 0, which makes them the doorbells that
 one core rings for another. The local timer counts down 38.4 million
 times a second, on each edge of the 19.2 MHz crystal.
 
-The document leaves some things open; smirror chooses:
+The GPU IRQ and GPU FIQ come from the interrupt controller at
+`0x3f00b200` (BCM2835 ARM Peripherals, chapter 7). It takes the 64
+interrupts of the GPU's peripherals, UART0 among them as interrupt 57,
+and the 8 of the ARM's own, such as the ARM timer and mailbox. An
+interrupt is pending while it is raised and enabled; the GPU IRQ is set
+while any is pending. Pending 1 and 2 show the GPU's, and the basic
+pending register the ARM's, eleven selected GPU interrupts again (7, 9,
+10, 18, 19, 53 to 57 and 62) in bits 10 to 20, and in bits 8 and 9
+whether pending 1 or 2 has others. The GPU FIQ follows the one
+interrupt that the FIQ register selects, whether its IRQ is enabled or
+not. Of its sources, only UART0 is modelled yet.
+
+The documents leave some things open; smirror chooses:
 
 - Reads of write-only registers and of reserved bits give 0; writes to
   read-only registers and reserved bits are ignored. The PMU routing
@@ -168,10 +180,46 @@ The document leaves some things open; smirror chooses:
   registers is itself a transfer, so smirror keeps it until software
   clears its enable bit. The outstanding counters read as one read: the
   read of them.
+- The disable registers of the interrupt controller read as the enable
+  bits, as the enable registers do. Its document marks the FIQ enable
+  bit as read-only, but software sets it to enable the FIQ: it is
+  read-write. Enabling the FIQ with a source of 72 to 127, which the
+  document says not to use, stops the machine, and so does an access to
+  the rest of the controller's 512 bytes, after `0x3f00b224`.
 - When several interrupts are pending, the architecture leaves the
   order to the core (D1.4.6.5). smirror takes a physical FIQ, then a
   physical IRQ, then a virtual FIQ, then a virtual IRQ, each before the
   instruction at the PC and any exception that it would raise.
+
+## UART0
+
+UART0 is a PL011 with 16-entry FIFOs (BCM2835 ARM Peripherals, chapter
+13) and a 48 MHz reference clock, `UARTCLK`, the default of
+`init_uart_clock` in `config.txt`. Sending a byte takes the time of its
+frame at the baud rate: a start bit, 5 to 8 data bits, a parity bit if
+enabled, and 1 or 2 stop bits, each bit lasting 16 × (`UARTIBRD` +
+`UARTFBRD`/64) periods of `UARTCLK`. At 115200 baud (`UARTIBRD` 26,
+`UARTFBRD` 3), an 8-bit character with one stop bit takes 86.8 µs. The
+byte reaches `-serial` when its last stop bit is done. As in the PL011
+manual, the divisor and the frame format take effect at the next write
+of `UARTLCR_H`, a disabled UART finishes the byte it is sending, and
+`BUSY` stays set until the last stop bit.
+
+The UART's interrupt, `UARTINTR`, goes to interrupt 57 of the interrupt
+controller. Its transmit interrupt follows the transmit FIFO through
+the trigger level that `UARTIFLS` selects, as the PL011 manual
+describes: it sets when a byte leaving the FIFO takes it from above the
+level to the level or below, and clears when writes take it above.
+Without FIFOs, it sets when the holding register empties.
+
+The manual calls a divisor below 1, or 65535 with a fraction, invalid,
+and its trigger levels `0b101` to `0b111` reserved. Sending with such a
+divisor, or with such a level while the FIFOs are on, stops the machine.
+
+Receiving is not modelled yet: the receive FIFO stays empty, and the
+receive, timeout and error interrupts never come. The BCM2835's PL011
+has no DSR, DCD or RI inputs, and its CTS input comes through a GPIO pin
+that is not modelled, so the modem status interrupts never come either.
 
 ## Boot with `-kernel`
 
@@ -249,8 +297,8 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - No device tree is passed yet: X0 is 0.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
-- The GPU's interrupt controller is not modelled yet, so nothing
-  drives the GPU IRQ and FIQ of the ARM local peripherals.
+- Of the interrupt controller's sources, only UART0 is modelled yet.
+- UART0 does not receive yet.
 - The cores have no performance monitors, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -270,8 +318,10 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   but not what happens when the bit is 0. smirror traps the write to
   the Exception level whose `ACTLR` forbids it.
 - The firmware initializes the UART that it uses for its console. With
-  `-kernel`, the program must set up UART0 itself. In particular, the
-  PL011 resets to 5-bit characters: set UARTLCR_H to 8 bits first.
+  `-kernel`, the program must set up UART0 itself. The PL011 resets to
+  a baud rate divisor of 0, which is invalid, and to 5-bit characters:
+  set `UARTIBRD` and `UARTFBRD` (26 and 3 for 115200 baud), then
+  `UARTLCR_H` to 8 bits, before sending.
 
 ## Sources
 
@@ -289,8 +339,19 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - `/proc/cpuinfo` of a Raspberry Pi 3, for example in
   [this gist](https://gist.github.com/fawick/d142633de52b31d0dade):
   CPU part `0xd03`, revision 4, so a Cortex-A53 r0p4.
-- [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf),
-  section 13: the PL011 and its FIFOs.
+- [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf):
+  the interrupt controller (chapter 7, sections 7.1 to 7.5) and its
+  table of interrupts; the PL011, its FIFOs, its interrupts and the
+  signals it lacks (chapter 13, sections 13.1 to 13.3).
+- [PrimeCell UART (PL011) Technical Reference Manual](https://developer.arm.com/documentation/ddi0183/g/),
+  ARM DDI 0183G: transmitting and the character frame (2.4.3, 2.4.5),
+  the interrupts (2.8), the baud rate divisor and its limits (3.3.5,
+  3.3.6), `UARTLCR_H` updating the divisor (3.3.7), `UARTCR` (3.3.8),
+  the trigger levels (3.3.9) and the interrupt registers (3.3.10 to
+  3.3.13).
+- Raspberry Pi documentation, `init_uart_clock` in the
+  [legacy config.txt options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/boot.adoc):
+  UART0's clock, 48 MHz by default.
 - [BCM2836 ARM-local peripherals](https://datasheets.raspberrypi.com/bcm2836/bcm2836-peripherals.pdf)
   (Quad-A7 control, rev 3.4): the core timer (sections 3.1, 4.2 and
   4.3), the interrupt routing and the mailboxes (3.2, 3.3 and 4.4 to

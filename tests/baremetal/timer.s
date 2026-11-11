@@ -13,6 +13,8 @@
 	.equ	UART0, 0x3f201000	// PL011
 	.equ	UARTDR, 0x00		// data
 	.equ	UARTFR, 0x18		// flags
+	.equ	UARTIBRD, 0x24		// integer baud rate divisor
+	.equ	UARTFBRD, 0x28		// fractional baud rate divisor
 	.equ	UARTLCR_H, 0x2c		// line control
 	.equ	UARTCR, 0x30		// control
 	.equ	FR_TXFF, 5		// transmit FIFO full
@@ -45,6 +47,10 @@ _start:
 	movz	x9, #(UART0 >> 16), lsl #16
 	movk	x9, #(UART0 & 0xffff)
 	str	wzr, [x9, #UARTCR]	// disable the UART while setting it up
+	mov	w0, #26		// 115200 baud from the 48 MHz UARTCLK:
+	str	w0, [x9, #UARTIBRD]	// a divisor of 26 + 3/64
+	mov	w0, #3
+	str	w0, [x9, #UARTFBRD]
 	mov	w0, #0x70		// 8-bit characters, FIFOs on
 	str	w0, [x9, #UARTLCR_H]
 	mov	w0, #0x301		// enable the UART, transmit and receive

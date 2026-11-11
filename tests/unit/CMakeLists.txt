@@ -41,6 +41,10 @@ add_executable(test_bcm2836_local test_bcm2836_local.c)
 target_link_libraries(test_bcm2836_local PRIVATE hw)
 add_test(NAME unit.bcm2836_local COMMAND test_bcm2836_local)
 
+add_executable(test_bcm2835_ic test_bcm2835_ic.c)
+target_link_libraries(test_bcm2835_ic PRIVATE hw)
+add_test(NAME unit.bcm2835_ic COMMAND test_bcm2835_ic)
+
 add_executable(test_boot_direct test_boot_direct.c)
 target_link_libraries(test_boot_direct PRIVATE boot)
 add_test(NAME unit.boot_direct COMMAND test_boot_direct)

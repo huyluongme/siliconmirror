@@ -7,9 +7,9 @@
  * map and the boot are described in docs/boards/raspi3b.md.
  *
  * Devices so far: the ARM local peripherals, which give the cores their
- * system counter and route their interrupts, and UART0, a PL011. The
- * UART's interrupt is not connected, as the GPU's interrupt controller
- * is not modelled yet.
+ * system counter and route their interrupts; the GPU's interrupt
+ * controller, whose IRQ and FIQ go to the ARM local peripherals; and
+ * UART0, a PL011, whose interrupt goes to the GPU's interrupt controller.
  */
 
 #include "machine/raspi3b.h"
@@ -20,6 +20,7 @@
 #include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
 #include "hw/char/pl011.h"
+#include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "util/macros.h"
 
@@ -60,6 +61,12 @@ static const Bcm2836LocalConfig bcm2837_local = {
  * device tree instead.
  */
 static const Pl011Config bcm2835_pl011 = {.fifo_depth = 16, .periph_id = 0};
+
+/*
+ * UARTCLK, which the firmware sets to init_uart_clock of config.txt,
+ * 48 MHz unless config.txt says otherwise.
+ */
+#define UART_CLOCK_HZ 48000000
 
 /*
  * The boot stub, assembled from raspi3b_stub.s: run `make stub` after
@@ -120,6 +127,16 @@ static void reset_local(void *ctx)
 static void destroy_local(void *ctx)
 {
 	bcm2836_local_destroy(ctx);
+}
+
+static void reset_ic(void *ctx)
+{
+	bcm2835_ic_reset(ctx);
+}
+
+static void destroy_ic(void *ctx)
+{
+	bcm2835_ic_destroy(ctx);
 }
 
 static void reset_uart(void *ctx)
@@ -187,6 +204,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	BusStatus status;
 	Arm64Cluster *cluster;
 	Bcm2836Local *local;
+	Bcm2835Ic *ic;
 	Pl011 *uart;
 
 	if (m == NULL) {
@@ -240,7 +258,25 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		connect_core(local, arm64_cpu_of(cpu), i);
 	}
 
-	uart = pl011_create(&bcm2835_pl011, options->serial, NULL);
+	/* The GPU's interrupt controller goes to the ARM local peripherals. */
+	ic = bcm2835_ic_create(m);
+	if (ic == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, ic, reset_ic, destroy_ic)) {
+		bcm2835_ic_destroy(ic);
+		goto out_of_memory;
+	}
+	status = bcm2835_ic_map(ic, m->bus, "intc", RASPI3B_IC_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the interrupt controller: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	bcm2835_ic_connect(ic, bcm2836_local_gpu_input(local, false),
+	                   bcm2836_local_gpu_input(local, true));
+
+	uart = pl011_create(m, &bcm2835_pl011, UART_CLOCK_HZ, options->serial,
+	                    bcm2835_ic_gpu_input(ic, BCM2835_IC_UART));
 	if (uart == NULL)
 		goto out_of_memory;
 	if (!machine_add_device(m, uart, reset_uart, destroy_uart)) {

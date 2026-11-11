@@ -27,6 +27,10 @@ static const uint32_t hello[] = {
 	0xd2a7e401, /*       MOVZ X1, #0x3f20, LSL #16 */
 	0xf2820001, /*       MOVK X1, #0x1000: UART0 */
 	0xb900303f, /*       STR  WZR, [X1, #0x30]: UARTCR, disable */
+	0x52800342, /*       MOV  W2, #26 */
+	0xb9002422, /*       STR  W2, [X1, #0x24]: UARTIBRD */
+	0x52800062, /*       MOV  W2, #3 */
+	0xb9002822, /*       STR  W2, [X1, #0x28]: UARTFBRD, 115200 baud */
 	0x52800e02, /*       MOV  W2, #0x70 */
 	0xb9002c22, /*       STR  W2, [X1, #0x2c]: UARTLCR_H, 8 bits */
 	0x52806022, /*       MOV  W2, #0x301 */
@@ -62,6 +66,10 @@ static uint32_t smp[] = {
 	0xd2a7e401, /*        MOVZ X1, #0x3f20, LSL #16 */
 	0xf2820001, /*        MOVK X1, #0x1000 */
 	0xb900303f, /*        STR  WZR, [X1, #0x30] */
+	0x52800342, /*        MOV  W2, #26 */
+	0xb9002422, /*        STR  W2, [X1, #0x24] */
+	0x52800062, /*        MOV  W2, #3 */
+	0xb9002822, /*        STR  W2, [X1, #0x28] */
 	0x52800e02, /*        MOV  W2, #0x70 */
 	0xb9002c22, /*        STR  W2, [X1, #0x2c] */
 	0x52806022, /*        MOV  W2, #0x301 */
@@ -88,7 +96,7 @@ static uint32_t smp[] = {
 	0x17ffffff, /*        B    park */
 };
 
-#define SMP_SEV 15 /* index of the SEV in smp[] */
+#define SMP_SEV 19 /* index of the SEV in smp[] */
 
 static void write_kernel(const uint32_t *words, size_t count)
 {
@@ -424,6 +432,29 @@ static void test_interrupt_wiring(void)
 	remove(KERNEL);
 }
 
+/* UART0 runs from a 48 MHz UARTCLK: at 115200 baud, a byte takes 86823 ns. */
+static void test_uart_clock(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	char buf[16];
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x24, 4, 26), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x28, 4, 3), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x2c, 4, 0x60), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x30, 4, 0x301), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE, 4, 'x'), BUS_OK);
+	event_queue_run_until(&m->events, 86822);
+	read_output(out, buf, sizeof(buf));
+	CHECK(strcmp(buf, "") == 0);
+	event_queue_run_until(&m->events, 86823);
+	read_output(out, buf, sizeof(buf));
+	CHECK(strcmp(buf, "x") == 0);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -474,6 +505,7 @@ int main(void)
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
 	RUN_TEST(test_interrupt_wiring);
+	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);

@@ -40,6 +40,7 @@ add_baremetal_program(exceptions)
 add_baremetal_program(boot)
 add_baremetal_program(timer)
 add_baremetal_program(irq)
+add_baremetal_program(uart_irq)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -97,6 +98,14 @@ add_expect_test(baremetal.irq
 	STDOUT "^irq ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel irq.bin)
+
+# The transmit interrupt of UART0, through the BCM2835 interrupt
+# controller and the ARM local peripherals, to the IRQ and the FIQ of
+# core 0. See uart_irq.s.
+add_expect_test(baremetal.uart-irq
+	STDOUT "^uart irq ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel uart_irq.bin)
 
 # smirror is built from src/machine/raspi3b_stub.inc; this build has
 # assembled raspi3b_stub.s again (see src/machine/CMakeLists.txt). If
