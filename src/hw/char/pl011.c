@@ -24,6 +24,23 @@
  * register. A reserved trigger level stops the machine when the UART
  * needs it, and so does sending with UARTIBRD 0, or with UARTIBRD 0xffff
  * and a UARTFBRD that is not 0, which the manual calls invalid (3.3.6).
+ *
+ * Receiving (2.4.3, 3.3.1, 3.3.2): the bytes that the host sends come on
+ * the line one after the other, each taking the time of a frame in the
+ * UART's own format, as if the other end used the same settings; so
+ * they are never in error, and only the low WLEN bits of each are kept.
+ * At the end of its frame, a byte goes into the receive FIFO, or, when
+ * the FIFO is full, is lost: the overrun error then sets in UARTRSR and
+ * in the next byte stored. Bytes that come while the UART or its
+ * receiver is disabled are lost, as no one listens to the line; a byte
+ * that started before goes on to the FIFO (3.3.8).
+ *
+ * The receive interrupt (2.8.2) sets when the receive FIFO goes up
+ * through its trigger level, or without FIFOs when a byte comes, and
+ * clears when reads take it below. The receive timeout interrupt (2.8.4)
+ * sets when the FIFO holds data and no byte has come for 32 bit periods,
+ * and clears when the FIFO empties. The overrun interrupt sets with the
+ * overrun error.
  */
 
 #include "hw/char/pl011.h"
@@ -60,7 +77,14 @@ enum {
 	FR_BUSY = 1u << 3,
 	FR_RXFE = 1u << 4,
 	FR_TXFF = 1u << 5,
+	FR_RXFF = 1u << 6,
 	FR_TXFE = 1u << 7,
+};
+
+/* The overrun error in UARTRSR (3.3.2) and in UARTDR (3.3.1). */
+enum {
+	RSR_OE = 1u << 3,
+	DR_OE = 1u << 11,
 };
 
 /* Line control register bits, section 3.3.7. */
@@ -73,7 +97,10 @@ enum {
 
 /* Interrupt bits of UARTIMSC, UARTRIS, UARTMIS and UARTICR, 3.3.10. */
 enum {
+	INT_RX = 1u << 4,
 	INT_TX = 1u << 5,
+	INT_RT = 1u << 6,
+	INT_OE = 1u << 10,
 	INT_ALL = 0x7ff,
 };
 
@@ -83,6 +110,7 @@ enum {
 enum {
 	CR_UARTEN = 1u << 0,
 	CR_TXE = 1u << 8,
+	CR_RXE = 1u << 9,
 };
 
 /* Writable bits of each register, from its width in table 3-1. */
@@ -109,7 +137,7 @@ struct Pl011 {
 	Machine *machine;
 	Pl011Config config;
 	uint64_t clock_hz;
-	CharStream *out;
+	CharStream *serial;
 	IrqLine *irq;
 
 	/* Bytes waiting to be sent, oldest first. */
@@ -120,6 +148,21 @@ struct Pl011 {
 	bool sending;
 	uint8_t tx_byte;
 	Event tx_done;
+
+	/*
+	 * Bytes received, oldest first, each with its error bits as UARTDR
+	 * gives them.
+	 */
+	uint16_t rx_fifo[PL011_MAX_FIFO_DEPTH];
+	unsigned rx_count;
+
+	/* The byte coming on the line, and the end of its frame. */
+	bool receiving;
+	uint8_t rx_byte;
+	Event rx_done;
+	Event rx_timeout; /* 32 bit periods after the last byte came */
+	bool overrun;     /* a byte was lost: the next one stored says so */
+	uint32_t rsr;     /* UARTRSR */
 
 	/* UARTIBRD and UARTFBRD as the last write of UARTLCR_H took them. */
 	uint32_t divisor_int;
@@ -154,27 +197,43 @@ static void update_irq(Pl011 *uart)
 }
 
 /*
- * The trigger level of the transmit interrupt, in bytes (3.3.9), or 0
- * without FIFOs. Returns false, after stopping the machine, for a
- * reserved level.
+ * The trigger level, in bytes, that the 3-bit select of UARTIFLS gives
+ * the FIFO (3.3.9). Returns false, after stopping the machine, for a
+ * reserved one.
  */
-static bool tx_level(Pl011 *uart, unsigned *level)
+static bool trigger_level(Pl011 *uart, unsigned select, const char *fifo,
+                          unsigned *level)
 {
 	static const unsigned eighths[] = {1, 2, 4, 6, 7};
-	unsigned select = uart->ifls & 7;
 
-	if (!(uart->lcr_h & LCR_H_FEN)) {
-		*level = 0;
-		return true;
-	}
 	if (select >= 5) {
 		machine_stop(uart->machine, MACHINE_STOP_ERROR,
-		             "pl011: transmit FIFO level %u in UARTIFLS is reserved",
+		             "pl011: %s FIFO level %u in UARTIFLS is reserved", fifo,
 		             select);
 		return false;
 	}
 	*level = uart->config.fifo_depth * eighths[select] / 8;
 	return true;
+}
+
+/* The transmit trigger level: at or below it, or an empty holding register. */
+static bool tx_level(Pl011 *uart, unsigned *level)
+{
+	if (!(uart->lcr_h & LCR_H_FEN)) {
+		*level = 0;
+		return true;
+	}
+	return trigger_level(uart, uart->ifls & 7, "transmit", level);
+}
+
+/* The receive trigger level: at or above it, or a full holding register. */
+static bool rx_level(Pl011 *uart, unsigned *level)
+{
+	if (!(uart->lcr_h & LCR_H_FEN)) {
+		*level = 1;
+		return true;
+	}
+	return trigger_level(uart, uart->ifls >> 3 & 7, "receive", level);
 }
 
 /* The transmit FIFO went from before bytes to tx_count. */
@@ -192,14 +251,12 @@ static void tx_count_changed(Pl011 *uart, unsigned before)
 }
 
 /*
- * The time a frame takes at the baud rate, in ns. Returns false, after
- * stopping the machine, for an invalid divisor.
+ * The time that bits periods take on the line at the baud rate, in ns.
+ * Returns false, after stopping the machine, for an invalid divisor.
  */
-static bool frame_time(Pl011 *uart, uint64_t *ns)
+static bool line_time(Pl011 *uart, unsigned bits, uint64_t *ns)
 {
 	uint64_t divisor = 64 * (uint64_t)uart->divisor_int + uart->divisor_frac;
-	unsigned bits = 1 + word_length(uart) + (uart->lcr_h & LCR_H_PEN ? 1 : 0) +
-	                (uart->lcr_h & LCR_H_STP2 ? 2 : 1);
 
 	if (uart->divisor_int == 0 ||
 	    (uart->divisor_int == IBRD_MASK && uart->divisor_frac != 0)) {
@@ -213,6 +270,15 @@ static bool frame_time(Pl011 *uart, uint64_t *ns)
 	/* bits * 16 * divisor / 64 periods of UARTCLK */
 	*ns = mul_div_ceil(bits * divisor, NS_PER_SECOND, 4 * uart->clock_hz);
 	return true;
+}
+
+/* The time a frame takes, in ns: see line_time(). */
+static bool frame_time(Pl011 *uart, uint64_t *ns)
+{
+	unsigned bits = 1 + word_length(uart) + (uart->lcr_h & LCR_H_PEN ? 1 : 0) +
+	                (uart->lcr_h & LCR_H_STP2 ? 2 : 1);
+
+	return line_time(uart, bits, ns);
 }
 
 /*
@@ -247,7 +313,7 @@ static void tx_finished(void *ctx)
 	Pl011 *uart = ctx;
 
 	uart->sending = false;
-	char_stream_write(uart->out, &uart->tx_byte, 1);
+	char_stream_write(uart->serial, &uart->tx_byte, 1);
 	tx_start(uart);
 }
 
@@ -266,11 +332,134 @@ static void write_dr(Pl011 *uart, uint32_t value)
 	tx_start(uart);
 }
 
+static unsigned rx_capacity(const Pl011 *uart)
+{
+	return (uart->lcr_h & LCR_H_FEN) ? uart->config.fifo_depth : 1;
+}
+
+/* The receive FIFO went from before bytes to rx_count. */
+static void rx_count_changed(Pl011 *uart, unsigned before)
+{
+	unsigned level;
+
+	if (!rx_level(uart, &level))
+		return;
+	if (uart->rx_count < level)
+		uart->ris &= ~INT_RX;
+	else if (before < level)
+		uart->ris |= INT_RX;
+	if (uart->rx_count == 0)
+		uart->ris &= ~INT_RT;
+	update_irq(uart);
+}
+
+/*
+ * Take the next byte that the host sent onto the line, if the receiver
+ * is free. The bytes that come while the UART or its receiver is
+ * disabled are lost. Returns whether a byte started.
+ */
+static bool rx_start(Pl011 *uart)
+{
+	uint8_t byte;
+	uint64_t ns;
+
+	if (uart->receiving)
+		return false;
+	if ((uart->cr & (CR_UARTEN | CR_RXE)) != (CR_UARTEN | CR_RXE)) {
+		while (char_stream_read(uart->serial, &byte))
+			continue;
+		return false;
+	}
+	if (!char_stream_read(uart->serial, &byte) || !frame_time(uart, &ns))
+		return false;
+	uart->rx_byte = byte;
+	uart->receiving = true;
+	event_schedule(&uart->machine->events, &uart->rx_done,
+	               machine_now(uart->machine) + ns);
+	return true;
+}
+
+/* The last stop bit of the byte coming on the line is done. */
+static void rx_finished(void *ctx)
+{
+	Pl011 *uart = ctx;
+	unsigned before = uart->rx_count;
+	uint64_t ns;
+
+	uart->receiving = false;
+	if (uart->rx_count == rx_capacity(uart)) {
+		uart->rsr |= RSR_OE;
+		uart->overrun = true;
+		uart->ris |= INT_OE;
+		update_irq(uart);
+	} else {
+		/* Only the low WLEN bits of the character come. */
+		uint16_t entry = uart->rx_byte & ((1u << word_length(uart)) - 1);
+
+		if (uart->overrun)
+			entry |= DR_OE;
+		uart->overrun = false;
+		uart->rx_fifo[uart->rx_count++] = entry;
+		rx_count_changed(uart, before);
+	}
+	if (line_time(uart, 32, &ns)) /* the FIFO is not empty */
+		event_schedule(&uart->machine->events, &uart->rx_timeout,
+		               machine_now(uart->machine) + ns);
+	rx_start(uart);
+}
+
+/* No byte came for 32 bit periods. */
+static void rx_timed_out(void *ctx)
+{
+	Pl011 *uart = ctx;
+
+	if (uart->rx_count != 0) {
+		uart->ris |= INT_RT;
+		update_irq(uart);
+	}
+}
+
+/* A read of UARTDR: the oldest byte received, or 0 when there is none. */
+static uint32_t read_dr(Pl011 *uart)
+{
+	unsigned before = uart->rx_count;
+	uint16_t entry;
+
+	if (uart->rx_count == 0)
+		return 0;
+	entry = uart->rx_fifo[0];
+	uart->rx_count--;
+	memmove(uart->rx_fifo, uart->rx_fifo + 1,
+	        uart->rx_count * sizeof(uart->rx_fifo[0]));
+	rx_count_changed(uart, before);
+	return entry;
+}
+
+/* The machine's input: take what the host sent, or wait for it. */
+static void serial_poll(void *ctx)
+{
+	rx_start(ctx);
+}
+
+static bool serial_wait(void *ctx)
+{
+	Pl011 *uart = ctx;
+
+	if ((uart->cr & (CR_UARTEN | CR_RXE)) != (CR_UARTEN | CR_RXE) ||
+	    !char_stream_wait(uart->serial))
+		return false;
+	rx_start(uart);
+	return true;
+}
+
 static uint32_t read_fr(const Pl011 *uart)
 {
-	/* Nothing is ever received yet, so the receive FIFO stays empty. */
-	uint32_t fr = FR_RXFE;
+	uint32_t fr = 0;
 
+	if (uart->rx_count == 0)
+		fr |= FR_RXFE;
+	if (uart->rx_count == rx_capacity(uart))
+		fr |= FR_RXFF;
 	if (uart->tx_count == 0)
 		fr |= FR_TXFE;
 	/* BUSY: sending, or data waiting, enabled or not */
@@ -299,9 +488,9 @@ static uint64_t pl011_read(void *ctx, uint64_t offset, unsigned size)
 	(void)size;
 	switch (offset) {
 	case REG_DR:
-		return 0; /* nothing received yet */
+		return read_dr(uart);
 	case REG_RSR_ECR:
-		return 0; /* no receive errors */
+		return uart->rsr;
 	case REG_FR:
 		return read_fr(uart);
 	case REG_ILPR:
@@ -344,7 +533,8 @@ static void pl011_write(void *ctx, uint64_t offset, uint64_t value,
 		write_dr(uart, v);
 		break;
 	case REG_RSR_ECR:
-		break; /* clears receive errors, of which there are none yet */
+		uart->rsr = 0;
+		break;
 	case REG_ILPR:
 		uart->ilpr = v & ILPR_MASK;
 		break;
@@ -392,8 +582,14 @@ void pl011_reset(Pl011 *uart)
 {
 	/* Reset values from table 3-1. */
 	event_cancel(&uart->machine->events, &uart->tx_done);
+	event_cancel(&uart->machine->events, &uart->rx_done);
+	event_cancel(&uart->machine->events, &uart->rx_timeout);
 	uart->sending = false;
 	uart->tx_count = 0;
+	uart->receiving = false;
+	uart->rx_count = 0;
+	uart->overrun = false;
+	uart->rsr = 0;
 	uart->divisor_int = 0;
 	uart->divisor_frac = 0;
 	uart->ris = 0;
@@ -409,7 +605,7 @@ void pl011_reset(Pl011 *uart)
 }
 
 Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
-                    CharStream *out, IrqLine *irq)
+                    CharStream *serial, IrqLine *irq)
 {
 	if (config->fifo_depth == 0 || config->fifo_depth > PL011_MAX_FIFO_DEPTH ||
 	    clock_hz == 0)
@@ -422,15 +618,25 @@ Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
 	uart->machine = m;
 	uart->config = *config;
 	uart->clock_hz = clock_hz;
-	uart->out = out;
+	uart->serial = serial;
 	uart->irq = irq;
 	event_init(&uart->tx_done, tx_finished, uart);
+	event_init(&uart->rx_done, rx_finished, uart);
+	event_init(&uart->rx_timeout, rx_timed_out, uart);
+	if (char_stream_has_input(serial))
+		machine_set_input(m, serial_poll, serial_wait, uart);
 	pl011_reset(uart);
 	return uart;
 }
 
 void pl011_destroy(Pl011 *uart)
 {
+	Machine *m = uart->machine;
+
+	if (m->input.ctx == uart)
+		machine_set_input(m, NULL, NULL, NULL);
+	event_cancel(&m->events, &uart->rx_done);
+	event_cancel(&m->events, &uart->rx_timeout);
 	event_cancel(&uart->machine->events, &uart->tx_done);
 	free(uart);
 }

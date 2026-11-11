@@ -58,7 +58,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
-| `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes, but not receiving     |
+| `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
@@ -213,13 +213,32 @@ level to the level or below, and clears when writes take it above.
 Without FIFOs, it sets when the holding register empties.
 
 The manual calls a divisor below 1, or 65535 with a fraction, invalid,
-and its trigger levels `0b101` to `0b111` reserved. Sending with such a
-divisor, or with such a level while the FIFOs are on, stops the machine.
+and its trigger levels `0b101` to `0b111` reserved. Sending or receiving
+with such a divisor, or with such a level while the FIFOs are on, stops
+the machine. Reading `UARTDR` with the receive FIFO empty gives 0.
 
-Receiving is not modelled yet: the receive FIFO stays empty, and the
-receive, timeout and error interrupts never come. The BCM2835's PL011
-has no DSR, DCD or RI inputs, and its CTS input comes through a GPIO pin
-that is not modelled, so the modem status interrupts never come either.
+UART0 receives what comes from `-serial`: with `stdio`, the keys typed
+on the terminal, or the bytes of standard input. They come one after
+the other on the line, each taking the time of a frame in the format
+that UART0 uses, as if the other end used the same settings; so they
+are never in error, and only the low data bits of each are kept. At the
+end of its frame, a byte goes into the receive FIFO with the PL011's
+four error bits, or, when the FIFO is full, is lost: the overrun error
+then sets, in `UARTRSR` at once and in `UARTDR` with the next byte
+stored. Bytes that come while the UART or its receiver is disabled are
+lost, as on a real line, where no one listens then. There is no flow
+control: input that comes faster than the guest reads it overruns the
+FIFO, as on the real board.
+
+The receive interrupt sets when the receive FIFO goes up through its
+trigger level, or without FIFOs when a byte comes, and clears when
+reads take it below. The receive timeout interrupt sets when the FIFO
+holds data and no byte has come for 32 bit periods, and clears when the
+FIFO empties. The overrun interrupt sets with the overrun error. The
+framing, parity and break interrupts never come, as the bytes are never
+in error. The BCM2835's PL011 has no DSR, DCD or RI inputs, and its CTS
+input comes through a GPIO pin that is not modelled, so the modem
+status interrupts never come either. Loopback is not modelled yet.
 
 ## Boot with `-kernel`
 
@@ -291,6 +310,8 @@ a change to the stub (see CONTRIBUTING.md).
 
 The machine stops when every core waits in `WFI` or `WFE` and nothing can
 wake them, so a program that ends with a `WFI` loop makes smirror exit.
+Input on UART0 can wake a core, so while UART0 listens and more input
+can come, smirror waits for it instead: press Ctrl-A x to quit.
 
 ## Differences from the real board
 
@@ -298,7 +319,6 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
 - Of the interrupt controller's sources, only UART0 is modelled yet.
-- UART0 does not receive yet.
 - The cores have no performance monitors, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -344,11 +364,12 @@ wake them, so a program that ends with a `WFI` loop makes smirror exit.
   table of interrupts; the PL011, its FIFOs, its interrupts and the
   signals it lacks (chapter 13, sections 13.1 to 13.3).
 - [PrimeCell UART (PL011) Technical Reference Manual](https://developer.arm.com/documentation/ddi0183/g/),
-  ARM DDI 0183G: transmitting and the character frame (2.4.3, 2.4.5),
-  the interrupts (2.8), the baud rate divisor and its limits (3.3.5,
-  3.3.6), `UARTLCR_H` updating the divisor (3.3.7), `UARTCR` (3.3.8),
-  the trigger levels (3.3.9) and the interrupt registers (3.3.10 to
-  3.3.13).
+  ARM DDI 0183G: transmitting, receiving and the character frame
+  (2.4.3, 2.4.5), the interrupts (2.8), `UARTDR` and its error bits
+  (3.3.1), `UARTRSR` and `UARTECR` (3.3.2), the flags (3.3.3), the baud
+  rate divisor and its limits (3.3.5, 3.3.6), `UARTLCR_H` updating the
+  divisor (3.3.7), `UARTCR` (3.3.8), the trigger levels (3.3.9) and the
+  interrupt registers (3.3.10 to 3.3.13).
 - Raspberry Pi documentation, `init_uart_clock` in the
   [legacy config.txt options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/boot.adoc):
   UART0's clock, 48 MHz by default.

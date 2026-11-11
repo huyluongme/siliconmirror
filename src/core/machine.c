@@ -93,6 +93,21 @@ void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx)
 	m->idle_ctx = ctx;
 }
 
+void machine_set_input(Machine *m, void (*poll)(void *ctx),
+                       bool (*wait)(void *ctx), void *ctx)
+{
+	m->input = (MachineInput){.poll = poll, .wait = wait, .ctx = ctx};
+}
+
+/* Poll the input if it is time to, between turns. */
+static void poll_input(Machine *m)
+{
+	if (m->input.poll == NULL || m->events.now < m->next_poll)
+		return;
+	m->input.poll(m->input.ctx);
+	m->next_poll = m->events.now + MACHINE_POLL_NS;
+}
+
 /*
  * Give every running CPU one turn, covering virtual time from now to end.
  * Returns whether any CPU was running. *last becomes the latest time a
@@ -181,6 +196,9 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			/* The idle listener may have scheduled an event. */
 			next = event_queue_next(&m->events);
 			if (next == EVENT_NEVER) {
+				/* Only input from the host can wake the machine. */
+				if (m->input.wait != NULL && m->input.wait(m->input.ctx))
+					continue;
 				machine_stop(m, MACHINE_STOP_IDLE,
 				             "every CPU is waiting and no event is pending");
 				break;
@@ -192,6 +210,7 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			break;
 
 		event_queue_run_until(&m->events, end);
+		poll_input(m);
 		if (m->insns >= limit)
 			machine_stop(m, MACHINE_STOP_LIMIT,
 			             "instruction limit reached after %" PRIu64

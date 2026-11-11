@@ -58,6 +58,24 @@ typedef struct MachineDevice {
  */
 typedef void (*MachineIdleListener)(void *ctx, bool idle, uint64_t since);
 
+/* How often the main loop polls the input from the host, in virtual time. */
+#define MACHINE_POLL_NS 1000000
+
+/*
+ * Input from the host, such as the keys typed for a UART. The main loop
+ * calls poll at least every MACHINE_POLL_NS of virtual time, between
+ * turns, for the device to take what the host has sent. When no CPU runs
+ * and no event is pending, it calls wait instead of stopping as idle:
+ * wait blocks until there is input for the device, takes it and returns
+ * true, or returns false when the device cannot take any: it does not
+ * listen, or the input has ended.
+ */
+typedef struct MachineInput {
+	void (*poll)(void *ctx);
+	bool (*wait)(void *ctx);
+	void *ctx;
+} MachineInput;
+
 struct Machine {
 	Bus *bus;
 	EventQueue events;
@@ -72,6 +90,8 @@ struct Machine {
 	bool idle; /* no CPU runs, as last told to the idle listener */
 	MachineIdleListener idle_listener;
 	void *idle_ctx;
+	MachineInput input;
+	uint64_t next_poll; /* virtual time of the next poll of the input */
 };
 
 /* Create a machine with an empty bus. Returns NULL when out of memory. */
@@ -103,6 +123,10 @@ bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
  * new machine counts as running.
  */
 void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx);
+
+/* Set the one input of the machine, or remove it with NULL functions. */
+void machine_set_input(Machine *m, void (*poll)(void *ctx),
+                       bool (*wait)(void *ctx), void *ctx);
 
 /* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);

@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "backend/char/file.h"
+#include "backend/char/stdio.h"
 #include "core/machine.h"
 #include "machine/board.h"
 
@@ -45,7 +46,11 @@ static void print_usage(FILE *out)
 	      "  -version           Show version information and exit\n"
 	      "\n"
 	      "Options may also start with a double dash, for example "
-	      "--version.\n",
+	      "--version.\n"
+	      "\n"
+	      "With -serial stdio on a terminal, press Ctrl-A x to quit, and "
+	      "Ctrl-A Ctrl-A\n"
+	      "to send a Ctrl-A.\n",
 	      out);
 }
 
@@ -128,6 +133,12 @@ static bool open_serial(const char *spec, CharStream **stream)
 	return true;
 }
 
+/* Ctrl-A x on the terminal. */
+static void quit(void *ctx)
+{
+	machine_stop(ctx, MACHINE_STOP_SHUTDOWN, "the user pressed Ctrl-A x");
+}
+
 /* Run the machine and return the exit status that its stop calls for. */
 static int run(Machine *m)
 {
@@ -205,12 +216,18 @@ int main(int argc, char **argv)
 	if (!open_serial(options.serial, &board_options.serial))
 		return EXIT_FAILURE;
 
+	CharStream *terminal =
+		strcmp(options.serial, "stdio") == 0 ? board_options.serial : NULL;
+
 	Machine *m = board->create(&board_options, error, sizeof(error));
 
 	if (m == NULL) {
 		fprintf(stderr, "smirror: %s: %s\n", board->name, error);
 		return EXIT_FAILURE;
 	}
+
+	if (terminal != NULL)
+		char_stdio_on_quit(terminal, quit, m);
 
 	int status = run(m);
 

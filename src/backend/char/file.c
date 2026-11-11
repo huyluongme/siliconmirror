@@ -52,8 +52,3 @@ CharStream *char_file_create(FILE *file, bool owns_file)
 	f->owns_file = owns_file;
 	return &f->stream;
 }
-
-CharStream *char_stdio_create(void)
-{
-	return char_file_create(stdout, false);
-}

@@ -33,6 +33,10 @@ add_executable(test_char_file test_char_file.c)
 target_link_libraries(test_char_file PRIVATE backend)
 add_test(NAME unit.char_file COMMAND test_char_file)
 
+add_executable(test_char_stdio test_char_stdio.c)
+target_link_libraries(test_char_stdio PRIVATE backend)
+add_test(NAME unit.char_stdio COMMAND test_char_stdio)
+
 add_executable(test_pl011 test_pl011.c)
 target_link_libraries(test_pl011 PRIVATE hw)
 add_test(NAME unit.pl011 COMMAND test_pl011)

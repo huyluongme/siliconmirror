@@ -44,15 +44,6 @@ static void test_owned_file_is_closed(void)
 	char_stream_destroy(s);
 }
 
-static void test_stdio_stream(void)
-{
-	CharStream *s = char_stdio_create();
-
-	CHECK(s != NULL);
-	char_stream_write(s, (const uint8_t *)"stdio stream works\n", 19);
-	char_stream_destroy(s);
-}
-
 static void test_null_stream(void)
 {
 	/* Not connected: writes are dropped and destroy does nothing. */
@@ -64,7 +55,6 @@ int main(void)
 {
 	RUN_TEST(test_writes_reach_the_file);
 	RUN_TEST(test_owned_file_is_closed);
-	RUN_TEST(test_stdio_stream);
 	RUN_TEST(test_null_stream);
 	return test_summary();
 }

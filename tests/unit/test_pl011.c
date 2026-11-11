@@ -45,6 +45,7 @@ enum {
 	FR_BUSY = 0x08,
 	FR_RXFE = 0x10,
 	FR_TXFF = 0x20,
+	FR_RXFF = 0x40,
 	FR_TXFE = 0x80,
 	LCR_H_PEN = 0x02,
 	LCR_H_STP2 = 0x08,
@@ -54,14 +55,27 @@ enum {
 	CR_UARTEN = 0x001,
 	CR_TXE = 0x100,
 	CR_RXE = 0x200,
+	INT_RX = 0x10,
 	INT_TX = 0x20,
+	INT_RT = 0x40,
+	INT_OE = 0x400,
+	DR_OE = 0x800,
+	RSR_OE = 0x8,
 };
 
-/* A character stream that collects everything written to it. */
+#define TIMEOUT_32 277834 /* ns: 32 bits at 115200 baud, rounded up */
+
+/*
+ * A character stream that collects everything written to it, and gives
+ * the bytes of input as the host would have sent them, until they run
+ * out.
+ */
 typedef struct Capture {
 	CharStream stream;
 	char data[128];
 	size_t len;
+	const char *input;
+	size_t input_len, input_pos;
 } Capture;
 
 static void capture_write(CharStream *s, const uint8_t *buf, size_t len)
@@ -73,6 +87,23 @@ static void capture_write(CharStream *s, const uint8_t *buf, size_t len)
 	c->data[c->len] = '\0';
 }
 
+static bool capture_read(CharStream *s, uint8_t *byte)
+{
+	Capture *c = container_of(s, Capture, stream);
+
+	if (c->input_pos == c->input_len)
+		return false;
+	*byte = (uint8_t)c->input[c->input_pos++];
+	return true;
+}
+
+static bool capture_wait(CharStream *s)
+{
+	Capture *c = container_of(s, Capture, stream);
+
+	return c->input_pos < c->input_len;
+}
+
 static void capture_destroy(CharStream *s)
 {
 	(void)s;
@@ -80,6 +111,8 @@ static void capture_destroy(CharStream *s)
 
 static const CharStreamOps capture_ops = {
 	.write = capture_write,
+	.read = capture_read,
+	.wait = capture_wait,
 	.destroy = capture_destroy,
 };
 
@@ -140,6 +173,15 @@ static void configure(Setup *s, uint32_t lcr_h)
 static void advance(Setup *s, uint64_t t)
 {
 	event_queue_run_until(&s->m->events, t);
+}
+
+/* The host sends bytes: the UART takes them when the machine polls. */
+static void type(Setup *s, const char *bytes, size_t len)
+{
+	s->out.input = bytes;
+	s->out.input_len = len;
+	s->out.input_pos = 0;
+	s->m->input.poll(s->m->input.ctx);
 }
 
 /* Let the UART send everything it can. */
@@ -563,21 +605,276 @@ static void test_read_only_and_reserved(void)
 	teardown(&s);
 }
 
-static void test_receive_not_implemented(void)
+/* Sections 2.4.3 and 3.3.1: each byte takes a frame to come in. */
+static void test_receive(void)
 {
 	Setup s;
 
-	/* Until receiving exists, these registers do nothing. */
 	setup(&s, &pl011_arm_r1p5);
-	CHECK_EQ(reg_read(&s, DR), 0);
-	reg_write(&s, RSR_ECR, 0xff);
-	reg_write(&s, ICR, 0x7ff);
-	reg_write(&s, IMSC, 0x7ff);
-	CHECK_EQ(reg_read(&s, RSR_ECR), 0);
-	CHECK_EQ(reg_read(&s, RIS), 0);
-	CHECK_EQ(reg_read(&s, MIS), 0);
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	CHECK(s.m->input.ctx == s.uart);
+	type(&s, "abc", 3);
+
+	/* One byte at a time comes on the line, whatever the polls. */
+	s.m->input.poll(s.m->input.ctx);
+	CHECK_EQ(s.out.input_pos, 1);
+	advance(&s, FRAME_8N1 - 1);
 	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFE);
+	advance(&s, FRAME_8N1);
+	CHECK_EQ(reg_read(&s, FR), FR_TXFE);
+	advance(&s, 3 * FRAME_8N1 - 1);
+	CHECK_EQ(reg_read(&s, DR), 'a');
+	CHECK_EQ(reg_read(&s, DR), 'b');
+	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFE);
+	advance(&s, 3 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, DR), 'c');
+	CHECK_EQ(reg_read(&s, DR), 0); /* nothing left */
+	CHECK_EQ(reg_read(&s, RSR_ECR), 0);
+
+	/* With 7 data bits, the high bit does not come. */
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_7);
+	type(&s, "\xff", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), 0x7f);
 	teardown(&s);
+}
+
+/*
+ * Sections 3.3.1 and 3.3.2: a byte that comes when the FIFO is full is
+ * lost; UARTRSR says so at once, and UARTDR with the next byte stored.
+ */
+static void test_overrun(void)
+{
+	Setup s;
+
+	setup(&s, &pl011_arm_r1p5);
+	configure(&s, LCR_H_WLEN_8); /* no FIFOs: one byte holds it */
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	reg_write(&s, IMSC, INT_OE);
+	type(&s, "ab", 2);
+	advance(&s, FRAME_8N1);
+	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFF);
+	CHECK_EQ(reg_read(&s, RIS), INT_RX);
+	CHECK(!irq_level(&s.irq));
+	advance(&s, 2 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RSR_ECR), RSR_OE);
+	CHECK_EQ(reg_read(&s, RIS), INT_RX | INT_OE);
+	CHECK(irq_level(&s.irq));
+	CHECK_EQ(reg_read(&s, DR), 'a');
+	CHECK_EQ(reg_read(&s, RSR_ECR), RSR_OE);
+	type(&s, "c", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), DR_OE | 'c');
+	type(&s, "d", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), 'd');
+	reg_write(&s, RSR_ECR, 0);
+	CHECK_EQ(reg_read(&s, RSR_ECR), 0);
+	reg_write(&s, ICR, INT_OE);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	CHECK(!irq_level(&s.irq));
+	teardown(&s);
+}
+
+/*
+ * Sections 2.8.2 and 3.3.9: the receive interrupt sets when the FIFO
+ * goes up through its trigger level, and clears when reads take it below.
+ */
+static void test_rx_interrupt(void)
+{
+	static const Pl011Config bcm2835_like = {.fifo_depth = 16};
+	Setup s;
+
+	setup(&s, &bcm2835_like);
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	reg_write(&s, IMSC, INT_RX);
+	type(&s, "0123456789", 10);
+
+	/* At 1/2, 8 bytes. */
+	advance(&s, 8 * FRAME_8N1 - 1);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	advance(&s, 8 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RIS), INT_RX);
+	CHECK_EQ(reg_read(&s, MIS), INT_RX);
+	CHECK(irq_level(&s.irq));
+	CHECK_EQ(reg_read(&s, DR), '0');
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	CHECK(!irq_level(&s.irq));
+	advance(&s, 9 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RIS), INT_RX); /* 7 to 8 */
+
+	/* Cleared, it stays so while the FIFO stays at or above the level. */
+	reg_write(&s, ICR, INT_RX);
+	advance(&s, 10 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RIS), 0); /* 8 to 9 */
+
+	/* At 7/8, 14; at 1/8, 2. */
+	while (!(reg_read(&s, FR) & FR_RXFE))
+		reg_read(&s, DR);
+	reg_write(&s, IFLS, 4 << 3);
+	type(&s, "abcdefghijklmnop", 16);
+	advance(&s, s.m->events.now + 14 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, INT_RX);
+	CHECK_EQ(reg_read(&s, FR) & FR_RXFF, 0);
+	advance(&s, s.m->events.now + 2 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, FR) & FR_RXFF, FR_RXFF);
+	while (!(reg_read(&s, FR) & FR_RXFE))
+		reg_read(&s, DR);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, 0);
+	reg_write(&s, IFLS, 0);
+	type(&s, "ab", 2);
+	advance(&s, s.m->events.now + 2 * FRAME_8N1);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, INT_RX);
+
+	/* Without FIFOs, each byte that comes. */
+	reg_read(&s, DR);
+	reg_read(&s, DR);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, 0);
+	configure(&s, LCR_H_WLEN_8);
+	type(&s, "c", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, INT_RX);
+	reg_read(&s, DR);
+	CHECK_EQ(reg_read(&s, RIS) & INT_RX, 0);
+
+	/* A reserved level stops the machine. */
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
+	reg_write(&s, IFLS, 5 << 3);
+	type(&s, "d", 1);
+	drain(&s);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(s.m->stop_message,
+	             "receive FIFO level 5 in UARTIFLS is reserved") != NULL);
+	teardown(&s);
+}
+
+/*
+ * Section 2.8.4: the receive timeout interrupt sets when the FIFO holds
+ * data and nothing came for 32 bit periods, and clears when it empties.
+ */
+static void test_rx_timeout(void)
+{
+	Setup s;
+
+	setup(&s, &pl011_arm_r1p5);
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	reg_write(&s, IMSC, INT_RT);
+	type(&s, "abc", 3);
+	advance(&s, 3 * FRAME_8N1 + TIMEOUT_32 - 1);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	advance(&s, 3 * FRAME_8N1 + TIMEOUT_32);
+	CHECK_EQ(reg_read(&s, RIS), INT_RT);
+	CHECK(irq_level(&s.irq));
+	reg_read(&s, DR);
+	reg_read(&s, DR);
+	CHECK_EQ(reg_read(&s, RIS), INT_RT);
+	reg_read(&s, DR);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	CHECK(!irq_level(&s.irq));
+
+	/* Emptied before the time-out, it does not set. */
+	type(&s, "d", 1);
+	advance(&s, s.m->events.now + FRAME_8N1);
+	reg_read(&s, DR);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+
+	/* Cleared by UARTICR while data stays. */
+	type(&s, "e", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, RIS), INT_RT);
+	reg_write(&s, ICR, INT_RT);
+	CHECK_EQ(reg_read(&s, RIS), 0);
+	CHECK_EQ(reg_read(&s, DR), 'e');
+	teardown(&s);
+}
+
+/*
+ * Bytes that come while the UART or its receiver is disabled are lost;
+ * a byte that started goes on to the FIFO (3.3.8).
+ */
+static void test_receiver_disabled(void)
+{
+	Setup s;
+	uint8_t byte;
+
+	setup(&s, &pl011_arm_r1p5);
+	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_TXE); /* no RXE */
+	type(&s, "ab", 2);
+	CHECK_EQ(s.out.input_pos, 2);
+	reg_write(&s, CR, CR_RXE); /* no UARTEN */
+	type(&s, "cd", 2);
+	CHECK_EQ(s.out.input_pos, 2);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, FR) & FR_RXFE, FR_RXFE);
+
+	/* Disabled while a byte comes: that byte arrives, not the next. */
+	type(&s, "ef", 2);
+	advance(&s, s.m->events.now + 1000);
+	reg_write(&s, CR, 0);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), 'e');
+	CHECK_EQ(reg_read(&s, FR) & FR_RXFE, FR_RXFE);
+	CHECK(!capture_read(&s.out.stream, &byte));
+	teardown(&s);
+}
+
+/*
+ * The machine waits for input only while the receiver listens; the input
+ * that comes then starts at once.
+ */
+static void test_wait_for_input(void)
+{
+	Setup s;
+
+	setup(&s, &pl011_arm_r1p5);
+	configure(&s, LCR_H_WLEN_8);
+	s.out.input = "x";
+	s.out.input_len = 1;
+	CHECK(!s.m->input.wait(s.m->input.ctx));
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	CHECK(s.m->input.wait(s.m->input.ctx));
+	CHECK_EQ(event_queue_next(&s.m->events), FRAME_8N1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), 'x');
+	CHECK(!s.m->input.wait(s.m->input.ctx)); /* the input has ended */
+
+	/* An invalid divisor stops the machine when a byte comes. */
+	reg_write(&s, IBRD, 0);
+	reg_write(&s, LCR_H, LCR_H_WLEN_8);
+	type(&s, "y", 1);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(s.m->stop_message, "UARTIBRD 0 and UARTFBRD 3") != NULL);
+	teardown(&s);
+}
+
+/* A UART whose stream has no input is not the machine's input. */
+static void test_no_input(void)
+{
+	static const CharStreamOps output_only = {
+		.write = capture_write,
+		.destroy = capture_destroy,
+	};
+	Machine *m = machine_create();
+	Capture out = {.stream.ops = &output_only};
+	Pl011 *uart = pl011_create(m, &pl011_arm_r1p5, CLOCK_HZ, &out.stream, NULL);
+
+	CHECK(m->input.poll == NULL);
+	pl011_destroy(uart);
+
+	/* Destroying the UART that is the input removes it. */
+	Capture in = {.stream.ops = &capture_ops};
+
+	uart = pl011_create(m, &pl011_arm_r1p5, CLOCK_HZ, &in.stream, NULL);
+	CHECK(m->input.ctx == uart);
+	pl011_destroy(uart);
+	CHECK(m->input.poll == NULL && m->input.wait == NULL);
+	machine_destroy(m);
 }
 
 static void test_reset_clears_state(void)
@@ -604,6 +901,24 @@ static void test_reset_clears_state(void)
 	send(&s, "x");
 	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
 	s.m->stop = MACHINE_STOP_NONE;
+	pl011_reset(s.uart);
+
+	/* The receive side too: FIFO, errors, and the byte coming. */
+	configure(&s, LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	type(&s, "abc", 3);
+	advance(&s, s.m->events.now + 2 * FRAME_8N1 + 1000); /* b lost */
+	CHECK_EQ(reg_read(&s, RSR_ECR), RSR_OE);
+	pl011_reset(s.uart);
+	CHECK_EQ(reg_read(&s, RSR_ECR), 0);
+	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFE);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFE); /* c never came */
+	configure(&s, LCR_H_WLEN_8);
+	reg_write(&s, CR, CR_UARTEN | CR_RXE);
+	type(&s, "d", 1);
+	drain(&s);
+	CHECK_EQ(reg_read(&s, DR), 'd'); /* without the overrun of before */
 	pl011_reset(s.uart);
 
 	/* The bytes that were waiting, or being sent, are gone. */
@@ -660,7 +975,13 @@ int main(void)
 	RUN_TEST(test_reserved_level);
 	RUN_TEST(test_register_widths);
 	RUN_TEST(test_read_only_and_reserved);
-	RUN_TEST(test_receive_not_implemented);
+	RUN_TEST(test_receive);
+	RUN_TEST(test_overrun);
+	RUN_TEST(test_rx_interrupt);
+	RUN_TEST(test_rx_timeout);
+	RUN_TEST(test_receiver_disabled);
+	RUN_TEST(test_wait_for_input);
+	RUN_TEST(test_no_input);
 	RUN_TEST(test_reset_clears_state);
 	RUN_TEST(test_unconnected_output);
 	RUN_TEST(test_invalid_config);

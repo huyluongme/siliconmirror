@@ -253,6 +253,62 @@ static void test_idle_listener_schedules(void)
 	machine_destroy(m);
 }
 
+/* An input that counts its polls, and wakes a CPU the first time it waits. */
+static struct {
+	unsigned polls, waits;
+	uint64_t poll_times[8];
+	FakeCpu *cpu;
+} input;
+
+static void input_poll(void *ctx)
+{
+	Machine *m = ctx;
+
+	if (input.polls < ARRAY_SIZE(input.poll_times))
+		input.poll_times[input.polls] = m->events.now;
+	input.polls++;
+}
+
+static bool input_wait(void *ctx)
+{
+	(void)ctx;
+	if (input.waits++ > 0 || input.cpu == NULL)
+		return false;
+	input.cpu->halt_at = input.cpu->executed + 10;
+	input.cpu->cpu.state = CPU_RUNNING;
+	return true;
+}
+
+/*
+ * The input is polled every MACHINE_POLL_NS between turns, and waited
+ * for when nothing else can happen.
+ */
+static void test_input(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 3500000);
+
+	memset(&input, 0, sizeof(input));
+	input.cpu = f;
+	machine_set_input(m, input_poll, input_wait, m);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(input.polls, 4);
+	CHECK_EQ(input.poll_times[0], 1000);
+	CHECK_EQ(input.poll_times[1], 1001000);
+	CHECK_EQ(input.poll_times[3], 3001000);
+
+	/* The first wait woke the CPU for 10 instructions; the second ended. */
+	CHECK_EQ(input.waits, 2);
+	CHECK_EQ(f->executed, 3500010);
+	CHECK_EQ(m->events.now, 3501000);
+
+	/* Without an input, the machine stops as idle. */
+	machine_set_input(m, NULL, NULL, NULL);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(input.waits, 2);
+	machine_destroy(m);
+}
+
 static void test_event_wakes_halted_cpu(void)
 {
 	Machine *m = machine_create();
@@ -479,6 +535,7 @@ int main(void)
 	RUN_TEST(test_now_in_a_turn);
 	RUN_TEST(test_idle_listener);
 	RUN_TEST(test_idle_listener_schedules);
+	RUN_TEST(test_input);
 	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
 	return test_summary();

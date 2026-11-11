@@ -41,6 +41,7 @@ add_baremetal_program(boot)
 add_baremetal_program(timer)
 add_baremetal_program(irq)
 add_baremetal_program(uart_irq)
+add_baremetal_program(echo)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -106,6 +107,20 @@ add_expect_test(baremetal.uart-irq
 	STDOUT "^uart irq ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel uart_irq.bin)
+
+# Receiving on UART0: what echo.input sends comes back, through the
+# receive timeout interrupt. See echo.s.
+add_expect_test(baremetal.echo
+	STDOUT "^hello\necho ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	INPUT ${CMAKE_CURRENT_SOURCE_DIR}/echo.input
+	COMMAND ${smirror} -M raspi3b -kernel echo.bin)
+
+# On a terminal, smirror waits for keys while the kernel listens, and
+# Ctrl-A x quits it. terminal.c drives smirror on a pseudo-terminal.
+add_executable(terminal terminal.c)
+add_test(NAME baremetal.terminal-quit
+	COMMAND terminal $<TARGET_FILE:smirror> hello.bin "Hello, world!")
 
 # smirror is built from src/machine/raspi3b_stub.inc; this build has
 # assembled raspi3b_stub.s again (see src/machine/CMakeLists.txt). If

@@ -8,14 +8,15 @@
  * revision r1p5 (ARM DDI 0183G), and chapter 13 of the BCM2835 ARM
  * Peripherals datasheet for the Raspberry Pi variant.
  *
- * Implemented so far: transmitting, the flag register, the control and
- * configuration registers, the interrupt registers and the identification
- * registers. A byte takes the time of its frame at the baud rate to go
- * out, and reaches the output stream when its stop bits are done; the
- * transmit interrupt follows the transmit FIFO through its trigger level.
+ * Implemented so far: transmitting and receiving, the flag register, the
+ * control and configuration registers, the interrupt registers and the
+ * identification registers. A byte takes the time of its frame at the
+ * baud rate to go out or to come in; the transmit and receive interrupts
+ * follow the FIFOs through their trigger levels.
  *
- * Not implemented yet: receiving, with its interrupts, and loopback. The
- * modem status inputs never change, so they never interrupt.
+ * Not implemented yet: loopback, and IrDA. The bytes received are never
+ * in error but for overruns, and the modem status inputs never change, so
+ * they never interrupt.
  */
 
 #ifndef HW_CHAR_PL011_H
@@ -55,13 +56,15 @@ typedef struct Pl011 Pl011;
 /*
  * Create a UART in its reset state, with a reference clock UARTCLK of
  * clock_hz. It takes the time from m, and stops m when software asks it
- * to send with a baud rate divisor that the manual calls invalid. Bytes
- * it sends go to out; irq is its interrupt output (UARTINTR). Either may
- * be NULL when not connected. Returns NULL when config or clock_hz is
+ * to send or receive with a baud rate divisor that the manual calls
+ * invalid. Bytes it sends go to serial, and the bytes that come from
+ * serial are what it receives: when serial has input, the UART becomes
+ * the input of m. irq is its interrupt output (UARTINTR). Either may be
+ * NULL when not connected. Returns NULL when config or clock_hz is
  * invalid, or memory runs out.
  */
 Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
-                    CharStream *out, IrqLine *irq);
+                    CharStream *serial, IrqLine *irq);
 
 void pl011_destroy(Pl011 *uart);
 

@@ -95,9 +95,18 @@ contains `compile_commands.json` for editors and language servers.
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                     |
 | `-serial DEV`  | Where the first UART goes: `stdio` (the default), `null` or `file:PATH` |
 
+With `-serial stdio`, the first UART is connected to the terminal: what
+the guest sends shows up there, and what you type goes to the guest, as
+on a serial console. The terminal is in raw mode meanwhile, so Ctrl-C
+goes to the guest too; press **Ctrl-A x** to quit smirror, and Ctrl-A
+Ctrl-A to send a Ctrl-A. When standard input is a file or a pipe, its
+bytes go to the guest as they are, until its end. `file:PATH` and `null`
+give the UART no input.
+
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does
-something that is not emulated yet. It then prints why on standard
+something that is not emulated yet. While the guest listens on its UART
+and more input can come, input can wake it, so smirror waits for it. It then prints why on standard
 error, and exits with a failure status in the second case. Exceptions,
 such as an undefined instruction or a misaligned access, are taken as
 the real CPU takes them: a program that has not set up its vector table
@@ -138,8 +147,9 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Acknowledgements
 
-Command-line options follow the conventions of
-[QEMU](https://www.qemu.org/), so QEMU users can feel at home.
+Command-line options, and the Ctrl-A keys of the terminal, follow the
+conventions of [QEMU](https://www.qemu.org/), so QEMU users can feel at
+home.
 
 ## Trademarks
 

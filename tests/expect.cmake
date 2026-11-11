@@ -7,7 +7,11 @@
 # tests/CMakeLists.txt, or directly:
 #
 #   cmake "-DCOMMAND=<program>;<argument>;..." [-DSTATUS=<status>]
-#         [-DSTDOUT=<regex>] [-DSTDERR=<regex>] -P expect.cmake
+#         [-DSTDOUT=<regex>] [-DSTDERR=<regex>] [-DINPUT=<file>]
+#         -P expect.cmake
+#
+# The command reads its standard input from INPUT, or from /dev/null, so
+# that it never waits for a terminal.
 #
 # STATUS is 0 when not given; STDOUT and STDERR are only checked when
 # given.
@@ -16,7 +20,11 @@ if(NOT DEFINED STATUS)
 	set(STATUS 0)
 endif()
 
+if(NOT DEFINED INPUT)
+	set(INPUT /dev/null)
+endif()
 execute_process(COMMAND ${COMMAND}
+	INPUT_FILE ${INPUT}
 	RESULT_VARIABLE status
 	OUTPUT_VARIABLE stdout
 	ERROR_VARIABLE stderr)

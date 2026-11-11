@@ -101,8 +101,10 @@ machine connects the two, so the same PL011 model can print to a terminal
 or write to a file without any change to its code.
 
 Since `hw` may not depend on `backend`, the two meet through an interface
-defined in `core`: a UART writes to a `CharStream` (`core/char_stream.h`),
-and each back end in `backend/char/` implements one.
+defined in `core`: a UART writes to and reads from a `CharStream`
+(`core/char_stream.h`), and each back end in `backend/char/` implements
+one: `file.c` for output to a file, `stdio.c` for the terminal or
+whatever standard input and output are.
 
 Devices are grouped by kind, not by board. A PL011 exists on many ARM
 boards, so a future board can reuse it directly.
@@ -168,9 +170,13 @@ Known limits, to be handled when the devices that need it arrive:
   mailbox, reaches it at its next instruction. If that CPU runs later
   in the same turn, it sees the interrupt up to 1 µs of virtual time
   before it was sent.
-- Input from the host, such as a terminal connected to a UART, can wake
-  a waiting machine, so such a machine must wait for input instead of
-  stopping as idle.
+- Input from the host, such as the keys typed for a UART, comes when the
+  main loop polls it, every 1 ms of virtual time (`MACHINE_POLL_NS`).
+  When every CPU waits and no event is pending, the main loop waits for
+  input instead of stopping as idle, as long as a device listens and
+  more input can come. Host input comes at no fixed virtual time, so a
+  run that takes input from a terminal does not repeat exactly; one
+  that takes it from a file does.
 
 ## Headers and naming
 
