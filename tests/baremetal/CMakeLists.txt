@@ -43,6 +43,7 @@ add_baremetal_program(irq)
 add_baremetal_program(uart_irq)
 add_baremetal_program(echo)
 add_baremetal_program(mmu)
+add_baremetal_program(miniuart)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -109,13 +110,24 @@ add_expect_test(baremetal.uart-irq
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel uart_irq.bin)
 
-# Receiving on UART0: what echo.input sends comes back, through the
-# receive timeout interrupt. See echo.s.
 add_expect_test(baremetal.mmu
 	STDOUT "^mmu ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel mmu.bin)
 
+# The console as U-Boot uses it: the mini UART on GPIO 14 and 15, as the
+# firmware sets it up. What miniuart.input sends comes back. See
+# miniuart.s.
+add_expect_test(baremetal.miniuart
+	STDOUT "^mini uart\nabc\nmini uart ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	INPUT ${CMAKE_CURRENT_SOURCE_DIR}/miniuart.input
+	COMMAND ${smirror} -M raspi3b -kernel miniuart.bin)
+
+# Receiving on UART0: what echo.input sends comes back, through the
+# receive timeout interrupt. See echo.s. As on the board, its first byte,
+# '~', goes to the mini UART, which has GPIO 15 as the firmware set it up
+# until echo.s gives the pin to the PL011.
 add_expect_test(baremetal.echo
 	STDOUT "^hello\necho ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"

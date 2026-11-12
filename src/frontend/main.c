@@ -39,7 +39,7 @@ static void print_usage(FILE *out)
 	      "  -M, -machine NAME  Board to emulate; -M help lists them\n"
 	      "  -kernel FILE       Image to boot, loaded as the board's "
 	      "firmware would\n"
-	      "  -serial DEV        Where the first UART goes: stdio (the "
+	      "  -serial DEV        Where the serial console goes: stdio (the "
 	      "default),\n"
 	      "                     null or file:PATH\n"
 	      "  -h, -help          Show this help and exit\n"
@@ -99,8 +99,8 @@ static const char **option_value(Options *options, const char *name)
 }
 
 /*
- * Open the back end that -serial names. "null" leaves the UART
- * unconnected, which is a NULL stream. Returns false after printing a
+ * Open the back end that -serial names. "null" leaves the serial
+ * console unconnected, which is a NULL stream. Returns false after printing a
  * message.
  */
 static bool open_serial(const char *spec, CharStream **stream)

@@ -75,7 +75,9 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
+| `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
+| `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
@@ -165,15 +167,17 @@ times a second, on each edge of the 19.2 MHz crystal.
 
 The GPU IRQ and GPU FIQ come from the interrupt controller at
 `0x3f00b200` (BCM2835 ARM Peripherals, chapter 7). It takes the 64
-interrupts of the GPU's peripherals, UART0 among them as interrupt 57,
-and the 8 of the ARM's own, such as the ARM timer and mailbox. An
+interrupts of the GPU's peripherals, among them the mini UART as
+interrupt 29, the GPIO as 49 to 52 and UART0 as 57, and the 8 of the
+ARM's own, such as the ARM timer and mailbox. An
 interrupt is pending while it is raised and enabled; the GPU IRQ is set
 while any is pending. Pending 1 and 2 show the GPU's, and the basic
 pending register the ARM's, eleven selected GPU interrupts again (7, 9,
 10, 18, 19, 53 to 57 and 62) in bits 10 to 20, and in bits 8 and 9
 whether pending 1 or 2 has others. The GPU FIQ follows the one
 interrupt that the FIQ register selects, whether its IRQ is enabled or
-not. Of its sources, only UART0 is modelled yet.
+not. Of its sources, the mini UART, the GPIO and UART0 are modelled
+yet.
 
 The documents leave some things open; smirror chooses:
 
@@ -208,6 +212,97 @@ The documents leave some things open; smirror chooses:
   physical IRQ, then a virtual FIQ, then a virtual IRQ, each before the
   instruction at the PC and any exception that it would raise.
 
+## The serial console
+
+As on the board, `-serial` is a serial cable on the header: pin 8 is
+GPIO 14, which the board sends on, and pin 10 is GPIO 15, which it
+receives on. Which UART the cable reaches depends on the functions of
+these pins, in `GPFSEL1`: UART0, the PL011, has them as ALT0, and
+UART1, the mini UART, as ALT5 (BCM2835 ARM Peripherals, section 6.2).
+What a UART sends reaches `-serial` while GPIO 14 carries its TXD, and
+it receives from `-serial` while GPIO 15 carries its RXD. Bytes that
+come while no UART has GPIO 15 are lost, as on the board.
+
+The other pins that can carry the UARTs go to no serial device that is
+modelled: GPIO 32 and 33 go to the Bluetooth module, which takes
+nothing and keeps its TX line, GPIO 33, high. A UART whose RXD no pin
+carries, or whose pin is low, has its receive line held low.
+
+On a Raspberry Pi 3, the console is the mini UART, and the firmware
+sets it up when `config.txt` has `enable_uart=1`, which keeps the core
+clock at 250 MHz (Raspberry Pi documentation, "Configure UARTs").
+U-Boot then uses it as it is, after checking that GPIO 15 has ALT5.
+smirror starts the machine, and resets it, in that state: GPIO 14 and
+15 at ALT5, the mini UART enabled, with 8-bit characters at 115313
+baud (`AUX_MU_BAUD_REG` 270). The firmware's own register writes are
+not documented. A program that wants UART0 instead gives it the pins,
+writing ALT0 for GPIO 14 and 15 in `GPFSEL1`, as a program on the real
+board must.
+
+## GPIO
+
+The GPIO block at `0x3f200000` (BCM2835 ARM Peripherals, chapter 6)
+has 54 pins. Each has a function (`GPFSELn`), an output latch
+(`GPSETn`, `GPCLRn`) and a pull, which `GPPUD` and `GPPUDCLKn` set; after
+reset every pin is an input with the pull of the table of section 6.2.
+`GPLEVn` reads, for an output, its latch; for an alternate function
+whose peripheral drives the pin, what it drives, such as a UART's TX
+line, high while idle; else what drives the pin from outside the chip,
+such as the serial cable on GPIO 15, or else its pull.
+
+Edges and levels set `GPEDSn` as `GPRENn`, `GPFENn`, `GPHENn`, `GPLENn`,
+`GPARENn` and `GPAFENn` ask, and writing 1 clears them; a level stays
+recorded while it lasts. The interrupts follow `GPEDSn`, as section 5.1
+of the BCM2711 ARM Peripherals describes the same block: interrupt 49
+for pins 0 to 27, 50 for 28 to 45, 51 for 46 to 53, and 52 for all.
+
+The documents leave some things open; smirror chooses:
+
+- A pin that nothing drives and that has no pull reads as 0.
+- The output latch is 0 after reset.
+- A write of `GPPUDCLKn` clocks `GPPUD` into its pins at once: the waits
+  of 150 cycles are not needed.
+- Pins change level at once, so the synchronous edge detection sees
+  every edge, like the asynchronous one.
+- Accesses other than 32-bit ones, to the test register at `0xb0`, to
+  reserved offsets, writes of `GPLEVn`, reads of `GPSETn` and `GPCLRn`,
+  and clocking the reserved `GPPUD` value 3 into a pin stop the machine.
+
+## The mini UART
+
+UART1, the mini UART at `0x3f215000` (BCM2835 ARM Peripherals,
+chapter 2), runs from the 250 MHz core clock: a bit lasts 8 ×
+(`AUX_MU_BAUD_REG` + 1) cycles, and a frame has a start bit, 7 or 8
+data bits and a stop bit, so a byte takes 86.7 µs at 115313 baud. Its
+FIFOs hold 8 bytes. It sends and receives as UART0 does, below, without
+parity, framing errors or a receive timeout. A receive line held low
+brings 0x00 after 0x00, as section 2.1.1 describes; once the FIFO is
+full and the overrun set, more of them would change nothing that can be
+seen, so they wait until a read makes room.
+
+Its interrupt, interrupt 29 of the interrupt controller, is high while
+the receive interrupt is enabled and a byte waits, or the transmit
+interrupt is enabled and the transmit FIFO is empty. `AUX_MU_IIR_REG`
+names it, the receiver first, and `AUX_IRQ` shows it.
+
+The documents leave some things open, or get them wrong; smirror
+chooses:
+
+- In `AUX_MU_IER_REG`, bit 0 enables the receive interrupt and bit 1
+  the transmit interrupt, as in a 16550 and as Linux's driver uses them
+  on the real chip: both the BCM2835 and the BCM2711 documents swap
+  them.
+- `AUX_MU_STAT_REG` bit 9 is the AND of bits 3 and 8, as its text says.
+- The CTS input is asserted; RTS goes nowhere. `AUX_MU_STAT_REG` bit 6
+  reads 1 while RTS is asserted.
+- A write to a full transmit FIFO is lost, and a disabled transmitter,
+  receiver or mini UART finishes its byte.
+- The document says the registers of a disabled module cannot be read
+  or written, but not what happens: such an access stops the machine.
+  So do accesses other than 32-bit ones, writes of the read-only
+  registers, offsets the document does not describe, the SPI masters,
+  and transmit flow control with CTS, which nothing connects.
+
 ## UART0
 
 UART0 is a PL011 with 16-entry FIFOs (BCM2835 ARM Peripherals, chapter
@@ -217,7 +312,8 @@ frame at the baud rate: a start bit, 5 to 8 data bits, a parity bit if
 enabled, and 1 or 2 stop bits, each bit lasting 16 × (`UARTIBRD` +
 `UARTFBRD`/64) periods of `UARTCLK`. At 115200 baud (`UARTIBRD` 26,
 `UARTFBRD` 3), an 8-bit character with one stop bit takes 86.8 µs. The
-byte reaches `-serial` when its last stop bit is done. As in the PL011
+byte reaches `-serial`, if GPIO 14 carries it, when its last stop bit
+is done. As in the PL011
 manual, the divisor and the frame format take effect at the next write
 of `UARTLCR_H`, a disabled UART finishes the byte it is sending, and
 `BUSY` stays set until the last stop bit.
@@ -234,7 +330,8 @@ and its trigger levels `0b101` to `0b111` reserved. Sending or receiving
 with such a divisor, or with such a level while the FIFOs are on, stops
 the machine. Reading `UARTDR` with the receive FIFO empty gives 0.
 
-UART0 receives what comes from `-serial`: with `stdio`, the keys typed
+While GPIO 15 carries its RXD, UART0 receives what comes from
+`-serial`: with `stdio`, the keys typed
 on the terminal, or the bytes of standard input. They come one after
 the other on the line, each taking the time of a frame in the format
 that UART0 uses, as if the other end used the same settings; so they
@@ -327,15 +424,17 @@ a change to the stub (see CONTRIBUTING.md).
 
 The machine stops when every core waits in `WFI` or `WFE` and nothing can
 wake them, so a program that ends with a `WFI` loop makes smirror exit.
-Input on UART0 can wake a core, so while UART0 listens and more input
-can come, smirror waits for it instead: press Ctrl-A x to quit.
+Input on the UART that has GPIO 15 can wake a core, so while it listens
+and more input can come, smirror waits for it instead: press Ctrl-A x
+to quit.
 
 ## Differences from the real board
 
 - No device tree is passed yet: X0 is 0.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
-- Of the interrupt controller's sources, only UART0 is modelled yet.
+- Of the interrupt controller's sources, only the mini UART, the GPIO
+  and UART0 are modelled yet.
 - The cores have no performance monitors, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -346,10 +445,11 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
   up to 1 µs late.
 - The GPU's share of the RAM, a firmware setting, is not modelled: all
   of the RAM below the peripherals is free.
-- GPIO pin functions are not modelled, and UART0 always goes to
-  `-serial`, as in QEMU. On a real Raspberry Pi 3, UART0 drives the
-  Bluetooth module by default, and the serial console on GPIO 14 and 15
-  is UART1, the mini UART, which is not modelled yet.
+- The serial lines carry bytes, not bits: the GPIO sees no edges on
+  GPIO 14 and 15 while bytes go, the mini UART's break is not sent, and
+  UART0 sees an idle line, not a break, when its receive line is held
+  low. The Bluetooth module and the other devices on the GPIO pins are
+  not modelled.
 - The Cortex-A53 manual says which `ACTLR_EL3` and `ACTLR_EL2` bits
   allow a lower Exception level to write the configuration registers,
   but not what happens when the bit is 0. smirror traps the write to
@@ -372,11 +472,13 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
 - The BCM2837 has one physical address space for Secure and Non-secure
   accesses, so the NS bit of a descriptor only changes what `PAR_EL1`
   reports and what `SCR_EL3.SIF` allows.
-- The firmware initializes the UART that it uses for its console. With
-  `-kernel`, the program must set up UART0 itself. The PL011 resets to
-  a baud rate divisor of 0, which is invalid, and to 5-bit characters:
-  set `UARTIBRD` and `UARTFBRD` (26 and 3 for 115200 baud), then
-  `UARTLCR_H` to 8 bits, before sending.
+- smirror sets up the mini UART as the firmware does with
+  `enable_uart=1`, whatever `config.txt` says, as it reads no
+  `config.txt` yet. A program that uses UART0 must give it GPIO 14 and
+  15 and set it up itself. The PL011 resets to a baud rate divisor of 0,
+  which is invalid, and to 5-bit characters: set `UARTIBRD` and
+  `UARTFBRD` (26 and 3 for 115200 baud), then `UARTLCR_H` to 8 bits,
+  before sending.
 
 ## Sources
 
@@ -397,9 +499,30 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
   [this gist](https://gist.github.com/fawick/d142633de52b31d0dade):
   CPU part `0xd03`, revision 4, so a Cortex-A53 r0p4.
 - [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf):
-  the interrupt controller (chapter 7, sections 7.1 to 7.5) and its
-  table of interrupts; the PL011, its FIFOs, its interrupts and the
-  signals it lacks (chapter 13, sections 13.1 to 13.3).
+  the auxiliary peripherals and the mini UART (chapter 2), the GPIO,
+  its registers and the alternate functions and pulls of its pins
+  (chapter 6), the interrupt controller (chapter 7, sections 7.1 to
+  7.5) and its table of interrupts; the PL011, its FIFOs, its
+  interrupts and the signals it lacks (chapter 13, sections 13.1 to
+  13.3).
+- [BCM2711 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf),
+  Raspberry Pi Ltd, 2022: the same mini UART with the titles of
+  `AUX_MU_IER_REG` and `AUX_MU_IIR_REG` fixed (chapter 2), and the
+  banks of the GPIO and their interrupt lines (section 5.1).
+- Raspberry Pi documentation,
+  [Configure UARTs](https://www.raspberrypi.com/documentation/computers/configuration.html#configure-uarts):
+  the mini UART is the console on GPIO 14 and 15 of a Raspberry Pi 3,
+  UART0 goes to Bluetooth, and `enable_uart=1` keeps the core clock at
+  250 MHz.
+- U-Boot,
+  [serial_bcm283x_mu.c](https://github.com/u-boot/u-boot/blob/master/drivers/serial/serial_bcm283x_mu.c):
+  it uses the mini UART only when GPIO 15 has ALT5, as the firmware set
+  it up; Linux,
+  [8250_bcm2835aux.c](https://github.com/torvalds/linux/blob/master/drivers/tty/serial/8250/8250_bcm2835aux.c):
+  it drives the mini UART as a 16550, so with the 16550's bits of
+  `AUX_MU_IER_REG`; the Raspberry Pi device tree
+  [bcm2710-rpi-3-b.dts](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/arch/arm/boot/dts/bcm2710-rpi-3-b.dts):
+  what the GPIO pins of the board connect to.
 - [PrimeCell UART (PL011) Technical Reference Manual](https://developer.arm.com/documentation/ddi0183/g/),
   ARM DDI 0183G: transmitting, receiving and the character frame
   (2.4.3, 2.4.5), the interrupts (2.8), `UARTDR` and its error bits

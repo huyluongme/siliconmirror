@@ -19,9 +19,12 @@
 
 #include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
+#include "hw/char/bcm2835_aux.h"
 #include "hw/char/pl011.h"
+#include "hw/gpio/bcm2835_gpio.h"
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
+#include "machine/raspi3b_serial.h"
 #include "util/macros.h"
 
 /*
@@ -67,6 +70,19 @@ static const Pl011Config bcm2835_pl011 = {.fifo_depth = 16, .periph_id = 0};
  * 48 MHz unless config.txt says otherwise.
  */
 #define UART_CLOCK_HZ 48000000
+
+/*
+ * The core (VPU) clock, the system clock of the mini UART: with
+ * enable_uart=1, the firmware keeps it at 250 MHz (Raspberry Pi
+ * documentation, "Configure UARTs").
+ */
+#define CORE_CLOCK_HZ 250000000
+
+/* What the firmware writes to set up the console; see firmware_uart(). */
+#define GPFSEL1 (RASPI3B_GPIO_BASE + 0x04)
+#define AUX_ENABLES (RASPI3B_AUX_BASE + 0x04)
+#define AUX_MU_LCR_REG (RASPI3B_AUX_BASE + 0x4c)
+#define AUX_MU_BAUD_REG (RASPI3B_AUX_BASE + 0x68)
 
 /*
  * The boot stub, assembled from raspi3b_stub.s: run `make stub` after
@@ -149,6 +165,68 @@ static void destroy_uart(void *ctx)
 	pl011_destroy(ctx);
 }
 
+static void reset_gpio(void *ctx)
+{
+	bcm2835_gpio_reset(ctx);
+}
+
+static void destroy_gpio(void *ctx)
+{
+	bcm2835_gpio_destroy(ctx);
+}
+
+static void destroy_cable(void *ctx)
+{
+	raspi3b_serial_destroy(ctx);
+}
+
+static void reset_aux(void *ctx)
+{
+	bcm2835_aux_reset(ctx);
+}
+
+static void destroy_aux(void *ctx)
+{
+	bcm2835_aux_destroy(ctx);
+}
+
+/*
+ * Set up the console as the firmware does with enable_uart=1, which a
+ * serial console on the Raspberry Pi 3 needs (Raspberry Pi documentation,
+ * "Configure UARTs"): the mini UART on GPIO 14 and 15, their ALT5, which
+ * U-Boot checks and keeps (drivers/serial/serial_bcm283x_mu.c), enabled,
+ * with 8-bit characters at 115200 baud: 250 MHz / (8 * (270 + 1)) is
+ * 115313 baud. The firmware's own register writes are not documented.
+ * Returns the status of the first write that fails.
+ */
+static BusStatus firmware_uart(Machine *m)
+{
+	static const struct {
+		uint64_t address;
+		uint32_t value;
+	} writes[] = {
+		{GPFSEL1, BCM2835_GPIO_ALT5 << 12 | BCM2835_GPIO_ALT5 << 15},
+		{AUX_ENABLES, 1},
+		{AUX_MU_LCR_REG, 3},
+		{AUX_MU_BAUD_REG, 270},
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(writes); i++) {
+		BusStatus status =
+			bus_write(m->bus, writes[i].address, 4, writes[i].value);
+
+		if (status != BUS_OK)
+			return status;
+	}
+	return BUS_OK;
+}
+
+/* A reset of the board runs the firmware again. */
+static void reset_firmware(void *ctx)
+{
+	firmware_uart(ctx);
+}
+
 static bool write_word(Machine *m, uint64_t address, unsigned size,
                        uint64_t value, char *error, size_t error_size)
 {
@@ -205,7 +283,11 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Arm64Cluster *cluster;
 	Bcm2836Local *local;
 	Bcm2835Ic *ic;
+	IrqLine *gpio_irqs[BCM2835_GPIO_NUM_IRQS];
+	Bcm2835Gpio *gpio;
+	Raspi3bSerial *cable;
 	Pl011 *uart;
+	Bcm2835Aux *aux;
 
 	if (m == NULL) {
 		char_stream_destroy(options->serial);
@@ -275,7 +357,33 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	bcm2835_ic_connect(ic, bcm2836_local_gpu_input(local, false),
 	                   bcm2836_local_gpu_input(local, true));
 
-	uart = pl011_create(m, &bcm2835_pl011, UART_CLOCK_HZ, options->serial,
+	for (unsigned i = 0; i < BCM2835_GPIO_NUM_IRQS; i++)
+		gpio_irqs[i] = bcm2835_ic_gpu_input(ic, BCM2835_IC_GPIO0 + i);
+	gpio = bcm2835_gpio_create(m, gpio_irqs);
+	if (gpio == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, gpio, reset_gpio, destroy_gpio)) {
+		bcm2835_gpio_destroy(gpio);
+		goto out_of_memory;
+	}
+	status = bcm2835_gpio_map(gpio, m->bus, "gpio", RASPI3B_GPIO_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the GPIO: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+
+	/* -serial is at the end of the cable on GPIO 14 and 15. */
+	cable = raspi3b_serial_create(m, gpio, options->serial);
+	if (cable == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, cable, NULL, destroy_cable)) {
+		raspi3b_serial_destroy(cable);
+		goto out_of_memory;
+	}
+
+	uart = pl011_create(m, &bcm2835_pl011, UART_CLOCK_HZ,
+	                    raspi3b_serial_uart(cable, RASPI3B_SERIAL_UART0),
 	                    bcm2835_ic_gpu_input(ic, BCM2835_IC_UART));
 	if (uart == NULL)
 		goto out_of_memory;
@@ -289,6 +397,32 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+
+	aux = bcm2835_aux_create(m, CORE_CLOCK_HZ,
+	                         raspi3b_serial_uart(cable, RASPI3B_SERIAL_UART1),
+	                         bcm2835_ic_gpu_input(ic, BCM2835_IC_AUX));
+	if (aux == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, aux, reset_aux, destroy_aux)) {
+		bcm2835_aux_destroy(aux);
+		goto out_of_memory;
+	}
+	status = bcm2835_aux_map(aux, m->bus, "aux", RASPI3B_AUX_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the mini UART: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+
+	/* After the devices it sets up, so that it resets after them. */
+	status = firmware_uart(m);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot set up the mini UART: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	if (!machine_add_device(m, m, reset_firmware, NULL))
+		goto out_of_memory;
 
 	if (!boot(m, options->kernel, error, error_size))
 		goto fail;

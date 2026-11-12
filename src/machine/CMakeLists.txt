@@ -5,7 +5,8 @@
 
 add_library(machine STATIC
 	board.c
-	raspi3b.c)
+	raspi3b.c
+	raspi3b_serial.c)
 
 target_link_libraries(machine PUBLIC boot cpu hw core)
 

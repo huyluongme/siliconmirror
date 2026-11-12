@@ -4,6 +4,9 @@
 // Print a message on UART0 of the Raspberry Pi 3, then wait forever.
 // Booted like kernel8.img: loaded at 0x80000, core 0 starts here.
 
+	.equ	GPIO, 0x3f200000
+	.equ	GPFSEL1, 0x04		// function select of GPIO 10-19
+	.equ	GPFSEL1_ALT0, 0x24000	// GPIO 14 and 15: ALT0
 	.equ	UART0, 0x3f201000	// PL011
 	.equ	UARTDR, 0x00		// data
 	.equ	UARTFR, 0x18		// flags
@@ -17,6 +20,12 @@
 _start:
 	movz	x1, #(UART0 >> 16), lsl #16
 	movk	x1, #(UART0 & 0xffff)
+	// GPIO 14 and 15 carry TXD0 and RXD0 (ALT0): the PL011 on the
+	// serial cable, instead of the mini UART that the firmware set up.
+	movz	x10, #(GPIO >> 16), lsl #16
+	movz	w11, #(GPFSEL1_ALT0 & 0xffff)
+	movk	w11, #(GPFSEL1_ALT0 >> 16), lsl #16
+	str	w11, [x10, #GPFSEL1]
 	str	wzr, [x1, #UARTCR]	// disable the UART while setting it up
 	mov	w2, #26		// 115200 baud from the 48 MHz UARTCLK:
 	str	w2, [x1, #UARTIBRD]	// a divisor of 26 + 3/64

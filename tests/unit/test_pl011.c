@@ -181,7 +181,7 @@ static void type(Setup *s, const char *bytes, size_t len)
 	s->out.input = bytes;
 	s->out.input_len = len;
 	s->out.input_pos = 0;
-	s->m->input.poll(s->m->input.ctx);
+	s->m->inputs[0].poll(s->m->inputs[0].ctx);
 }
 
 /* Let the UART send everything it can. */
@@ -613,11 +613,11 @@ static void test_receive(void)
 	setup(&s, &pl011_arm_r1p5);
 	configure(&s, LCR_H_FEN | LCR_H_WLEN_8);
 	reg_write(&s, CR, CR_UARTEN | CR_RXE);
-	CHECK(s.m->input.ctx == s.uart);
+	CHECK(s.m->num_inputs == 1 && s.m->inputs[0].ctx == s.uart);
 	type(&s, "abc", 3);
 
 	/* One byte at a time comes on the line, whatever the polls. */
-	s.m->input.poll(s.m->input.ctx);
+	s.m->inputs[0].poll(s.m->inputs[0].ctx);
 	CHECK_EQ(s.out.input_pos, 1);
 	advance(&s, FRAME_8N1 - 1);
 	CHECK_EQ(reg_read(&s, FR), FR_TXFE | FR_RXFE);
@@ -836,13 +836,13 @@ static void test_wait_for_input(void)
 	configure(&s, LCR_H_WLEN_8);
 	s.out.input = "x";
 	s.out.input_len = 1;
-	CHECK(!s.m->input.wait(s.m->input.ctx));
+	CHECK(!s.m->inputs[0].wait(s.m->inputs[0].ctx));
 	reg_write(&s, CR, CR_UARTEN | CR_RXE);
-	CHECK(s.m->input.wait(s.m->input.ctx));
+	CHECK(s.m->inputs[0].wait(s.m->inputs[0].ctx));
 	CHECK_EQ(event_queue_next(&s.m->events), FRAME_8N1);
 	drain(&s);
 	CHECK_EQ(reg_read(&s, DR), 'x');
-	CHECK(!s.m->input.wait(s.m->input.ctx)); /* the input has ended */
+	CHECK(!s.m->inputs[0].wait(s.m->inputs[0].ctx)); /* the input has ended */
 
 	/* An invalid divisor stops the machine when a byte comes. */
 	reg_write(&s, IBRD, 0);
@@ -864,16 +864,23 @@ static void test_no_input(void)
 	Capture out = {.stream.ops = &output_only};
 	Pl011 *uart = pl011_create(m, &pl011_arm_r1p5, CLOCK_HZ, &out.stream, NULL);
 
-	CHECK(m->input.poll == NULL);
+	CHECK_EQ(m->num_inputs, 0);
 	pl011_destroy(uart);
 
 	/* Destroying the UART that is the input removes it. */
 	Capture in = {.stream.ops = &capture_ops};
 
 	uart = pl011_create(m, &pl011_arm_r1p5, CLOCK_HZ, &in.stream, NULL);
-	CHECK(m->input.ctx == uart);
+	CHECK(m->num_inputs == 1 && m->inputs[0].ctx == uart);
 	pl011_destroy(uart);
-	CHECK(m->input.poll == NULL && m->input.wait == NULL);
+	CHECK_EQ(m->num_inputs, 0);
+
+	/* A machine without room for another input. */
+	int contexts[MACHINE_MAX_INPUTS];
+
+	for (unsigned i = 0; i < MACHINE_MAX_INPUTS; i++)
+		CHECK(machine_add_input(m, NULL, NULL, &contexts[i]));
+	CHECK(pl011_create(m, &pl011_arm_r1p5, CLOCK_HZ, &in.stream, NULL) == NULL);
 	machine_destroy(m);
 }
 

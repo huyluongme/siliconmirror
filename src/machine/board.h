@@ -19,7 +19,7 @@ typedef struct BoardOptions {
 	const char *kernel; /* -kernel: image to boot, or NULL */
 
 	/*
-	 * -serial: the back end of the first UART, or NULL for none. The
+	 * -serial: the back end of the serial console, or NULL for none. The
 	 * board owns it from the call to create() on, even if create() fails.
 	 */
 	CharStream *serial;

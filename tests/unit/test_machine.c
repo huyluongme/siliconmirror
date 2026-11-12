@@ -290,7 +290,7 @@ static void test_input(void)
 
 	memset(&input, 0, sizeof(input));
 	input.cpu = f;
-	machine_set_input(m, input_poll, input_wait, m);
+	CHECK(machine_add_input(m, input_poll, input_wait, m));
 	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
 	CHECK_EQ(input.polls, 4);
 	CHECK_EQ(input.poll_times[0], 1000);
@@ -303,9 +303,68 @@ static void test_input(void)
 	CHECK_EQ(m->events.now, 3501000);
 
 	/* Without an input, the machine stops as idle. */
-	machine_set_input(m, NULL, NULL, NULL);
+	machine_remove_input(m, m);
 	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
 	CHECK_EQ(input.waits, 2);
+	machine_destroy(m);
+}
+
+/* An input that never has anything: it counts its polls and waits. */
+static unsigned silent_polls, silent_waits;
+
+static void silent_poll(void *ctx)
+{
+	(void)ctx;
+	silent_polls++;
+}
+
+static bool silent_wait(void *ctx)
+{
+	(void)ctx;
+	silent_waits++;
+	return false;
+}
+
+/*
+ * Every input is polled, and waited for in the order they were added
+ * until one has input. There is room for MACHINE_MAX_INPUTS of them.
+ */
+static void test_inputs(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 1500000);
+	int contexts[MACHINE_MAX_INPUTS];
+
+	memset(&input, 0, sizeof(input));
+	input.cpu = f;
+	silent_polls = silent_waits = 0;
+	CHECK(machine_add_input(m, silent_poll, silent_wait, &contexts[0]));
+	CHECK(machine_add_input(m, input_poll, input_wait, m));
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(input.polls, 2);
+	CHECK_EQ(silent_polls, 2);
+	CHECK_EQ(input.waits, 2);
+	CHECK_EQ(silent_waits, 2);
+
+	/* Removing the first leaves the second, which is polled alone. */
+	machine_remove_input(m, &contexts[0]);
+	machine_remove_input(m, &contexts[1]); /* not an input: no effect */
+	f->halt_at = f->executed + 1000000;
+	f->cpu.state = CPU_RUNNING;
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(silent_polls, 2);
+	CHECK_EQ(input.polls, 3);
+	CHECK_EQ(m->num_inputs, 1);
+
+	for (unsigned i = 1; i < MACHINE_MAX_INPUTS; i++)
+		CHECK(machine_add_input(m, silent_poll, silent_wait, &contexts[i]));
+	CHECK(!machine_add_input(m, silent_poll, silent_wait, &contexts[0]));
+
+	/* Removing an input twice removes it once. */
+	machine_remove_input(m, &contexts[3]);
+	machine_remove_input(m, &contexts[3]);
+	CHECK_EQ(m->num_inputs, 3);
+	CHECK(m->inputs[2].ctx == &contexts[2]);
 	machine_destroy(m);
 }
 
@@ -536,6 +595,7 @@ int main(void)
 	RUN_TEST(test_idle_listener);
 	RUN_TEST(test_idle_listener_schedules);
 	RUN_TEST(test_input);
+	RUN_TEST(test_inputs);
 	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
 	return test_summary();

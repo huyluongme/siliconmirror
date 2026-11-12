@@ -623,8 +623,11 @@ Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
 	event_init(&uart->tx_done, tx_finished, uart);
 	event_init(&uart->rx_done, rx_finished, uart);
 	event_init(&uart->rx_timeout, rx_timed_out, uart);
-	if (char_stream_has_input(serial))
-		machine_set_input(m, serial_poll, serial_wait, uart);
+	if (char_stream_has_input(serial) &&
+	    !machine_add_input(m, serial_poll, serial_wait, uart)) {
+		free(uart);
+		return NULL;
+	}
 	pl011_reset(uart);
 	return uart;
 }
@@ -633,8 +636,7 @@ void pl011_destroy(Pl011 *uart)
 {
 	Machine *m = uart->machine;
 
-	if (m->input.ctx == uart)
-		machine_set_input(m, NULL, NULL, NULL);
+	machine_remove_input(m, uart);
 	event_cancel(&m->events, &uart->rx_done);
 	event_cancel(&m->events, &uart->rx_timeout);
 	event_cancel(&uart->machine->events, &uart->tx_done);

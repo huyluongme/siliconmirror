@@ -89,19 +89,22 @@ contains `compile_commands.json` for editors and language servers.
 ./build/debug/smirror -M raspi3b -kernel hello.bin
 ```
 
-| Option         | What it does                                                            |
-|----------------|-------------------------------------------------------------------------|
-| `-M NAME`      | Board to emulate; `-M help` lists them                                  |
-| `-kernel FILE` | Image to boot, loaded as the board's firmware would                     |
-| `-serial DEV`  | Where the first UART goes: `stdio` (the default), `null` or `file:PATH` |
+| Option         | What it does                                                                |
+|----------------|-----------------------------------------------------------------------------|
+| `-M NAME`      | Board to emulate; `-M help` lists them                                      |
+| `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
+| `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
 
-With `-serial stdio`, the first UART is connected to the terminal: what
-the guest sends shows up there, and what you type goes to the guest, as
-on a serial console. The terminal is in raw mode meanwhile, so Ctrl-C
+With `-serial stdio`, the board's serial console is connected to the
+terminal: what the guest sends shows up there, and what you type goes
+to the guest. On the `raspi3b`, that is a serial cable on GPIO 14 and
+15 of the header, which reaches the UART that the pins are set to, the
+mini UART as the firmware leaves them (see
+[docs/boards/raspi3b.md](docs/boards/raspi3b.md)). The terminal is in raw mode meanwhile, so Ctrl-C
 goes to the guest too; press **Ctrl-A x** to quit smirror, and Ctrl-A
 Ctrl-A to send a Ctrl-A. When standard input is a file or a pipe, its
 bytes go to the guest as they are, until its end. `file:PATH` and `null`
-give the UART no input.
+give the guest no input.
 
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does

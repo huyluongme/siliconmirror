@@ -61,7 +61,7 @@ typedef struct Pl011 Pl011;
  * serial are what it receives: when serial has input, the UART becomes
  * the input of m. irq is its interrupt output (UARTINTR). Either may be
  * NULL when not connected. Returns NULL when config or clock_hz is
- * invalid, or memory runs out.
+ * invalid, m has no room for another input, or memory runs out.
  */
 Pl011 *pl011_create(Machine *m, const Pl011Config *config, uint64_t clock_hz,
                     CharStream *serial, IrqLine *irq);

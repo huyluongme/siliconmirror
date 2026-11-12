@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 Machine *machine_create(void)
 {
@@ -93,19 +94,45 @@ void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx)
 	m->idle_ctx = ctx;
 }
 
-void machine_set_input(Machine *m, void (*poll)(void *ctx),
+bool machine_add_input(Machine *m, void (*poll)(void *ctx),
                        bool (*wait)(void *ctx), void *ctx)
 {
-	m->input = (MachineInput){.poll = poll, .wait = wait, .ctx = ctx};
+	if (m->num_inputs == MACHINE_MAX_INPUTS)
+		return false;
+	m->inputs[m->num_inputs++] =
+		(MachineInput){.poll = poll, .wait = wait, .ctx = ctx};
+	return true;
 }
 
-/* Poll the input if it is time to, between turns. */
-static void poll_input(Machine *m)
+void machine_remove_input(Machine *m, void *ctx)
 {
-	if (m->input.poll == NULL || m->events.now < m->next_poll)
+	for (unsigned i = 0; i < m->num_inputs; i++) {
+		if (m->inputs[i].ctx == ctx) {
+			m->num_inputs--;
+			memmove(&m->inputs[i], &m->inputs[i + 1],
+			        (m->num_inputs - i) * sizeof(m->inputs[0]));
+			return;
+		}
+	}
+}
+
+/* Poll the inputs if it is time to, between turns. */
+static void poll_inputs(Machine *m)
+{
+	if (m->num_inputs == 0 || m->events.now < m->next_poll)
 		return;
-	m->input.poll(m->input.ctx);
+	for (unsigned i = 0; i < m->num_inputs; i++)
+		m->inputs[i].poll(m->inputs[i].ctx);
 	m->next_poll = m->events.now + MACHINE_POLL_NS;
+}
+
+/* Wait for input from the host: whether some came. */
+static bool wait_inputs(Machine *m)
+{
+	for (unsigned i = 0; i < m->num_inputs; i++)
+		if (m->inputs[i].wait(m->inputs[i].ctx))
+			return true;
+	return false;
 }
 
 /*
@@ -197,7 +224,7 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			next = event_queue_next(&m->events);
 			if (next == EVENT_NEVER) {
 				/* Only input from the host can wake the machine. */
-				if (m->input.wait != NULL && m->input.wait(m->input.ctx))
+				if (wait_inputs(m))
 					continue;
 				machine_stop(m, MACHINE_STOP_IDLE,
 				             "every CPU is waiting and no event is pending");
@@ -210,7 +237,7 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			break;
 
 		event_queue_run_until(&m->events, end);
-		poll_input(m);
+		poll_inputs(m);
 		if (m->insns >= limit)
 			machine_stop(m, MACHINE_STOP_LIMIT,
 			             "instruction limit reached after %" PRIu64

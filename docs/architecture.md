@@ -29,6 +29,7 @@ src/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
     char/             UARTs (pl011, bcm2835_aux)
+    gpio/             GPIO blocks (bcm2835_gpio)
     intc/             Interrupt controllers (bcm2836_local, bcm2835_ic)
     timer/            Timers (bcm2835_systimer)
     sd/               SD host controllers and SD cards

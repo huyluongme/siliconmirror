@@ -37,6 +37,14 @@ add_executable(test_char_stdio test_char_stdio.c)
 target_link_libraries(test_char_stdio PRIVATE backend)
 add_test(NAME unit.char_stdio COMMAND test_char_stdio)
 
+add_executable(test_bcm2835_gpio test_bcm2835_gpio.c)
+target_link_libraries(test_bcm2835_gpio PRIVATE hw)
+add_test(NAME unit.bcm2835_gpio COMMAND test_bcm2835_gpio)
+
+add_executable(test_bcm2835_aux test_bcm2835_aux.c)
+target_link_libraries(test_bcm2835_aux PRIVATE hw)
+add_test(NAME unit.bcm2835_aux COMMAND test_bcm2835_aux)
+
 add_executable(test_pl011 test_pl011.c)
 target_link_libraries(test_pl011 PRIVATE hw)
 add_test(NAME unit.pl011 COMMAND test_pl011)
@@ -52,6 +60,10 @@ add_test(NAME unit.bcm2835_ic COMMAND test_bcm2835_ic)
 add_executable(test_boot_direct test_boot_direct.c)
 target_link_libraries(test_boot_direct PRIVATE boot)
 add_test(NAME unit.boot_direct COMMAND test_boot_direct)
+
+add_executable(test_raspi3b_serial test_raspi3b_serial.c)
+target_link_libraries(test_raspi3b_serial PRIVATE machine)
+add_test(NAME unit.raspi3b_serial COMMAND test_raspi3b_serial)
 
 add_executable(test_raspi3b test_raspi3b.c)
 target_link_libraries(test_raspi3b PRIVATE machine backend)

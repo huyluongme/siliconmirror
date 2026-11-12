@@ -39,6 +39,12 @@ typedef struct CharStreamOps {
 	 */
 	bool (*wait)(CharStream *s);
 
+	/*
+	 * Whether the line to the device is held low, as when nothing drives
+	 * it: a receiver then sees a start bit that never ends, and no byte
+	 * comes from read. NULL for a stream whose line is never held low.
+	 */
+	bool (*line_low)(CharStream *s);
 	/* Free the stream. */
 	void (*destroy)(CharStream *s);
 } CharStreamOps;
@@ -63,6 +69,11 @@ static inline bool char_stream_read(CharStream *s, uint8_t *byte)
 static inline bool char_stream_wait(CharStream *s)
 {
 	return s != NULL && s->ops->wait != NULL && s->ops->wait(s);
+}
+
+static inline bool char_stream_line_low(CharStream *s)
+{
+	return s != NULL && s->ops->line_low != NULL && s->ops->line_low(s);
 }
 
 /* Whether input can come from the stream at all. */

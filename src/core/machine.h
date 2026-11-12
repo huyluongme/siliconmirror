@@ -61,14 +61,19 @@ typedef void (*MachineIdleListener)(void *ctx, bool idle, uint64_t since);
 /* How often the main loop polls the input from the host, in virtual time. */
 #define MACHINE_POLL_NS 1000000
 
+/* The most inputs a machine has: one for each UART that the host reaches. */
+#define MACHINE_MAX_INPUTS 4
+
 /*
  * Input from the host, such as the keys typed for a UART. The main loop
- * calls poll at least every MACHINE_POLL_NS of virtual time, between
- * turns, for the device to take what the host has sent. When no CPU runs
- * and no event is pending, it calls wait instead of stopping as idle:
- * wait blocks until there is input for the device, takes it and returns
- * true, or returns false when the device cannot take any: it does not
- * listen, or the input has ended.
+ * calls the poll of every input at least every MACHINE_POLL_NS of virtual
+ * time, between turns, for its device to take what the host has sent.
+ * When no CPU runs and no event is pending, it calls the wait of each
+ * input in turn instead of stopping as idle: wait blocks until there is
+ * input for the device, takes it and returns true, or returns false when
+ * the device cannot take any: it does not listen, or the input has ended.
+ * As the first wait that blocks holds the machine, at most one input
+ * should block at a time.
  */
 typedef struct MachineInput {
 	void (*poll)(void *ctx);
@@ -90,8 +95,9 @@ struct Machine {
 	bool idle; /* no CPU runs, as last told to the idle listener */
 	MachineIdleListener idle_listener;
 	void *idle_ctx;
-	MachineInput input;
-	uint64_t next_poll; /* virtual time of the next poll of the input */
+	MachineInput inputs[MACHINE_MAX_INPUTS];
+	unsigned num_inputs;
+	uint64_t next_poll; /* virtual time of the next poll of the inputs */
 };
 
 /* Create a machine with an empty bus. Returns NULL when out of memory. */
@@ -124,9 +130,15 @@ bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
  */
 void machine_set_idle_listener(Machine *m, MachineIdleListener fn, void *ctx);
 
-/* Set the one input of the machine, or remove it with NULL functions. */
-void machine_set_input(Machine *m, void (*poll)(void *ctx),
+/*
+ * Add an input to the machine. Returns false when it has
+ * MACHINE_MAX_INPUTS already.
+ */
+bool machine_add_input(Machine *m, void (*poll)(void *ctx),
                        bool (*wait)(void *ctx), void *ctx);
+
+/* Remove the input of ctx, if the machine has one. */
+void machine_remove_input(Machine *m, void *ctx);
 
 /* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);

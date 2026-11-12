@@ -3,7 +3,9 @@
 
 # Device models, grouped by kind. See docs/architecture.md.
 add_library(hw STATIC
+	char/bcm2835_aux.c
 	char/pl011.c
+	gpio/bcm2835_gpio.c
 	intc/bcm2835_ic.c
 	intc/bcm2836_local.c)
 

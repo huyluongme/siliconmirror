@@ -4,7 +4,7 @@
 /*
  * Unit tests for the Raspberry Pi 3 Model B board (src/machine/): its
  * memory map, the state it boots the cores in, and small programs that
- * print on UART0. The programs were built with the GNU assembler.
+ * print on the mini UART. The programs were built with the GNU assembler.
  */
 
 #include <stdint.h>
@@ -22,25 +22,19 @@
 /* Test files go to the current directory: the build tree under CTest. */
 #define KERNEL "test_raspi3b_kernel.bin"
 
-/* Print "Hello, world!\n" on UART0, then wait in WFI. */
+/*
+ * Print "Hello, world!\n" on the mini UART, which the firmware has set up,
+ * then wait in WFI.
+ */
 static const uint32_t hello[] = {
-	0xd2a7e401, /*       MOVZ X1, #0x3f20, LSL #16 */
-	0xf2820001, /*       MOVK X1, #0x1000: UART0 */
-	0xb900303f, /*       STR  WZR, [X1, #0x30]: UARTCR, disable */
-	0x52800342, /*       MOV  W2, #26 */
-	0xb9002422, /*       STR  W2, [X1, #0x24]: UARTIBRD */
-	0x52800062, /*       MOV  W2, #3 */
-	0xb9002822, /*       STR  W2, [X1, #0x28]: UARTFBRD, 115200 baud */
-	0x52800e02, /*       MOV  W2, #0x70 */
-	0xb9002c22, /*       STR  W2, [X1, #0x2c]: UARTLCR_H, 8 bits */
-	0x52806022, /*       MOV  W2, #0x301 */
-	0xb9003022, /*       STR  W2, [X1, #0x30]: UARTCR, enable */
+	0xd2a7e421, /*       MOVZ X1, #0x3f21, LSL #16 */
+	0xf28a0801, /*       MOVK X1, #0x5040: AUX_MU_IO_REG */
 	0x10000123, /*       ADR  X3, message */
 	0x38401462, /* next: LDRB W2, [X3], #1 */
 	0x340000a2, /*       CBZ  W2, done */
-	0xb9401824, /* busy: LDR  W4, [X1, #0x18]: UARTFR */
-	0x372fffe4, /*       TBNZ W4, #5, busy: TXFF */
-	0xb9000022, /*       STR  W2, [X1]: UARTDR */
+	0xb9401424, /* busy: LDR  W4, [X1, #0x14]: AUX_MU_LSR_REG */
+	0x362fffe4, /*       TBZ  W4, #5, busy: transmitter empty */
+	0xb9000022, /*       STR  W2, [X1]: AUX_MU_IO_REG */
 	0x17fffffb, /*       B    next */
 	0xd503207f, /* done: WFI */
 	0x17ffffff, /*       B    done */
@@ -63,17 +57,6 @@ static const uint32_t park[] = {
  * prints its number.
  */
 static uint32_t smp[] = {
-	0xd2a7e401, /*        MOVZ X1, #0x3f20, LSL #16 */
-	0xf2820001, /*        MOVK X1, #0x1000 */
-	0xb900303f, /*        STR  WZR, [X1, #0x30] */
-	0x52800342, /*        MOV  W2, #26 */
-	0xb9002422, /*        STR  W2, [X1, #0x24] */
-	0x52800062, /*        MOV  W2, #3 */
-	0xb9002822, /*        STR  W2, [X1, #0x28] */
-	0x52800e02, /*        MOV  W2, #0x70 */
-	0xb9002c22, /*        STR  W2, [X1, #0x2c] */
-	0x52806022, /*        MOV  W2, #0x301 */
-	0xb9003022, /*        STR  W2, [X1, #0x30] */
 	0xd280fa07, /*        MOV  X7, #2000 */
 	0xf10004e7, /* delay: SUBS X7, X7, #1 */
 	0x54ffffe1, /*        B.NE delay */
@@ -86,8 +69,8 @@ static uint32_t smp[] = {
 	0xd503207f, /* done:  WFI */
 	0x17ffffff, /*        B    done */
 	/* secondary: */
-	0xd2a7e401, /*        MOVZ X1, #0x3f20, LSL #16 */
-	0xf2820001, /*        MOVK X1, #0x1000 */
+	0xd2a7e421, /*        MOVZ X1, #0x3f21, LSL #16 */
+	0xf28a0801, /*        MOVK X1, #0x5040: AUX_MU_IO_REG */
 	0xd53800a6, /*        MRS  X6, MPIDR_EL1 */
 	0x924004c6, /*        AND  X6, X6, #3: the core number */
 	0x1100c0c6, /*        ADD  W6, W6, #'0' */
@@ -96,7 +79,7 @@ static uint32_t smp[] = {
 	0x17ffffff, /*        B    park */
 };
 
-#define SMP_SEV 19 /* index of the SEV in smp[] */
+#define SMP_SEV 8 /* index of the SEV in smp[] */
 
 static void write_kernel(const uint32_t *words, size_t count)
 {
@@ -236,6 +219,28 @@ static void test_state_before_the_stub(void)
 		CHECK_EQ(value, 0);
 	}
 
+	/*
+	 * The firmware has set up the mini UART on GPIO 14 and 15, which its
+	 * TX and the cable keep high: 8 bits, 115200 baud, no interrupts.
+	 */
+	static const struct {
+		uint64_t address;
+		uint64_t value;
+	} firmware[] = {
+		{RASPI3B_GPIO_BASE + 0x04, 0x12000}, /* GPFSEL1: ALT5 */
+		{RASPI3B_GPIO_BASE + 0x34, 0xc000},  /* GPLEV0: TX, RX */
+		{RASPI3B_AUX_BASE + 0x04, 1},        /* AUX_ENABLES */
+		{RASPI3B_AUX_BASE + 0x44, 0},        /* AUX_MU_IER_REG */
+		{RASPI3B_AUX_BASE + 0x4c, 1},        /* AUX_MU_LCR_REG */
+		{RASPI3B_AUX_BASE + 0x60, 3},        /* AUX_MU_CNTL_REG */
+		{RASPI3B_AUX_BASE + 0x68, 270},      /* AUX_MU_BAUD_REG */
+	};
+	for (unsigned i = 0; i < ARRAY_SIZE(firmware); i++) {
+		CHECK_EQ(bus_read(m->bus, firmware[i].address, 4, &value), BUS_OK);
+		CHECK_EQ(value & (i == 1 ? UINT64_C(0xc000) : UINT64_MAX),
+		         firmware[i].value);
+	}
+
 	machine_destroy(m);
 	fclose(out);
 	remove(KERNEL);
@@ -321,7 +326,7 @@ static void test_hello(void)
 	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
 	char text[64];
 
-	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
+	CHECK_EQ(machine_run(m, 2000000), MACHINE_STOP_IDLE);
 	read_output(out, text, sizeof(text));
 	CHECK(strcmp(text, "Hello, world!\n") == 0);
 	machine_destroy(m);
@@ -432,13 +437,66 @@ static void test_interrupt_wiring(void)
 	remove(KERNEL);
 }
 
-/* UART0 runs from a 48 MHz UARTCLK: at 115200 baud, a byte takes 86823 ns. */
+/*
+ * The GPU interrupts of the mini UART (29) and of the GPIO banks (49 to
+ * 51, and 52 for all the pins), as the interrupt controller's pending
+ * registers show them once enabled.
+ */
+static void test_gpu_interrupt_wiring(void)
+{
+	static const struct {
+		uint64_t offset; /* in the GPIO block */
+		uint32_t value;
+		uint32_t pending2; /* GPU interrupts 32-63 */
+	} gpio[] = {
+		{0x64, 1u << 0, 1u << 17 | 1u << 20},  /* GPHEN0: pin 0 is high */
+		{0x70, 1u << 30, 1u << 18 | 1u << 20}, /* GPLEN0: pin 30 is low */
+		{0x68, 1u << 18, 1u << 19 | 1u << 20}, /* GPHEN1: pin 50 is high */
+	};
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t value;
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x10, 4, 1u << 29), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x14, 4, 0xfu << 17), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x04, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	/* AUX_MU_IER_REG: the transmit FIFO is empty. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x44, 4, 2), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x04, 4, &value), BUS_OK);
+	CHECK_EQ(value, 1u << 29);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x44, 4, 0), BUS_OK);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(gpio); i++) {
+		uint64_t base = RASPI3B_GPIO_BASE;
+
+		CHECK_EQ(bus_write(m->bus, base + gpio[i].offset, 4, gpio[i].value),
+		         BUS_OK);
+		CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &value), BUS_OK);
+		CHECK_EQ(value, gpio[i].pending2);
+		CHECK_EQ(bus_write(m->bus, base + gpio[i].offset, 4, 0), BUS_OK);
+		CHECK_EQ(bus_write(m->bus, base + 0x40, 4, UINT32_MAX), BUS_OK);
+		CHECK_EQ(bus_write(m->bus, base + 0x44, 4, UINT32_MAX), BUS_OK);
+	}
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
+ * UART0 runs from a 48 MHz UARTCLK: at 115200 baud, a byte takes 86823 ns.
+ * GPIO 14 and 15 must carry its signals, ALT0, for the cable to get it.
+ */
 static void test_uart_clock(void)
 {
 	FILE *out;
 	Machine *m = boot(park, ARRAY_SIZE(park), &out);
 	char buf[16];
 
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 4, 4, 0x24000), BUS_OK);
 	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x24, 4, 26), BUS_OK);
 	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x28, 4, 3), BUS_OK);
 	CHECK_EQ(bus_write(m->bus, RASPI3B_UART0_BASE + 0x2c, 4, 0x60), BUS_OK);
@@ -455,6 +513,35 @@ static void test_uart_clock(void)
 	remove(KERNEL);
 }
 
+/*
+ * The mini UART runs from the 250 MHz core clock, which the firmware set
+ * to 115313 baud: a byte of 10 bits takes 10 * 8 * 271 / 250 MHz.
+ */
+static void test_mini_uart_clock(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	char buf[16];
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x40, 4, 'y'), BUS_OK);
+	event_queue_run_until(&m->events, 86719);
+	read_output(out, buf, sizeof(buf));
+	CHECK(strcmp(buf, "") == 0);
+	event_queue_run_until(&m->events, 86720);
+	read_output(out, buf, sizeof(buf));
+	CHECK(strcmp(buf, "y") == 0);
+
+	/* With GPIO 14 back to an input, nothing reaches the cable. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 4, 4, 0), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x40, 4, 'z'), BUS_OK);
+	event_queue_run_until(&m->events, 2 * 86720);
+	read_output(out, buf, sizeof(buf));
+	CHECK(strcmp(buf, "y") == 0);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -465,6 +552,24 @@ static void test_reset_resets_uart(void)
 	machine_reset(m);
 	CHECK_EQ(bus_read(m->bus, RASPI3B_UART0_BASE + 0x30, 4, &value), BUS_OK);
 	CHECK_EQ(value, 0x300);
+
+	/*
+	 * The GPIO and the mini UART reset, then the firmware sets up the
+	 * mini UART again.
+	 */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x68, 4, 1), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_AUX_BASE + 0x5c, 4, 0x5a), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 4, 4, 0), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 8, 4, 0x40), BUS_OK);
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_AUX_BASE + 0x5c, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_GPIO_BASE + 8, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_AUX_BASE + 0x68, 4, &value), BUS_OK);
+	CHECK_EQ(value, 270);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_GPIO_BASE + 4, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x12000);
 	machine_destroy(m);
 	fclose(out);
 	remove(KERNEL);
@@ -480,7 +585,7 @@ static void test_reset_runs_the_stub_again(void)
 	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
 	char text[64];
 
-	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
+	CHECK_EQ(machine_run(m, 2000000), MACHINE_STOP_IDLE);
 	machine_reset(m);
 	for (unsigned i = 0; i < m->num_cpus; i++) {
 		Arm64Cpu *c = arm64_cpu_of(m->cpus[i]);
@@ -488,7 +593,7 @@ static void test_reset_runs_the_stub_again(void)
 		CHECK_EQ(c->el, 3);
 		CHECK_EQ(c->pc, RASPI3B_STUB_ADDRESS);
 	}
-	CHECK_EQ(machine_run(m, 100000), MACHINE_STOP_IDLE);
+	CHECK_EQ(machine_run(m, 2000000), MACHINE_STOP_IDLE);
 	read_output(out, text, sizeof(text));
 	CHECK(strcmp(text, "Hello, world!\nHello, world!\n") == 0);
 
@@ -505,7 +610,9 @@ int main(void)
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
 	RUN_TEST(test_interrupt_wiring);
+	RUN_TEST(test_gpu_interrupt_wiring);
 	RUN_TEST(test_uart_clock);
+	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);

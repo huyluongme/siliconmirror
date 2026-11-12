@@ -10,6 +10,9 @@
 //
 // The main code uses X0 to X9, the handler X10 to X18. X9 holds UART0.
 
+	.equ	GPIO, 0x3f200000
+	.equ	GPFSEL1, 0x04		// function select of GPIO 10-19
+	.equ	GPFSEL1_ALT0, 0x24000	// GPIO 14 and 15: ALT0
 	.equ	UART0, 0x3f201000	// PL011
 	.equ	UARTDR, 0x00		// data
 	.equ	UARTFR, 0x18		// flags
@@ -28,6 +31,12 @@
 _start:
 	movz	x9, #(UART0 >> 16), lsl #16
 	movk	x9, #(UART0 & 0xffff)
+	// GPIO 14 and 15 carry TXD0 and RXD0 (ALT0): the PL011 on the
+	// serial cable, instead of the mini UART that the firmware set up.
+	movz	x10, #(GPIO >> 16), lsl #16
+	movz	w11, #(GPFSEL1_ALT0 & 0xffff)
+	movk	w11, #(GPFSEL1_ALT0 >> 16), lsl #16
+	str	w11, [x10, #GPFSEL1]
 	str	wzr, [x9, #UARTCR]	// disable the UART while setting it up
 	mov	w0, #26		// 115200 baud from the 48 MHz UARTCLK:
 	str	w0, [x9, #UARTIBRD]	// a divisor of 26 + 3/64
