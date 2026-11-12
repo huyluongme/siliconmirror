@@ -13,6 +13,8 @@ add_library(cpu STATIC
 	arm64/interrupt.c
 	arm64/load_store.c
 	arm64/mem.c
+	arm64/mmu.c
+	arm64/sysinsn.c
 	arm64/sysreg.c
 	arm64/timer.c)
 

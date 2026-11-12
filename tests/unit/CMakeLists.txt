@@ -77,6 +77,10 @@ add_executable(test_arm64_interrupt test_arm64_interrupt.c)
 target_link_libraries(test_arm64_interrupt PRIVATE cpu)
 add_test(NAME unit.arm64_interrupt COMMAND test_arm64_interrupt)
 
+add_executable(test_arm64_mmu test_arm64_mmu.c)
+target_link_libraries(test_arm64_mmu PRIVATE cpu)
+add_test(NAME unit.arm64_mmu COMMAND test_arm64_mmu)
+
 add_executable(test_arm64_exception test_arm64_exception.c)
 target_link_libraries(test_arm64_exception PRIVATE cpu)
 add_test(NAME unit.arm64_exception COMMAND test_arm64_exception)

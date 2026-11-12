@@ -422,8 +422,6 @@ static void test_undefined(void)
 static void test_not_implemented_yet(void)
 {
 	static const uint32_t insns[] = {
-		0xd50b7e20, /* DC CIVAC, X0 */
-		0xd508871f, /* TLBI VMALLE1 */
 		0xd5033f5f, /* CLREX */
 	};
 

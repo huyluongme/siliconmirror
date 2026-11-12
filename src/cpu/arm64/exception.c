@@ -145,7 +145,8 @@ static void take(Arm64Cpu *c, unsigned target, uint64_t offset,
 	c->sp_sel = true;
 	c->daif = ARM64_DAIF_D | ARM64_DAIF_A | ARM64_DAIF_I | ARM64_DAIF_F;
 	c->il = false;
-	c->pc = (c->sys.vbar[target] & ~(uint64_t)0x7ff) + offset;
+	c->pc =
+		arm64_branch_addr(c, (c->sys.vbar[target] & ~(uint64_t)0x7ff) + offset);
 }
 
 void arm64_take_exception(Arm64Cpu *c)
@@ -311,10 +312,10 @@ static bool illegal_return(Arm64Cpu *c, uint64_t spsr)
  * ELR_ELx, whose bits 63:32 and 1:0 are UNKNOWN when the SPSR is an
  * AArch32 one: this model keeps them.
  *
- * The return address is used as it is: AArch64_BranchAddr() would remove
- * a tag from its top byte when TCR_ELx.TBI says so, and the MMU, which
- * TCR_ELx belongs to, is not implemented yet. ClearExclusiveLocal() has
- * nothing to clear: the exclusive monitors are not implemented yet.
+ * The return address goes through AArch64_BranchAddr() at the new
+ * Exception level, which removes its tag when TCR_ELx.TBI says so.
+ * ClearExclusiveLocal() has nothing to clear: the exclusive monitors are
+ * not implemented yet.
  */
 Arm64Exec arm64_exec_eret(Arm64Cpu *c)
 {
@@ -338,7 +339,7 @@ Arm64Exec arm64_exec_eret(Arm64Cpu *c)
 	c->nzcv = (uint32_t)spsr & 0xf0000000;
 	c->daif = (uint32_t)spsr & 0x3c0;
 	c->event_register = true; /* SendEventLocal() */
-	c->next_pc = elr;
+	c->next_pc = arm64_branch_addr(c, elr);
 	return ARM64_EXEC_OK;
 }
 
@@ -385,21 +386,34 @@ Arm64Exec arm64_check_sp_alignment(Arm64Cpu *c)
 }
 
 /*
- * An Alignment fault on a data access: AArch64_DataAbort(), J1.2.2.4,
- * with the syndrome of AArch64_FaultSyndrome(), J1.2.3.1. ISV is 0, as
- * for every fault of a stage 1 translation, so the ISS holds WnR and the
- * fault status code. FAR_ELx holds the address of the access.
+ * A Data Abort, or an Instruction Abort: AArch64_DataAbort(), J1.2.2.4,
+ * and AArch64_InstructionAbort(), J1.2.2.6. HCR_EL2.TGE sends those from
+ * EL0 and EL1 to EL2. iss is the syndrome of AArch64_FaultSyndrome(),
+ * J1.2.3.1: ISV is 0, as for every fault of stage 1 translation. FAR_ELx
+ * holds far, the address of the access.
  */
-Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write)
+Arm64Exec arm64_abort(Arm64Cpu *c, bool instruction, uint32_t iss, uint64_t far)
 {
 	unsigned target = route(c, true);
-	unsigned ec =
-		target == c->el ? ARM64_EC_DATA_ABORT_SAME : ARM64_EC_DATA_ABORT_LOWER;
+	bool same = target == c->el;
+	unsigned ec;
 
-	arm64_raise(c, target, ec, (write ? 1u << 6 : 0) | ARM64_DFSC_ALIGNMENT);
+	if (instruction)
+		ec = same ? ARM64_EC_INSTRUCTION_ABORT_SAME
+		          : ARM64_EC_INSTRUCTION_ABORT_LOWER;
+	else
+		ec = same ? ARM64_EC_DATA_ABORT_SAME : ARM64_EC_DATA_ABORT_LOWER;
+	arm64_raise(c, target, ec, iss);
 	c->exception.far_valid = true;
-	c->exception.far = address;
+	c->exception.far = far;
 	return ARM64_EXEC_EXCEPTION;
+}
+
+/* An Alignment fault on a data access, with WnR for a write. */
+Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write)
+{
+	return arm64_abort(c, false, (write ? 1u << 6 : 0) | ARM64_DFSC_ALIGNMENT,
+	                   address);
 }
 
 /*

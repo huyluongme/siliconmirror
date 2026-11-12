@@ -4,11 +4,13 @@
 #include "cpu/arm64/cpu.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "core/machine.h"
 #include "cpu/arm64/internal.h"
+#include "cpu/arm64/sysreg.h"
 #include "util/macros.h"
 
 Arm64Cpu *arm64_cpu_of(Cpu *cpu)
@@ -38,6 +40,7 @@ static void arm64_reset(Cpu *base)
 	c->event_register = false;
 	arm64_sysreg_reset(c);
 	arm64_timer_reset(c);
+	arm64_tlb_flush(c);
 	base->state = CPU_RUNNING;
 }
 
@@ -51,6 +54,88 @@ static void take_undefined(Arm64Cpu *c)
 {
 	arm64_raise(c, arm64_el1_target(c), ARM64_EC_UNKNOWN, 0);
 	arm64_take_exception(c);
+}
+
+/*
+ * Stop the machine on what the model does not emulate: result is
+ * ARM64_EXEC_UNIMPLEMENTED or ARM64_EXEC_DATA_ABORT, from the
+ * instruction insn, or from the fetch of the instruction at the PC.
+ */
+static void stop(Arm64Cpu *c, Arm64Exec result, bool fetch, uint32_t insn)
+{
+	const char *what = c->detail[0] != '\0' || fetch
+	                       ? c->detail
+	                       : arm64_group_name(arm64_group(insn));
+	char other[48] = ""; /* the other address of a translated access */
+	bool translated = !c->data_abort.walk &&
+	                  c->data_abort.address != c->data_abort.virtual_address;
+
+	if (result == ARM64_EXEC_UNIMPLEMENTED) {
+		if (fetch)
+			cpu_error(c,
+			          "instruction fetch from 0x%016" PRIx64
+			          " is not implemented yet (%s)",
+			          c->pc, what);
+		else
+			cpu_error(c,
+			          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
+			          " is not implemented yet (%s)",
+			          insn, c->pc, what);
+		return;
+	}
+	if (fetch && !c->data_abort.walk) {
+		if (translated)
+			snprintf(other, sizeof(other), " (physical 0x%016" PRIx64 ")",
+			         c->data_abort.address);
+		cpu_error(c, "instruction fetch from 0x%016" PRIx64 "%s failed: %s",
+		          c->pc, other, c->data_abort.reason);
+		return;
+	}
+	if (translated)
+		snprintf(other, sizeof(other), " (virtual 0x%016" PRIx64 ")",
+		         c->data_abort.virtual_address);
+	cpu_error(
+		c, "%s%u-byte %s 0x%016" PRIx64 "%s at 0x%016" PRIx64 " failed: %s",
+		c->data_abort.walk ? "translation table walk: " : "",
+		c->data_abort.size, c->data_abort.write ? "write to" : "read from",
+		c->data_abort.address, other, c->pc, c->data_abort.reason);
+}
+
+/*
+ * Fetch the instruction at the PC through the MMU into *insn. Returns
+ * ARM64_EXEC_OK, ARM64_EXEC_EXCEPTION for an Instruction Abort, or what
+ * stops the machine.
+ */
+static Arm64Exec fetch(Arm64Cpu *c, uint32_t *insn)
+{
+	Arm64Translation t;
+	Arm64Exec result =
+		arm64_translate(c, c->pc, ARM64_ACCESS_IFETCH, c->el, true, &t);
+	uint64_t value;
+	BusStatus status;
+
+	if (result != ARM64_EXEC_OK)
+		return result;
+	if (t.fault != ARM64_FAULT_NONE)
+		return arm64_translation_fault(c, c->pc, ARM64_ACCESS_IFETCH, &t);
+	status = bus_read(c->cpu.machine->bus, t.pa, 4, &value);
+	if (status != BUS_OK)
+		return arm64_bus_failure(c, t.pa, 4, false, status, false, c->pc);
+	*insn = (uint32_t)value;
+	return ARM64_EXEC_OK;
+}
+
+Arm64Exec arm64_bus_failure(Arm64Cpu *c, uint64_t address, unsigned size,
+                            bool write, BusStatus status, bool walk,
+                            uint64_t va)
+{
+	c->data_abort.address = address;
+	c->data_abort.size = size;
+	c->data_abort.write = write;
+	c->data_abort.reason = bus_status_str(status);
+	c->data_abort.walk = walk;
+	c->data_abort.virtual_address = va;
+	return ARM64_EXEC_DATA_ABORT;
 }
 
 /*
@@ -79,18 +164,19 @@ static bool step(Arm64Cpu *c)
 		return true;
 	}
 
-	uint64_t insn;
-	BusStatus status = bus_read(c->cpu.machine->bus, c->pc, 4, &insn);
+	uint32_t insn = 0;
+	Arm64Exec result;
 
-	if (status != BUS_OK) {
-		cpu_error(c, "instruction fetch from 0x%016" PRIx64 " failed: %s",
-		          c->pc, bus_status_str(status));
+	c->detail[0] = '\0';
+	result = fetch(c, &insn);
+	if (result == ARM64_EXEC_OK) {
+		c->next_pc = c->pc + 4;
+		result = arm64_execute(c, insn);
+	} else if (result != ARM64_EXEC_EXCEPTION) {
+		stop(c, result, true, 0);
 		return false;
 	}
-
-	c->next_pc = c->pc + 4;
-	c->detail[0] = '\0';
-	switch (arm64_execute(c, (uint32_t)insn)) {
+	switch (result) {
 	case ARM64_EXEC_OK:
 		c->pc = c->next_pc;
 		return true;
@@ -101,19 +187,8 @@ static bool step(Arm64Cpu *c)
 		arm64_take_exception(c);
 		return true;
 	case ARM64_EXEC_UNIMPLEMENTED:
-		cpu_error(c,
-		          "instruction 0x%08" PRIx32 " at 0x%016" PRIx64
-		          " is not implemented yet (%s)",
-		          (uint32_t)insn, c->pc,
-		          c->detail[0] != '\0'
-		              ? c->detail
-		              : arm64_group_name(arm64_group((uint32_t)insn)));
-		return false;
 	case ARM64_EXEC_DATA_ABORT:
-		cpu_error(
-			c, "%u-byte %s 0x%016" PRIx64 " at 0x%016" PRIx64 " failed: %s",
-			c->data_abort.size, c->data_abort.write ? "write to" : "read from",
-			c->data_abort.address, c->pc, c->data_abort.reason);
+		stop(c, result, false, insn);
 		return false;
 	}
 	return false;
@@ -165,6 +240,15 @@ void arm64_send_event(Arm64Cpu *c)
 	}
 }
 
+void arm64_tlb_flush_all_pes(Arm64Cpu *c)
+{
+	Machine *m = c->cpu.machine;
+
+	for (unsigned i = 0; i < m->num_cpus; i++)
+		if (m->cpus[i]->ops == &arm64_ops)
+			arm64_tlb_flush(arm64_cpu_of(m->cpus[i]));
+}
+
 void arm64_set_event_register(Arm64Cpu *c)
 {
 	if (c->cpu.state == CPU_HALTED && c->wait == ARM64_WAIT_EVENT) {
@@ -173,6 +257,26 @@ void arm64_set_event_register(Arm64Cpu *c)
 	} else {
 		c->event_register = true;
 	}
+}
+
+/*
+ * What ID_AA64MMFR0_EL1 says about the MMU (D24.2): PARange, the size of
+ * physical addresses, and TGran4, TGran16 and TGran64, which granules
+ * the core has. 0b1111 means "not implemented" for TGran4 and TGran64,
+ * 0b0000 for TGran16.
+ */
+static void mmu_features(Arm64Cpu *c)
+{
+	static const unsigned pa_sizes[7] = {32, 36, 40, 42, 44, 48, 52};
+	uint64_t mmfr0 = 0;
+	unsigned parange;
+
+	arm64_cpu_read_sysreg(c, ARM64_ID_AA64MMFR0_EL1, &mmfr0);
+	parange = mmfr0 & 0xf;
+	c->pa_bits = parange < 7 ? pa_sizes[parange] : 48;
+	c->granule_4k = ((mmfr0 >> 28) & 0xf) != 0xf;
+	c->granule_64k = ((mmfr0 >> 24) & 0xf) != 0xf;
+	c->granule_16k = ((mmfr0 >> 20) & 0xf) != 0;
 }
 
 Cpu *arm64_cpu_create(const Arm64Config *config)
@@ -190,6 +294,7 @@ Cpu *arm64_cpu_create(const Arm64Config *config)
 		return NULL;
 	cpu_init(&c->cpu, &arm64_ops);
 	c->config = *config;
+	mmu_features(c);
 	arm64_interrupt_init(c);
 	if (!arm64_timer_init(c)) {
 		free(c);

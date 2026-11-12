@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 
+#include "core/bus.h"
 #include "cpu/arm64/cpu.h"
 #include "util/bits.h"
 
@@ -210,6 +211,8 @@ typedef enum Arm64Exec {
 #define ARM64_EC_HVC 0x16
 #define ARM64_EC_SMC 0x17
 #define ARM64_EC_SYSREG 0x18
+#define ARM64_EC_INSTRUCTION_ABORT_LOWER 0x20
+#define ARM64_EC_INSTRUCTION_ABORT_SAME 0x21
 #define ARM64_EC_PC_ALIGNMENT 0x22
 #define ARM64_EC_DATA_ABORT_LOWER 0x24
 #define ARM64_EC_DATA_ABORT_SAME 0x25
@@ -255,6 +258,8 @@ Arm64Exec arm64_exec_eret(Arm64Cpu *c);
 Arm64Exec arm64_check_wfx_trap(Arm64Cpu *c, bool wfe);
 Arm64Exec arm64_check_sp_alignment(Arm64Cpu *c);
 Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write);
+Arm64Exec arm64_abort(Arm64Cpu *c, bool instruction, uint32_t iss,
+                      uint64_t far);
 void arm64_pc_alignment_fault(Arm64Cpu *c);
 void arm64_illegal_state(Arm64Cpu *c);
 
@@ -327,15 +332,95 @@ bool arm64_tidcp_traps(const Arm64Cpu *c, uint32_t insn);
 const char *arm64_sysreg_name(const Arm64Cpu *c, uint16_t encoding);
 bool arm64_sysreg_table_is_sorted(void);
 
+/* What an address is translated for: AccessType in J1, for the MMU. */
+typedef enum Arm64Access {
+	ARM64_ACCESS_READ,
+	ARM64_ACCESS_WRITE,
+	ARM64_ACCESS_IFETCH,
+	ARM64_ACCESS_DC_ZVA,        /* a write that faults on Device memory */
+	ARM64_ACCESS_DC_CLEAN,      /* DC CVAC, CVAU, CIVAC */
+	ARM64_ACCESS_DC_INVALIDATE, /* DC IVAC */
+	ARM64_ACCESS_IC,            /* IC IVAU */
+} Arm64Access;
+
+/* The faults of stage 1 translation, Fault in J1. */
+typedef enum Arm64Fault {
+	ARM64_FAULT_NONE,
+	ARM64_FAULT_ADDRESS_SIZE,
+	ARM64_FAULT_TRANSLATION,
+	ARM64_FAULT_ACCESS_FLAG,
+	ARM64_FAULT_PERMISSION,
+	ARM64_FAULT_ALIGNMENT,
+} Arm64Fault;
+
 /*
- * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c. They return
- * ARM64_EXEC_OK, ARM64_EXEC_EXCEPTION for an Alignment fault, or
- * ARM64_EXEC_DATA_ABORT where the machine emulates nothing; the
- * instruction then returns the same.
+ * The result of a translation: a fault and its lookup level, or the
+ * physical address with the memory attribute from MAIR_ELx (attr), the
+ * shareability field of the descriptor (sh) and the NS attribute.
+ */
+typedef struct Arm64Translation {
+	Arm64Fault fault;
+	unsigned level;
+	uint64_t pa;
+	uint8_t attr;
+	uint8_t sh;
+	bool ns;
+} Arm64Translation;
+
+/*
+ * The MMU, from mmu.c. arm64_translate() translates va for an access
+ * from el, with the translation regime and permissions of el, and
+ * stores the result in *t: it returns ARM64_EXEC_OK, also when the
+ * translation faults, ARM64_EXEC_DATA_ABORT when a translation table
+ * walk reads where the machine emulates nothing, or
+ * ARM64_EXEC_UNIMPLEMENTED. aligned says whether the access is aligned
+ * to its size. arm64_translation_fault() raises the Data Abort or
+ * Instruction Abort of a fault, with far for FAR_ELx. arm64_at() is the
+ * AT instruction for el, which sets PAR_EL1. arm64_tlb_flush() empties
+ * the TLB. arm64_branch_addr() is AArch64_BranchAddr() (J1.4.3.221): the
+ * address that a branch to target goes to, without its tag when TBI
+ * applies.
+ */
+Arm64Exec arm64_translate(Arm64Cpu *c, uint64_t va, Arm64Access access,
+                          unsigned el, bool aligned, Arm64Translation *t);
+Arm64Exec arm64_translation_fault(Arm64Cpu *c, uint64_t far, Arm64Access access,
+                                  const Arm64Translation *t);
+Arm64Exec arm64_at(Arm64Cpu *c, uint64_t va, unsigned el, bool write);
+void arm64_tlb_flush(Arm64Cpu *c);
+uint64_t arm64_branch_addr(const Arm64Cpu *c, uint64_t target);
+
+/*
+ * From cpu.c: empty the TLB of every AArch64 PE of the machine, for a
+ * TLBI instruction.
+ */
+void arm64_tlb_flush_all_pes(Arm64Cpu *c);
+
+/*
+ * The System instructions with op0 = 1: DC, IC, AT and TLBI, from
+ * sysinsn.c.
+ */
+Arm64Exec arm64_exec_sys(Arm64Cpu *c, uint32_t insn);
+bool arm64_sys_table_is_sorted(void);
+
+/*
+ * Data accesses of size 1, 2, 4 or 8 bytes, from mem.c, through the
+ * MMU. They return ARM64_EXEC_OK, ARM64_EXEC_EXCEPTION for a fault,
+ * ARM64_EXEC_DATA_ABORT where the machine emulates nothing, or
+ * ARM64_EXEC_UNIMPLEMENTED; the instruction then returns the same.
  */
 Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
                          uint64_t *value);
 Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
                           uint64_t value);
+
+/*
+ * Keep, for the message that stops the machine, a bus access of size
+ * bytes at a physical address that failed with status: a read of a
+ * translation table when walk is set, or else an access to the virtual
+ * address va. Returns ARM64_EXEC_DATA_ABORT.
+ */
+Arm64Exec arm64_bus_failure(Arm64Cpu *c, uint64_t address, unsigned size,
+                            bool write, BusStatus status, bool walk,
+                            uint64_t va);
 
 #endif /* CPU_ARM64_INTERNAL_H */

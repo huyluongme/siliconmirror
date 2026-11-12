@@ -13,7 +13,8 @@
  * state; SErrors are not implemented yet. It has the Generic Timer, which
  * counts from the system counter that the board connects, and the
  * interrupt inputs of a Cortex-A53, which the board connects to an
- * interrupt controller.
+ * interrupt controller. Its MMU does stage 1 translation, with a TLB;
+ * stage 2 is not implemented yet.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.
@@ -48,14 +49,17 @@
 #define ARM64_SCR_FIQ (1u << 2)              /* FIQs to EL3 */
 #define ARM64_SCR_SMD (1u << 7)              /* SMC disabled */
 #define ARM64_SCR_HCE (1u << 8)              /* HVC enabled */
+#define ARM64_SCR_SIF (1u << 9)              /* no Secure fetch from NS */
 #define ARM64_SCR_RW (1u << 10)              /* EL2, or EL1, uses AArch64 */
 #define ARM64_SCR_ST (1u << 11)              /* Secure EL1 has CNTPS_* */
 #define ARM64_SCR_TWI (1u << 12)             /* trap WFI to EL3 */
 #define ARM64_SCR_TWE (1u << 13)             /* trap WFE to EL3 */
-#define ARM64_HCR_FMO (1u << 3)              /* HCR_EL2: FIQs to EL2 */
+#define ARM64_HCR_VM (1u << 0)               /* HCR_EL2: stage 2 */
+#define ARM64_HCR_FMO (1u << 3)              /* FIQs to EL2 */
 #define ARM64_HCR_IMO (1u << 4)              /* IRQs to EL2 */
 #define ARM64_HCR_VF (1u << 6)               /* virtual FIQ pending */
 #define ARM64_HCR_VI (1u << 7)               /* virtual IRQ pending */
+#define ARM64_HCR_DC (1u << 12)              /* default cacheable */
 #define ARM64_HCR_TWI (1u << 13)             /* trap WFI to EL2 */
 #define ARM64_HCR_TWE (1u << 14)             /* trap WFE to EL2 */
 #define ARM64_HCR_TID1 (1u << 16)            /* trap ID group 1 */
@@ -64,20 +68,29 @@
 #define ARM64_HCR_TSC (1u << 19)             /* trap SMC to EL2 */
 #define ARM64_HCR_TIDCP (1u << 20)           /* IMPLEMENTATION DEFINED regs */
 #define ARM64_HCR_TACR (1u << 21)            /* ACTLR_EL1 */
+#define ARM64_HCR_TSW (1u << 22)             /* DC by set/way */
+#define ARM64_HCR_TPC (1u << 23)             /* DC to Point of Coherency */
+#define ARM64_HCR_TPU (1u << 24)             /* cache ops to PoU */
+#define ARM64_HCR_TTLB (1u << 25)            /* TLBI */
 #define ARM64_HCR_TVM (1u << 26)             /* writes of the VM registers */
 #define ARM64_HCR_TGE (1u << 27)             /* EL0 traps go to EL2 */
+#define ARM64_HCR_TDZ (1u << 28)             /* DC ZVA */
 #define ARM64_HCR_HCD (1u << 29)             /* HVC disabled, without EL3 */
 #define ARM64_HCR_TRVM (1u << 30)            /* reads of the VM registers */
 #define ARM64_HCR_RW (UINT32_C(1) << 31)     /* EL1 uses AArch64 */
 #define ARM64_SCTLR_M (1u << 0)              /* MMU enable */
+#define ARM64_SCTLR_A (1u << 1)              /* alignment check */
 #define ARM64_SCTLR_SA (1u << 3)             /* SP alignment check */
 #define ARM64_SCTLR_SA0 (1u << 4)            /* SP alignment check at EL0 */
 #define ARM64_SCTLR_UMA (1u << 9)            /* EL0 access to DAIF */
+#define ARM64_SCTLR_DZE (1u << 14)           /* EL0 DC ZVA */
 #define ARM64_SCTLR_UCT (1u << 15)           /* EL0 access to CTR_EL0 */
 #define ARM64_SCTLR_NTWI (1u << 16)          /* EL0 WFI not trapped */
 #define ARM64_SCTLR_NTWE (1u << 18)          /* EL0 WFE not trapped */
+#define ARM64_SCTLR_WXN (1u << 19)           /* writable means XN */
 #define ARM64_SCTLR_E0E (1u << 24)           /* EL0 big-endian */
 #define ARM64_SCTLR_EE (1u << 25)            /* big-endian */
+#define ARM64_SCTLR_UCI (1u << 26)           /* EL0 cache maintenance */
 #define ARM64_CPTR_TCPAC (UINT32_C(1) << 31) /* CPTR_EL2, CPTR_EL3: CPACR */
 #define ARM64_MDCR_TDE (1u << 8)             /* MDCR_EL2: debug to EL2 */
 #define ARM64_MDCR_TDA (1u << 9)             /* MDCR_EL3: debug registers */
@@ -263,6 +276,27 @@ typedef struct Arm64GenericTimer {
 } Arm64GenericTimer;
 
 /*
+ * A translation that the TLB holds, for one 4KB page of virtual
+ * addresses, whatever the size of the block or page that maps it.
+ */
+typedef struct Arm64TlbEntry {
+	/*
+	 * Bits 63:12 of the virtual address, with its tag removed when TBI
+	 * applies, and the translation regime in the low bits: 1 for EL1&0,
+	 * 2 for EL2, 3 for EL3. 0 for an unused entry.
+	 */
+	uint64_t tag;
+	uint64_t pa;   /* the physical address of the page */
+	uint8_t perms; /* ARM64_PERM_*, see mmu.c */
+	uint8_t attr;  /* the memory attribute from MAIR_ELx */
+	uint8_t sh;    /* the shareability field of the descriptor */
+	uint8_t level; /* the lookup level of the descriptor */
+	bool ns;       /* the output address is Non-secure */
+} Arm64TlbEntry;
+
+#define ARM64_TLB_ENTRIES 256
+
+/*
  * The System registers that are stored as they are written. The arrays
  * hold one register per Exception level, indexed by the level; levels
  * without such a register are unused. Registers that come from PSTATE or
@@ -302,12 +336,19 @@ typedef struct Arm64Cpu {
 	/* Address of the next instruction, set while one executes. */
 	uint64_t next_pc;
 
-	/* The data access that failed, when an instruction ends in a data abort. */
+	/*
+	 * The access that failed, when an instruction ends in a data abort:
+	 * a data access, or a read of a translation table (walk). A data
+	 * access went to the physical address that the MMU made from
+	 * virtual_address. arm64_bus_failure() fills it in.
+	 */
 	struct {
 		uint64_t address;
 		unsigned size; /* in bytes */
 		bool write;
 		const char *reason;
+		bool walk;
+		uint64_t virtual_address;
 	} data_abort;
 
 	/*
@@ -331,6 +372,14 @@ typedef struct Arm64Cpu {
 	Arm64GenericTimer timer;
 	IrqLine inputs[ARM64_NUM_INPUTS];
 	uint32_t asserted; /* bit n set while inputs[n] is high */
+	/*
+	 * The MMU: what ID_AA64MMFR0_EL1 says the core has, the size of
+	 * physical addresses in bits and whether each translation granule,
+	 * 4KB, 16KB or 64KB, is implemented, and the TLB.
+	 */
+	unsigned pa_bits;
+	bool granule_4k, granule_16k, granule_64k;
+	Arm64TlbEntry tlb[ARM64_TLB_ENTRIES];
 } Arm64Cpu;
 
 /*

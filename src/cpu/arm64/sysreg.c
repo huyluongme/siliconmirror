@@ -18,8 +18,9 @@
  * AArch32. The CPU model lists them, and using one stops
  * the machine as "not implemented yet". Other encodings are UNDEFINED.
  *
- * Writing SCTLR_ELx to turn on the MMU or big-endian data for the current
- * Exception level also stops the machine: neither is implemented yet.
+ * Writing SCTLR_ELx to turn on big-endian data for the current Exception
+ * level also stops the machine: it is not implemented yet. Writes of the
+ * registers that control translation empty the TLB (see mmu.c).
  */
 
 #include "cpu/arm64/sysreg.h"
@@ -47,6 +48,7 @@ typedef enum Kind {
 	KIND_MPIDR,  /* VMPIDR_EL2 likewise */
 	KIND_CCSIDR, /* the cache that CSSELR_EL1 selects */
 	KIND_ISR,    /* pending interrupts, interrupt.c */
+	KIND_DCZID,  /* DCZID_EL0: BS from the CPU model, DZP computed */
 	KIND_RVBAR,  /* the reset address */
 	KIND_ZERO,   /* reads as 0 */
 	KIND_TIMER,  /* a Generic Timer register, timer.c */
@@ -66,8 +68,8 @@ enum {
 	TRAP_CPACR = 1 << 9,     /* CPTR_EL2.TCPAC at EL1, CPTR_EL3.TCPAC below */
 	TRAP_CPTR_EL2 = 1 << 10, /* EL2 traps to EL3 on CPTR_EL3.TCPAC */
 	TRAP_MDCR_EL2 = 1 << 11, /* EL2 traps to EL3 on MDCR_EL3.TDA */
-	SCTLR = 1 << 12,         /* check the bits that are not implemented */
-	RMR = 1 << 13,           /* likewise */
+	RMR = 1 << 12,           /* check the bits that are not implemented */
+	TLB = 1 << 13,           /* writes empty the TLB */
 };
 
 typedef struct SysReg {
@@ -126,12 +128,12 @@ static const SysReg sysregs[] = {
             KIND_ID),
 	SPECIAL(ARM64_ID_AA64MMFR1_EL1, "ID_AA64MMFR1_EL1", 1, RO | TRAP_TID3,
             KIND_ID),
-	FIELD(ARM64_SCTLR_EL1, "SCTLR_EL1", 1, SCTLR | TRAP_TVM, sys.sctlr[1]),
+	FIELD(ARM64_SCTLR_EL1, "SCTLR_EL1", 1, TRAP_TVM | TLB, sys.sctlr[1]),
 	FIELD(ARM64_ACTLR_EL1, "ACTLR_EL1", 1, TRAP_TACR, sys.actlr[1]),
 	FIELD(ARM64_CPACR_EL1, "CPACR_EL1", 1, TRAP_CPACR, sys.cpacr_el1),
-	FIELD(ARM64_TTBR0_EL1, "TTBR0_EL1", 1, TRAP_TVM, sys.ttbr0[1]),
-	FIELD(ARM64_TTBR1_EL1, "TTBR1_EL1", 1, TRAP_TVM, sys.ttbr1_el1),
-	FIELD(ARM64_TCR_EL1, "TCR_EL1", 1, TRAP_TVM, sys.tcr[1]),
+	FIELD(ARM64_TTBR0_EL1, "TTBR0_EL1", 1, TRAP_TVM | TLB, sys.ttbr0[1]),
+	FIELD(ARM64_TTBR1_EL1, "TTBR1_EL1", 1, TRAP_TVM | TLB, sys.ttbr1_el1),
+	FIELD(ARM64_TCR_EL1, "TCR_EL1", 1, TRAP_TVM | TLB, sys.tcr[1]),
 	FIELD(ARM64_SPSR_EL1, "SPSR_EL1", 1, 0, sys.spsr[1]),
 	FIELD(ARM64_ELR_EL1, "ELR_EL1", 1, 0, sys.elr[1]),
 	SPECIAL(ARM64_SP_EL0, "SP_EL0", 1, 0, KIND_SP_EL0),
@@ -142,7 +144,7 @@ static const SysReg sysregs[] = {
 	FIELD(ARM64_ESR_EL1, "ESR_EL1", 1, TRAP_TVM, sys.esr[1]),
 	FIELD(ARM64_FAR_EL1, "FAR_EL1", 1, TRAP_TVM, sys.far[1]),
 	FIELD(ARM64_PAR_EL1, "PAR_EL1", 1, 0, sys.par_el1),
-	FIELD(ARM64_MAIR_EL1, "MAIR_EL1", 1, TRAP_TVM, sys.mair[1]),
+	FIELD(ARM64_MAIR_EL1, "MAIR_EL1", 1, TRAP_TVM | TLB, sys.mair[1]),
 	FIELD(ARM64_AMAIR_EL1, "AMAIR_EL1", 1, TRAP_TVM, sys.amair[1]),
 	FIELD(ARM64_VBAR_EL1, "VBAR_EL1", 1, 0, sys.vbar[1]),
 	SPECIAL(ARM64_ISR_EL1, "ISR_EL1", 1, RO, KIND_ISR),
@@ -155,7 +157,7 @@ static const SysReg sysregs[] = {
 	SPECIAL(ARM64_AIDR_EL1, "AIDR_EL1", 1, RO | TRAP_TID1, KIND_ID),
 	FIELD(ARM64_CSSELR_EL1, "CSSELR_EL1", 1, TRAP_TID2, sys.csselr_el1),
 	SPECIAL(ARM64_CTR_EL0, "CTR_EL0", 0, RO | EL0_UCT | TRAP_TID2, KIND_ID),
-	SPECIAL(ARM64_DCZID_EL0, "DCZID_EL0", 0, RO, KIND_ID),
+	SPECIAL(ARM64_DCZID_EL0, "DCZID_EL0", 0, RO, KIND_DCZID),
 	SPECIAL(ARM64_NZCV, "NZCV", 0, 0, KIND_NZCV),
 	SPECIAL(ARM64_DAIF, "DAIF", 0, EL0_UMA, KIND_DAIF),
 	FIELD(ARM64_TPIDR_EL0, "TPIDR_EL0", 0, 0, sys.tpidr[0]),
@@ -171,15 +173,15 @@ static const SysReg sysregs[] = {
 	TIMER(ARM64_CNTV_CVAL_EL0, "CNTV_CVAL_EL0", 0, 0),
 	FIELD(ARM64_VPIDR_EL2, "VPIDR_EL2", 2, 0, sys.vpidr_el2),
 	FIELD(ARM64_VMPIDR_EL2, "VMPIDR_EL2", 2, 0, sys.vmpidr_el2),
-	FIELD(ARM64_SCTLR_EL2, "SCTLR_EL2", 2, SCTLR, sys.sctlr[2]),
+	FIELD(ARM64_SCTLR_EL2, "SCTLR_EL2", 2, TLB, sys.sctlr[2]),
 	FIELD(ARM64_ACTLR_EL2, "ACTLR_EL2", 2, 0, sys.actlr[2]),
-	FIELD(ARM64_HCR_EL2, "HCR_EL2", 2, 0, sys.hcr_el2),
+	FIELD(ARM64_HCR_EL2, "HCR_EL2", 2, TLB, sys.hcr_el2),
 	FIELD(ARM64_MDCR_EL2, "MDCR_EL2", 2, TRAP_MDCR_EL2, sys.mdcr_el2),
 	FIELD(ARM64_CPTR_EL2, "CPTR_EL2", 2, TRAP_CPTR_EL2, sys.cptr_el2),
 	FIELD(ARM64_HSTR_EL2, "HSTR_EL2", 2, 0, sys.hstr_el2),
 	FIELD(ARM64_HACR_EL2, "HACR_EL2", 2, 0, sys.hacr_el2),
-	FIELD(ARM64_TTBR0_EL2, "TTBR0_EL2", 2, 0, sys.ttbr0[2]),
-	FIELD(ARM64_TCR_EL2, "TCR_EL2", 2, 0, sys.tcr[2]),
+	FIELD(ARM64_TTBR0_EL2, "TTBR0_EL2", 2, TLB, sys.ttbr0[2]),
+	FIELD(ARM64_TCR_EL2, "TCR_EL2", 2, TLB, sys.tcr[2]),
 	FIELD(ARM64_VTTBR_EL2, "VTTBR_EL2", 2, 0, sys.vttbr_el2),
 	FIELD(ARM64_VTCR_EL2, "VTCR_EL2", 2, 0, sys.vtcr_el2),
 	FIELD(ARM64_SPSR_EL2, "SPSR_EL2", 2, 0, sys.spsr[2]),
@@ -190,7 +192,7 @@ static const SysReg sysregs[] = {
 	FIELD(ARM64_ESR_EL2, "ESR_EL2", 2, 0, sys.esr[2]),
 	FIELD(ARM64_FAR_EL2, "FAR_EL2", 2, 0, sys.far[2]),
 	FIELD(ARM64_HPFAR_EL2, "HPFAR_EL2", 2, 0, sys.hpfar_el2),
-	FIELD(ARM64_MAIR_EL2, "MAIR_EL2", 2, 0, sys.mair[2]),
+	FIELD(ARM64_MAIR_EL2, "MAIR_EL2", 2, TLB, sys.mair[2]),
 	FIELD(ARM64_AMAIR_EL2, "AMAIR_EL2", 2, 0, sys.amair[2]),
 	FIELD(ARM64_VBAR_EL2, "VBAR_EL2", 2, 0, sys.vbar[2]),
 	FIELD(ARM64_TPIDR_EL2, "TPIDR_EL2", 2, 0, sys.tpidr[2]),
@@ -199,14 +201,14 @@ static const SysReg sysregs[] = {
 	TIMER(ARM64_CNTHP_TVAL_EL2, "CNTHP_TVAL_EL2", 2, 0),
 	TIMER(ARM64_CNTHP_CTL_EL2, "CNTHP_CTL_EL2", 2, 0),
 	TIMER(ARM64_CNTHP_CVAL_EL2, "CNTHP_CVAL_EL2", 2, 0),
-	FIELD(ARM64_SCTLR_EL3, "SCTLR_EL3", 3, SCTLR, sys.sctlr[3]),
+	FIELD(ARM64_SCTLR_EL3, "SCTLR_EL3", 3, TLB, sys.sctlr[3]),
 	FIELD(ARM64_ACTLR_EL3, "ACTLR_EL3", 3, 0, sys.actlr[3]),
-	FIELD(ARM64_SCR_EL3, "SCR_EL3", 3, 0, sys.scr_el3),
+	FIELD(ARM64_SCR_EL3, "SCR_EL3", 3, TLB, sys.scr_el3),
 	FIELD(ARM64_SDER32_EL3, "SDER32_EL3", 3, 0, sys.sder32_el3),
 	FIELD(ARM64_CPTR_EL3, "CPTR_EL3", 3, 0, sys.cptr_el3),
 	FIELD(ARM64_MDCR_EL3, "MDCR_EL3", 3, 0, sys.mdcr_el3),
-	FIELD(ARM64_TTBR0_EL3, "TTBR0_EL3", 3, 0, sys.ttbr0[3]),
-	FIELD(ARM64_TCR_EL3, "TCR_EL3", 3, 0, sys.tcr[3]),
+	FIELD(ARM64_TTBR0_EL3, "TTBR0_EL3", 3, TLB, sys.ttbr0[3]),
+	FIELD(ARM64_TCR_EL3, "TCR_EL3", 3, TLB, sys.tcr[3]),
 	FIELD(ARM64_SPSR_EL3, "SPSR_EL3", 3, 0, sys.spsr[3]),
 	FIELD(ARM64_ELR_EL3, "ELR_EL3", 3, 0, sys.elr[3]),
 	SPECIAL(ARM64_SP_EL2, "SP_EL2", 3, 0, KIND_SP_EL2),
@@ -214,7 +216,7 @@ static const SysReg sysregs[] = {
 	FIELD(ARM64_AFSR1_EL3, "AFSR1_EL3", 3, 0, sys.afsr1[3]),
 	FIELD(ARM64_ESR_EL3, "ESR_EL3", 3, 0, sys.esr[3]),
 	FIELD(ARM64_FAR_EL3, "FAR_EL3", 3, 0, sys.far[3]),
-	FIELD(ARM64_MAIR_EL3, "MAIR_EL3", 3, 0, sys.mair[3]),
+	FIELD(ARM64_MAIR_EL3, "MAIR_EL3", 3, TLB, sys.mair[3]),
 	FIELD(ARM64_AMAIR_EL3, "AMAIR_EL3", 3, 0, sys.amair[3]),
 	FIELD(ARM64_VBAR_EL3, "VBAR_EL3", 3, 0, sys.vbar[3]),
 	SPECIAL(ARM64_RVBAR_EL3, "RVBAR_EL3", 3, RO, KIND_RVBAR),
@@ -400,6 +402,14 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 	case KIND_ISR:
 		*value = arm64_isr(c);
 		return true;
+	case KIND_DCZID:
+		/* DZP: DC ZVA would trap, see sysinsn.c. */
+		*value = model_value(c, r->encoding) & 0xf;
+		if ((c->el == 0 && !(c->sys.sctlr[1] & ARM64_SCTLR_DZE)) ||
+		    (c->el <= 1 && arm64_el2_enabled(c) &&
+		     (c->sys.hcr_el2 & ARM64_HCR_TDZ)))
+			*value |= 1u << 4;
+		return true;
 	case KIND_RVBAR:
 		*value = c->config.reset_pc;
 		return true;
@@ -458,17 +468,9 @@ static Arm64Exec write_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t value)
 		return ARM64_EXEC_UNDEFINED;
 	}
 
-	if ((r->flags & SCTLR) && controls_current_el(c, r->encoding)) {
-		if (value & ARM64_SCTLR_M) {
-			snprintf(c->detail, sizeof(c->detail), "turning on the MMU with %s",
-			         r->name);
-			return ARM64_EXEC_UNIMPLEMENTED;
-		}
-		if (value & ARM64_SCTLR_EE) {
-			snprintf(c->detail, sizeof(c->detail),
-			         "big-endian data, SCTLR_ELx.EE");
-			return ARM64_EXEC_UNIMPLEMENTED;
-		}
+	if (controls_current_el(c, r->encoding) && (value & ARM64_SCTLR_EE)) {
+		snprintf(c->detail, sizeof(c->detail), "big-endian data, SCTLR_ELx.EE");
+		return ARM64_EXEC_UNIMPLEMENTED;
 	}
 	/* RMR_EL3: AA64 = 0 would reset into AArch32, RR = 1 asks for one. */
 	if ((r->flags & RMR) && (!(value & 1) || (value & 2))) {
@@ -478,6 +480,8 @@ static Arm64Exec write_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t value)
 	if (r->encoding == ARM64_CSSELR_EL1)
 		value &= 0xf; /* Level and InD; the rest is RES0 */
 	*field_of(c, r) = value;
+	if (r->flags & TLB)
+		arm64_tlb_flush(c);
 	return ARM64_EXEC_OK;
 }
 
@@ -691,6 +695,8 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value)
 		switch (r->kind) {
 		case KIND_FIELD:
 			*field_of(c, r) = value;
+			if (r->flags & TLB)
+				arm64_tlb_flush(c);
 			return true;
 		case KIND_SP_EL0:
 			c->sp_el[0] = value;

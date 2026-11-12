@@ -8,14 +8,13 @@
  *
  * Implemented so far: the branches, the hints, the DMB, DSB and ISB
  * barriers, the System register moves and PSTATE moves, which are in
- * sysreg.c, and the exception generating instructions and ERET, which
- * are in exception.c. The System instructions and CLREX are not
- * implemented yet. Classes that only hold instructions newer than
- * Armv8.0 are UNDEFINED.
+ * sysreg.c, the System instructions, which are in sysinsn.c, and the
+ * exception generating instructions and ERET, which are in exception.c.
+ * CLREX is not implemented yet. Classes that only hold instructions
+ * newer than Armv8.0 are UNDEFINED.
  *
- * A branch target is used as it is. AArch64_BranchAddr() would remove a
- * tag from its top byte when TCR_ELx.TBI says so, but the MMU, which
- * TCR_ELx belongs to, is not implemented yet.
+ * A branch goes to its target through AArch64_BranchAddr(), which
+ * removes a tag from the top byte when TCR_ELx.TBI says so.
  */
 
 #include "cpu/arm64/internal.h"
@@ -28,7 +27,7 @@ static Arm64Exec branch_imm(Arm64Cpu *c, uint32_t insn)
 
 	if (bit32(insn, 31)) /* BL */
 		set_x(c, 30, c->pc + 4);
-	c->next_pc = c->pc + offset;
+	c->next_pc = arm64_branch_addr(c, c->pc + offset);
 	return ARM64_EXEC_OK;
 }
 
@@ -41,7 +40,7 @@ static Arm64Exec compare_branch(Arm64Cpu *c, uint32_t insn)
 	uint64_t operand = get_x(c, field32(insn, 4, 0)) & datasize_mask(datasize);
 
 	if ((operand != 0) == nonzero)
-		c->next_pc = c->pc + offset;
+		c->next_pc = arm64_branch_addr(c, c->pc + offset);
 	return ARM64_EXEC_OK;
 }
 
@@ -54,7 +53,7 @@ static Arm64Exec test_branch(Arm64Cpu *c, uint32_t insn)
 	uint64_t operand = get_x(c, field32(insn, 4, 0));
 
 	if ((bool)((operand >> bit_pos) & 1) == nonzero)
-		c->next_pc = c->pc + offset;
+		c->next_pc = arm64_branch_addr(c, c->pc + offset);
 	return ARM64_EXEC_OK;
 }
 
@@ -66,7 +65,7 @@ static Arm64Exec conditional_branch(Arm64Cpu *c, uint32_t insn)
 	if (bit32(insn, 4)) /* BC.cond: FEAT_HBC */
 		return ARM64_EXEC_UNDEFINED;
 	if (condition_holds(c, field32(insn, 3, 0)))
-		c->next_pc = c->pc + offset;
+		c->next_pc = arm64_branch_addr(c, c->pc + offset);
 	return ARM64_EXEC_OK;
 }
 
@@ -87,13 +86,13 @@ static Arm64Exec branch_register(Arm64Cpu *c, uint32_t insn)
 	switch (opc) {
 	case 0: /* BR */
 	case 2: /* RET */
-		c->next_pc = get_x(c, n);
+		c->next_pc = arm64_branch_addr(c, get_x(c, n));
 		return ARM64_EXEC_OK;
 	case 1: { /* BLR: read Xn before writing X30, which may be Xn */
 		uint64_t target = get_x(c, n);
 
 		set_x(c, 30, c->pc + 4);
-		c->next_pc = target;
+		c->next_pc = arm64_branch_addr(c, target);
 		return ARM64_EXEC_OK;
 	}
 	case 4: /* ERET */
@@ -187,7 +186,7 @@ static Arm64Exec system_space(Arm64Cpu *c, uint32_t insn)
 	if (op0 == 1) { /* SYS, SYSL: cache, TLB and address translation */
 		if (arm64_tidcp_traps(c, insn))
 			return arm64_sys_trap(c, 2, insn);
-		return ARM64_EXEC_UNIMPLEMENTED;
+		return arm64_exec_sys(c, insn);
 	}
 	if (op0 >= 2) /* MRS, MSR (register) */
 		return arm64_exec_sysreg(c, insn);

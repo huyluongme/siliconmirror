@@ -26,7 +26,24 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   CRC32, but no Cryptographic Extension and no GIC CPU interface.
 - The cache registers describe 32 KB L1 instruction and data caches and
   a 512 KB L2 cache. The caches themselves are not modelled: memory
-  behaves as if there were none.
+  behaves as if there were none. The cache maintenance instructions (`DC`,
+  `IC`) check their traps and, for those that take an address, translate
+  it, which can fault; then they do nothing. `DC ZVA` writes zeros to its
+  64-byte block, as `DCZID_EL0` says.
+- The MMU does stage 1 translation for EL1&0, EL2 and EL3 as Armv8.0 has
+  it, with what `ID_AA64MMFR0_EL1` gives: 40-bit physical addresses and
+  the 4 KB and 64 KB granules; the Cortex-A53 has no 16 KB granule. Like
+  the real core, it does not set the Access flag itself: a descriptor
+  without it gives an Access flag fault. `AT` translates addresses into
+  `PAR_EL1`, in the layout of the Cortex-A53 manual.
+- Each core has a TLB, which keeps translations until a `TLBI`
+  instruction, a reset or a write to a register that controls
+  translation (`SCTLR_ELx`, `TCR_ELx`, `TTBRn_ELx`, `MAIR_ELx`, `HCR_EL2`,
+  `SCR_EL3`) empties it. Every `TLBI` empties the TLBs of all four cores,
+  which the architecture allows: invalidating more than asked is
+  permitted. So, as on the real board, software that changes a
+  translation table without the TLB maintenance the architecture asks
+  for can still see the old translation.
 - The Cortex-A53 registers for its own configuration exist:
   `CPUACTLR_EL1`, `CPUECTLR_EL1`, `L2CTLR_EL1`, `L2ECTLR_EL1`,
   `L2ACTLR_EL1` and `CBAR_EL1`. They hold what is written to them,
@@ -337,6 +354,24 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
   allow a lower Exception level to write the configuration registers,
   but not what happens when the bit is 0. smirror traps the write to
   the Exception level whose `ACTLR` forbids it.
+- Stage 2 translation is not implemented yet: running at EL1 or EL0 with
+  `HCR_EL2.VM` or `HCR_EL2.DC` set stops the machine. It is needed only
+  to run virtual machines, as KVM does.
+- The TLB is not the Cortex-A53's: it holds 256 entries of 4 KB, without
+  ASIDs. A program that follows the architecture's TLB maintenance rules
+  sees no difference.
+- The manual leaves some MMU behavior to the implementation, and the
+  Cortex-A53 manual does not say what the core does. Where it would
+  change what a translation table means, smirror stops with a message
+  instead of guessing: a `TCR_ELx.TGn` granule that the core does not
+  have, or a `TCR_ELx.TnSZ` outside 16 to 39. Elsewhere smirror chooses:
+  `DC` and `IC` instructions take Access flag faults like loads and
+  stores do; an instruction fetch from Device memory does not fault;
+  `IC IVAU` at EL0 needs no read permission; and `PAR_EL1.NS` is 1 after
+  a Non-secure translation, where the manual says it is UNKNOWN.
+- The BCM2837 has one physical address space for Secure and Non-secure
+  accesses, so the NS bit of a descriptor only changes what `PAR_EL1`
+  reports and what `SCR_EL3.SIF` allows.
 - The firmware initializes the UART that it uses for its console. With
   `-kernel`, the program must set up UART0 itself. The PL011 resets to
   a baud rate divisor of 0, which is invalid, and to 5-bit characters:
@@ -352,6 +387,8 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
   peripheral addresses, cores and their spin table entries, UART0.
 - [Arm Cortex-A53 MPCore Processor Technical Reference Manual](https://developer.arm.com/documentation/ddi0500/j/),
   ARM DDI 0500J, chapter 4: identification and reset values, the
+  translation granules and physical address size (`ID_AA64MMFR0_EL1`
+  4.3.21), the layout of `PAR_EL1` (4.3.68), the
   configuration registers and the `ACTLR` bits that control them
   (`ACTLR_EL3` 4.3.33, `L2CTLR_EL1` 4.3.64, `CPUECTLR_EL1` 4.3.79),
   and the reset values of the Generic Timer registers (4.3); appendix
@@ -394,7 +431,11 @@ can come, smirror waits for it instead: press Ctrl-A x to quit.
   `AArch64_TakePhysicalIRQException()` and the functions around it
   (J1.2.2.16 to J1.2.2.20), `Hint_WFI()` and
   `AArch64_InterruptPending()`, the wakeup events of `WFE` and `WFI`
-  (D1.7.1.4, D1.7.2.1), and `ISR_EL1` (D24.2).
+  (D1.7.1.4, D1.7.2.1), and `ISR_EL1` (D24.2); the MMU: VMSAv8-64
+  (D8), TLB maintenance and the rule that permits invalidating more
+  entries (D8.17, R_MMZTY), and `AArch64_S1Translate()` with the
+  functions it calls (J1.2.4); `DC`, `IC`, `AT` and `TLBI` (C5.3 to
+  C5.5), and `DCZID_EL0`.
 - Raspberry Pi documentation, `kernel_address` in the
   [2021 version of the config.txt boot options](https://github.com/raspberrypi/documentation/blob/16480247dcac12d1f828c0f2556a3bc430de3c90/configuration/config-txt/boot.md):
   64-bit kernels load at `0x80000`.

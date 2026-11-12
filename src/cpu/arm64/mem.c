@@ -2,16 +2,21 @@
 /* Copyright (C) 2026 Huy Luong Duc */
 
 /*
- * Data accesses of the AArch64 model.
+ * Data accesses of the AArch64 model, through the MMU (mmu.c).
  *
- * The MMU is not implemented yet: turning it on stops the machine, so it
- * is always off. With stage 1 translation disabled, addresses map flat
- * to physical addresses and every data access uses the Device-nGnRnE
- * memory type (D8.2.12.1). An unaligned access to Device memory takes an
- * Alignment fault unless the IMPLEMENTATION DEFINED choice "Device
- * location supports unaligned access" is made (J1.2.4.30); this model
- * does not make it. Like the pseudocode, callers check the alignment of
- * each register's element, so LDP X0, X1 needs 8-byte alignment.
+ * An unaligned access takes an Alignment fault when SCTLR_ELx.A asks
+ * for aligned accesses, before translation (AArch64_CheckAlignment()),
+ * or when the address is Device memory: every data address while stage
+ * 1 translation is disabled. The IMPLEMENTATION DEFINED choice "Device
+ * location supports unaligned access" (J1.2.4.30) is not made. Like the
+ * pseudocode, callers check the alignment of each register's element,
+ * so LDP X0, X1 is aligned at 8 bytes.
+ *
+ * An unaligned access to Normal memory that crosses into another 4KB
+ * page translates each page on its own, and accesses its bytes one by
+ * one, as the pseudocode does for an unaligned access. A fault in the
+ * second page has the first address of that page in FAR_ELx, and leaves
+ * memory as it was.
  *
  * An access to an address where the machine emulates nothing stops the
  * machine: what the real board does there is not known.
@@ -20,23 +25,75 @@
 #include "core/machine.h"
 #include "cpu/arm64/internal.h"
 
-static Arm64Exec data_access(Arm64Cpu *c, uint64_t address, unsigned size,
-                             bool write, uint64_t *value)
+/* SCTLR_ELx.A for the current Exception level, SCTLR_EL1.A at EL0. */
+static bool alignment_checked(const Arm64Cpu *c)
 {
-	if (address & (size - 1))
-		return arm64_alignment_fault(c, address, write);
+	return c->sys.sctlr[c->el > 1 ? c->el : 1] & ARM64_SCTLR_A;
+}
 
+/* The bus access to a physical address, for the virtual address va. */
+static Arm64Exec physical_access(Arm64Cpu *c, uint64_t va, uint64_t pa,
+                                 unsigned size, bool write, uint64_t *value)
+{
 	Bus *bus = c->cpu.machine->bus;
-	BusStatus status = write ? bus_write(bus, address, size, *value)
-	                         : bus_read(bus, address, size, value);
+	BusStatus status = write ? bus_write(bus, pa, size, *value)
+	                         : bus_read(bus, pa, size, value);
 
 	if (status == BUS_OK)
 		return ARM64_EXEC_OK;
-	c->data_abort.address = address;
-	c->data_abort.size = size;
-	c->data_abort.write = write;
-	c->data_abort.reason = bus_status_str(status);
-	return ARM64_EXEC_DATA_ABORT;
+	return arm64_bus_failure(c, pa, size, write, status, false, va);
+}
+
+/*
+ * An unaligned access whose bytes from va + split on are in another
+ * page, which pa2 holds: byte by byte, least significant first.
+ */
+static Arm64Exec split_access(Arm64Cpu *c, uint64_t va, uint64_t pa,
+                              uint64_t pa2, unsigned split, unsigned size,
+                              bool write, uint64_t *value)
+{
+	uint64_t result = 0;
+
+	for (unsigned i = 0; i < size; i++) {
+		uint64_t byte = write ? (*value >> (8 * i)) & 0xff : 0;
+		uint64_t address = i < split ? pa + i : pa2 + (i - split);
+		Arm64Exec status = physical_access(c, va + i, address, 1, write, &byte);
+
+		if (status != ARM64_EXEC_OK)
+			return status;
+		result |= byte << (8 * i);
+	}
+	if (!write)
+		*value = result;
+	return ARM64_EXEC_OK;
+}
+
+static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
+                             bool write, uint64_t *value)
+{
+	Arm64Access access = write ? ARM64_ACCESS_WRITE : ARM64_ACCESS_READ;
+	bool aligned = (va & (size - 1)) == 0;
+	uint64_t next_page = (va | 0xfff) + 1;
+	Arm64Translation t, t2;
+	Arm64Exec result;
+
+	if (!aligned && alignment_checked(c))
+		return arm64_alignment_fault(c, va, write);
+	result = arm64_translate(c, va, access, c->el, aligned, &t);
+	if (result != ARM64_EXEC_OK)
+		return result;
+	if (t.fault != ARM64_FAULT_NONE)
+		return arm64_translation_fault(c, va, access, &t);
+	if (next_page - va >= size)
+		return physical_access(c, va, t.pa, size, write, value);
+
+	result = arm64_translate(c, next_page, access, c->el, false, &t2);
+	if (result != ARM64_EXEC_OK)
+		return result;
+	if (t2.fault != ARM64_FAULT_NONE)
+		return arm64_translation_fault(c, next_page, access, &t2);
+	return split_access(c, va, t.pa, t2.pa, (unsigned)(next_page - va), size,
+	                    write, value);
 }
 
 Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,

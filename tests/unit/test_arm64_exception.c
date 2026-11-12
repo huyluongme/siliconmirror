@@ -745,8 +745,9 @@ static void test_tidcp(void)
 	/* SYS #0, C15, C0, #0 */
 	expect(m, c, 0xd508f01f, 2, LOWER_A64, 0x62103fe0, 0);
 	c->el = 1;
-	/* Other System instructions are not trapped: SYS #1, C7, C5, #0. */
-	CHECK_EQ(arm64_test_step(m, c, 0xd509751f), MACHINE_STOP_ERROR);
+	/* Other System instructions are not trapped: IC IALLU. */
+	run(m, c, 0xd508751f);
+	CHECK_EQ(c->el, 1);
 	machine_destroy(m);
 
 	/* EL2 is not trapped; at EL0 the encodings stay UNDEFINED. */

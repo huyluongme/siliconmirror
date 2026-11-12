@@ -245,7 +245,7 @@ static void test_access_by_el(void)
 	CHECK_EQ(arm64_execute(c, mrs(ARM64_CURRENTEL, 0)), ARM64_EXEC_UNDEFINED);
 	CHECK_EQ(arm64_execute(c, mrs(ARM64_SYSREG(3, 0, 0, 7, 2), 0)),
 	         ARM64_EXEC_UNDEFINED);
-	CHECK_EQ(read_reg(c, ARM64_DCZID_EL0), 4);
+	CHECK_EQ(read_reg(c, ARM64_DCZID_EL0), 0x14); /* DZP: SCTLR_EL1.DZE is 0 */
 	CHECK_EQ(write_reg(c, ARM64_TPIDR_EL0, 0x77), ARM64_EXEC_OK);
 	CHECK_EQ(read_reg(c, ARM64_TPIDR_EL0), 0x77);
 
@@ -497,32 +497,26 @@ static void test_unimplemented_bits_stop(void)
 	         MACHINE_STOP_LIMIT);
 	CHECK_EQ(c->sys.sctlr[1], ARM64_SCTLR_M);
 
-	/* Turning on the MMU of the current level is not implemented yet. */
-	c->x[1] = 0x00c50838 | ARM64_SCTLR_M;
-	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL3, 1)),
-	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "is not implemented yet (turning on the "
-	                              "MMU with SCTLR_EL3)") != NULL);
-	CHECK_EQ(c->sys.sctlr[3], 0x00c50838);
-
+	/* Big-endian data for the current level is not implemented yet. */
 	c->x[1] = 0x00c50838 | ARM64_SCTLR_EE;
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL3, 1)),
 	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "(big-endian data") != NULL);
+	CHECK(strstr(m->stop_message,
+	             "is not implemented yet (big-endian data, SCTLR_ELx.EE)") !=
+	      NULL);
+	CHECK_EQ(c->sys.sctlr[3], 0x00c50838);
 
 	c->el = 2;
-	c->x[1] = ARM64_SCTLR_M;
+	c->x[1] = ARM64_SCTLR_EE;
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL1, 1)),
 	         MACHINE_STOP_LIMIT);
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL2, 1)),
 	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "(turning on the MMU with SCTLR_EL2)") !=
-	      NULL);
+	CHECK(strstr(m->stop_message, "(big-endian data") != NULL);
 	c->el = 1;
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_SCTLR_EL1, 1)),
 	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "(turning on the MMU with SCTLR_EL1)") !=
-	      NULL);
+	CHECK(strstr(m->stop_message, "(big-endian data") != NULL);
 	c->el = 3;
 
 	c->x[1] = 3; /* RR: request a warm reset */

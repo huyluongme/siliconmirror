@@ -42,6 +42,7 @@ add_baremetal_program(timer)
 add_baremetal_program(irq)
 add_baremetal_program(uart_irq)
 add_baremetal_program(echo)
+add_baremetal_program(mmu)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -110,6 +111,11 @@ add_expect_test(baremetal.uart-irq
 
 # Receiving on UART0: what echo.input sends comes back, through the
 # receive timeout interrupt. See echo.s.
+add_expect_test(baremetal.mmu
+	STDOUT "^mmu ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel mmu.bin)
+
 add_expect_test(baremetal.echo
 	STDOUT "^hello\necho ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
