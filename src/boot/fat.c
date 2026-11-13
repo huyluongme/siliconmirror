@@ -209,7 +209,9 @@ static bool fat_entry(FatVolume *v, uint32_t n, uint32_t *value, char *error,
 		*value = load_le32(b) & 0x0fffffff; /* FAT32 uses 28 bits */
 		return true;
 	}
-	return fail(error, error_size, "cannot read the FAT");
+	/* false here, not fail()'s: compilers then see *value set on true. */
+	fail(error, error_size, "cannot read the FAT");
+	return false;
 }
 
 /*

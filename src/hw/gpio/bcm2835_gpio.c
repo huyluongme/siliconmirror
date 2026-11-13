@@ -183,6 +183,7 @@ static uint64_t *bitmap(Bcm2835Gpio *gpio, uint64_t offset, uint64_t *reg0)
 		{REG_GPAFEN0, offsetof(Bcm2835Gpio, afen)},
 	};
 
+	*reg0 = 0; /* unused without a bitmap; set so that compilers see it */
 	for (size_t i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
 		if (offset == maps[i].reg0 || offset == maps[i].reg0 + 4) {
 			*reg0 = maps[i].reg0;

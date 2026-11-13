@@ -141,11 +141,17 @@ static bool fail(Reader *r, const char *fmt, ...)
 	return false;
 }
 
-/* The token at *pos, which moves past it; false when the block ends. */
+/*
+ * The token at *pos, which moves past it; false when the block ends.
+ * The failures return false themselves, so that compilers see that
+ * *value is set whenever the result is true.
+ */
 static bool token(Reader *r, uint32_t *pos, uint32_t *value)
 {
-	if (*pos > r->struct_end || r->struct_end - *pos < 4)
-		return fail(r, "the structure block ends inside a token");
+	if (*pos > r->struct_end || r->struct_end - *pos < 4) {
+		fail(r, "the structure block ends inside a token");
+		return false;
+	}
 	*value = load_be32(r->blob + *pos);
 	*pos += 4;
 	return true;
@@ -157,9 +163,10 @@ static bool string_at(Reader *r, uint32_t pos, uint32_t end, size_t *len,
 {
 	const void *nul = memchr(r->blob + pos, '\0', end - pos);
 
-	if (nul == NULL)
-		return fail(r, "%s at offset %u has no terminating 0", what,
-		            (unsigned)pos);
+	if (nul == NULL) {
+		fail(r, "%s at offset %u has no terminating 0", what, (unsigned)pos);
+		return false;
+	}
 	*len = (size_t)((const uint8_t *)nul - (r->blob + pos));
 	return true;
 }
