@@ -44,6 +44,9 @@ add_baremetal_program(uart_irq)
 add_baremetal_program(echo)
 add_baremetal_program(mmu)
 add_baremetal_program(miniuart)
+add_baremetal_program(mailbox)
+add_baremetal_program(sdboot)
+add_baremetal_program(sdcard)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -124,6 +127,13 @@ add_expect_test(baremetal.miniuart
 	INPUT ${CMAKE_CURRENT_SOURCE_DIR}/miniuart.input
 	COMMAND ${smirror} -M raspi3b -kernel miniuart.bin)
 
+# The firmware's answers on the property channel of the mailboxes, and
+# the mailbox interrupt. See mailbox.s.
+add_expect_test(baremetal.mailbox
+	STDOUT "^mailbox ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel mailbox.bin)
+
 # Receiving on UART0: what echo.input sends comes back, through the
 # receive timeout interrupt. See echo.s. As on the board, its first byte,
 # '~', goes to the mini UART, which has GPIO 15 as the firmware set it up
@@ -153,3 +163,87 @@ add_expect_test(baremetal.unimplemented
 	STATUS 1
 	STDERR "^smirror: error: cpu0: instruction 0x1e622820 at 0x0000000000080000 is not implemented yet"
 	COMMAND ${smirror} -M raspi3b -kernel unimplemented.bin)
+
+# Boot from SD card images that sfdisk, mkfs.fat and mtools make, with a
+# device tree that dtc compiles, as on a real card. See sdboot.s and
+# sdcard.cmake. Without the tools these tests are skipped, except on
+# GitHub Actions.
+if(NOT SD_TOOLS_FOUND)
+	if("$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		message(FATAL_ERROR "SD card tools not found: CI must run the tests "
+			"that boot from a card")
+	endif()
+	message(STATUS "SD card tools not found: skipping the SD card tests")
+	return()
+endif()
+
+set(card_dir ${CMAKE_CURRENT_SOURCE_DIR}/sdcard)
+add_custom_command(
+	OUTPUT board.dtb
+	COMMAND ${DTC} -I dts -O dtb -o board.dtb ${card_dir}/board.dts
+	DEPENDS ${card_dir}/board.dts
+	COMMENT "Compiling the device tree of the test cards")
+
+# make_card(<image> <size in MB> <FAT bits> FILES <src=dest>... [DIRS ...])
+function(make_card image size fat)
+	cmake_parse_arguments(PARSE_ARGV 3 arg "" "" "FILES;DIRS")
+	set(sources)
+	foreach(pair ${arg_FILES})
+		string(REGEX REPLACE "=.*" "" src "${pair}")
+		list(APPEND sources ${src})
+	endforeach()
+	string(REPLACE ";" "\\;" files "${arg_FILES}")
+	string(REPLACE ";" "\\;" dirs "${arg_DIRS}")
+	add_custom_command(
+		OUTPUT ${image}
+		COMMAND ${CMAKE_COMMAND} -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/${image}
+			-DSIZE_MB=${size} -DFAT=${fat} "-DFILES=${files}" "-DDIRS=${dirs}"
+			-DTRUNCATE=${TRUNCATE} -DSFDISK=${SFDISK} -DMKFS_FAT=${MKFS_FAT}
+			-DMCOPY=${MCOPY} -DMMD=${MMD}
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/sdcard.cmake
+		DEPENDS ${sources} ${CMAKE_CURRENT_SOURCE_DIR}/sdcard.cmake
+		COMMENT "Making the SD card image ${image}")
+	add_custom_target(card_${image} ALL DEPENDS ${image})
+endfunction()
+
+set(bin ${CMAKE_CURRENT_BINARY_DIR})
+make_card(sdboot-fat32.img 64 32
+	FILES ${card_dir}/config-fat32.txt=config.txt
+		${card_dir}/cmdline-fat32.txt=cmdline.txt
+		${bin}/sdboot.bin=kernel8.img
+		${bin}/board.dtb=bcm2710-rpi-3-b.dtb
+		${card_dir}/board.dts=overlays/README
+	DIRS overlays)
+make_card(sdboot-fat16.img 16 16
+	FILES ${card_dir}/config-fat16.txt=config.txt
+		${card_dir}/cmdline-fat16.txt=command-line.txt
+		${bin}/sdboot.bin=images/sd-boot-kernel.bin
+		${bin}/board.dtb=dtbs/raspberry-pi-3.dtb
+	DIRS images dtbs)
+
+# config.txt filters, a setting that is not applied, cmdline.txt, and the
+# device tree on a FAT32 card like Raspberry Pi OS's.
+add_expect_test(baremetal.sd-boot-fat32
+	STDOUT "^cmdline: console=serial0,115200 smirror\n\
+sd boot ok\n$"
+	STDERR "^smirror: warning: config.txt:7: dtoverlay=vc4-kms-v3d is not \
+applied\nsmirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -sd sdboot-fat32.img)
+
+# Long names in directories, on FAT16.
+add_expect_test(baremetal.sd-boot-fat16
+	STDOUT "^cmdline: quiet smirror-fat16\nsd boot ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -sd sdboot-fat16.img)
+
+make_card(sdcard-fat32.img 64 32
+	FILES ${card_dir}/config-sdcard.txt=config.txt
+		${bin}/sdcard.bin=kernel8.img
+		${bin}/board.dtb=bcm2710-rpi-3-b.dtb)
+
+# The kernel reads and writes the card it came from, through SDHOST, as
+# U-Boot does. See sdcard.s.
+add_expect_test(baremetal.sd-card
+	STDOUT "^sd card ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -sd sdcard-fat32.img)

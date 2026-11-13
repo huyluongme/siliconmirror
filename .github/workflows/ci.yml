@@ -22,11 +22,14 @@ jobs:
       CC: ${{ matrix.cc }}
     steps:
       - uses: actions/checkout@v7
-      # binutils-aarch64-linux-gnu builds the bare-metal test programs.
+      # binutils-aarch64-linux-gnu builds the bare-metal test programs;
+      # fdisk, dosfstools, mtools and device-tree-compiler make the SD
+      # card images and device trees that the boot tests use.
       - name: Install build tools
         run: >
           sudo apt-get update &&
           sudo apt-get install -y ninja-build binutils-aarch64-linux-gnu
+          fdisk dosfstools mtools device-tree-compiler
       - name: Build and test
         run: make PRESET=${{ matrix.preset }} test
 

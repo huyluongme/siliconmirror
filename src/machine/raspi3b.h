@@ -11,13 +11,22 @@
 /* Memory map, as the Arm cores see it. */
 #define RASPI3B_RAM_SIZE 0x3f000000 /* RAM from 0 up to the peripherals */
 #define RASPI3B_PERIPHERAL_BASE 0x3f000000 /* bus address 0x7e000000 */
-#define RASPI3B_IC_BASE (RASPI3B_PERIPHERAL_BASE + 0xb200) /* interrupts */
+#define RASPI3B_IC_BASE (RASPI3B_PERIPHERAL_BASE + 0xb200)   /* interrupts */
+#define RASPI3B_MBOX_BASE (RASPI3B_PERIPHERAL_BASE + 0xb880) /* mailboxes */
 #define RASPI3B_GPIO_BASE (RASPI3B_PERIPHERAL_BASE + 0x200000)
 #define RASPI3B_UART0_BASE (RASPI3B_PERIPHERAL_BASE + 0x201000)
+#define RASPI3B_SDHOST_BASE (RASPI3B_PERIPHERAL_BASE + 0x202000)
 #define RASPI3B_AUX_BASE (RASPI3B_PERIPHERAL_BASE + 0x215000) /* mini UART */
 #define RASPI3B_LOCAL_BASE 0x40000000 /* the ARM local peripherals */
 
 #define RASPI3B_NUM_CPUS 4
+
+/*
+ * The core (VPU) clock, of the mini UART and SDHOST: with enable_uart=1,
+ * the firmware keeps it at 250 MHz (Raspberry Pi documentation,
+ * "Configure UARTs"); smirror always does.
+ */
+#define RASPI3B_CORE_CLOCK_HZ 250000000
 
 /* Where the firmware loads a 64-bit kernel, and boots core 0. */
 #define RASPI3B_KERNEL_ADDRESS 0x80000

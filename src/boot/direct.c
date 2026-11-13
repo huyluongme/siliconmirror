@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 bool boot_direct_load(Bus *bus, const char *path, uint64_t address,
@@ -57,4 +58,60 @@ bool boot_direct_load(Bus *bus, const char *path, uint64_t address,
 	}
 	fclose(file);
 	return ok;
+}
+
+bool boot_direct_read(const char *path, uint64_t limit, uint8_t **data,
+                      size_t *size, char *error, size_t error_size)
+{
+	FILE *file = fopen(path, "rb");
+	uint8_t *buf = NULL;
+	size_t len = 0, capacity = 0;
+	bool ok = true;
+
+	if (file == NULL) {
+		snprintf(error, error_size, "%s: %s", path, strerror(errno));
+		return false;
+	}
+	for (;;) {
+		size_t n;
+
+		if (len == capacity) {
+			uint8_t *grown;
+
+			capacity = capacity ? 2 * capacity : 65536;
+			grown = realloc(buf, capacity);
+			if (grown == NULL) {
+				snprintf(error, error_size, "%s: out of memory", path);
+				ok = false;
+				break;
+			}
+			buf = grown;
+		}
+		n = fread(buf + len, 1, capacity - len, file);
+		if (n == 0)
+			break;
+		len += n;
+		if (len > limit) {
+			snprintf(error, error_size,
+			         "%s: is larger than 0x%" PRIx64 " bytes", path, limit);
+			ok = false;
+			break;
+		}
+	}
+	if (ok && ferror(file)) {
+		snprintf(error, error_size, "%s: %s", path, strerror(errno));
+		ok = false;
+	}
+	if (ok && len == 0) {
+		snprintf(error, error_size, "%s: the file is empty", path);
+		ok = false;
+	}
+	fclose(file);
+	if (!ok) {
+		free(buf);
+		return false;
+	}
+	*data = buf;
+	*size = len;
+	return true;
 }

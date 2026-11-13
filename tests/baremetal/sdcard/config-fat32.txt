@@ -1,0 +1,7 @@
+# The card of baremetal.sd-boot-fat32: config.txt as the board reads it.
+[pi4]
+kernel=not-for-a-pi3.img
+[all]
+arm_64bit=1
+enable_uart=1
+dtoverlay=vc4-kms-v3d

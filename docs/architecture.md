@@ -20,11 +20,11 @@ docs/                 Design documentation
 scripts/              Developer scripts
 src/
   util/               Generic helpers: bit operations, byte order,
-                      MBR/FAT reading, device tree building
+                      flattened device trees
   core/               Board-independent core: memory bus, interrupt
                       lines, virtual time and timed events, the system
-                      counter, the CPU and character stream interfaces,
-                      the machine main loop
+                      counter, the CPU, character stream and block device
+                      interfaces, the machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -37,8 +37,8 @@ src/
   backend/            Host resources used by devices
     char/             Character streams: stdio, file, socket
     block/            Block storage: raw image files
-  boot/               Boot methods: direct kernel load, Raspberry Pi
-                      firmware emulation
+  boot/               Boot methods: direct kernel load; MBR, FAT and
+                      config.txt reading for the Raspberry Pi firmware
   machine/            Board definitions (raspi3b): CPUs, memory map,
                       devices, boot method; the list of boards for -M
   debug/              GDB stub, instruction tracing
@@ -122,11 +122,15 @@ and destroys with it.
 
 The boot method decides how software gets into memory:
 
-- `boot/direct`: load a file given with `-kernel`, as the firmware loads
-  `kernel8.img`. The board then starts its cores in the state that its
-  firmware would leave them in. Used for development and tests.
-- `boot/raspi_fw`: do what the Raspberry Pi firmware does: read
-  `config.txt`, the kernel and the device tree from the SD card image.
+- `boot/direct`: read a file given with `-kernel`, which the board then
+  places as its firmware would. Used for development and tests.
+- The Raspberry Pi firmware's boot, done without running the firmware:
+  `boot/mbr`, `boot/fat` and `boot/rpi_config` read the SD card's
+  partition table, its FAT boot partition and `config.txt`;
+  `util/fdt` reads, changes and writes the device tree; the board's own
+  `machine/raspi3b_firmware` puts them together, as the firmware does
+  for that board, and `machine/raspi3b_property` answers the Arm through
+  the mailboxes afterwards.
 
 Each board has a page in `docs/boards/` with its memory map, its boot
 and how it differs from the real hardware.

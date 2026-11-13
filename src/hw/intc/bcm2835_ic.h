@@ -30,9 +30,10 @@
 #define BCM2835_IC_NUM_ARM 8  /* ARM interrupts, 0 to 7 */
 
 /* A GPU interrupt, from the table of section 7.5. */
-#define BCM2835_IC_AUX 29   /* the mini UART and the SPI masters */
-#define BCM2835_IC_GPIO0 49 /* GPIO bank 0; 50 and 51 for 1 and 2, 52 all */
-#define BCM2835_IC_UART 57  /* the PL011, UART0 */
+#define BCM2835_IC_AUX 29    /* the mini UART and the SPI masters */
+#define BCM2835_IC_GPIO0 49  /* GPIO bank 0; 50 and 51 for 1 and 2, 52 all */
+#define BCM2835_IC_SDHOST 56 /* the SD card controller */
+#define BCM2835_IC_UART 57   /* the PL011, UART0 */
 
 /* ARM interrupts, from the table of section 7.5. */
 enum {

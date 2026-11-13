@@ -70,11 +70,34 @@ static void test_store_by_size(void)
 	CHECK_EQ(load_le64(buf), 0x1122334455667788);
 }
 
+/* Big-endian: the first byte is the most significant. */
+static void test_big_endian(void)
+{
+	uint8_t buf[9];
+
+	CHECK_EQ(load_be32(bytes), 0x88776655);
+	CHECK_EQ(load_be32(bytes + 1), 0x77665544);
+	CHECK_EQ(load_be64(bytes), 0x8877665544332211);
+	CHECK_EQ(load_be64(bytes + 1), 0x77665544332211ff);
+
+	memset(buf, 0xaa, sizeof(buf));
+	store_be32(buf + 1, 0x88776655);
+	CHECK(memcmp(buf + 1, bytes, 4) == 0);
+	CHECK_EQ(buf[0], 0xaa);
+	CHECK_EQ(buf[5], 0xaa);
+
+	memset(buf, 0xaa, sizeof(buf));
+	store_be64(buf, 0x8877665544332211);
+	CHECK(memcmp(buf, bytes, 8) == 0);
+	CHECK_EQ(buf[8], 0xaa);
+}
+
 int main(void)
 {
 	RUN_TEST(test_loads);
 	RUN_TEST(test_unaligned_load);
 	RUN_TEST(test_stores);
 	RUN_TEST(test_store_by_size);
+	RUN_TEST(test_big_endian);
 	return test_summary();
 }

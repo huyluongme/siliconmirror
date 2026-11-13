@@ -54,6 +54,23 @@ else()
 	set(AARCH64_BINUTILS_FOUND FALSE)
 endif()
 
+# Tools that make SD card images and device trees as real cards are made
+# (the fdisk, dosfstools, mtools and device-tree-compiler packages on
+# Debian and Ubuntu), for the tests that boot from a card. Optional, like
+# the AArch64 binutils.
+find_program(TRUNCATE truncate)
+find_program(SFDISK sfdisk PATHS /usr/sbin /sbin)
+find_program(MKFS_FAT NAMES mkfs.fat mkfs.vfat PATHS /usr/sbin /sbin)
+find_program(MCOPY mcopy)
+find_program(MMD mmd)
+find_program(DTC dtc)
+find_program(FDTGET fdtget)
+if(TRUNCATE AND SFDISK AND MKFS_FAT AND MCOPY AND MMD AND DTC AND FDTGET)
+	set(SD_TOOLS_FOUND TRUE)
+else()
+	set(SD_TOOLS_FOUND FALSE)
+endif()
+
 add_subdirectory(src)
 
 enable_testing()

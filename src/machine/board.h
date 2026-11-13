@@ -11,18 +11,29 @@
 
 #include <stddef.h>
 
+#include "core/block.h"
 #include "core/char_stream.h"
 #include "core/machine.h"
 
 /* What the command line asks of a board. */
 typedef struct BoardOptions {
-	const char *kernel; /* -kernel: image to boot, or NULL */
+	const char *kernel; /* -kernel: image to boot, or NULL for the SD card */
 
 	/*
 	 * -serial: the back end of the serial console, or NULL for none. The
 	 * board owns it from the call to create() on, even if create() fails.
 	 */
 	CharStream *serial;
+
+	/*
+	 * -sd: the SD card, or NULL for an empty slot. The board owns it from
+	 * the call to create() on, even if create() fails.
+	 */
+	BlockDevice *sd;
+
+	/* Messages that do not stop the board, such as what it ignores. */
+	void (*warn)(void *ctx, const char *message);
+	void *warn_ctx;
 } BoardOptions;
 
 typedef struct Board {

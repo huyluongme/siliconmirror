@@ -37,10 +37,15 @@ add_expect_test(cli.machine-missing
 	STDERR "^smirror: no machine given"
 	COMMAND ${smirror} -kernel image)
 
-add_expect_test(cli.kernel-required
+add_expect_test(cli.nothing-to-boot
 	STATUS 1
-	STDERR "^smirror: raspi3b: -kernel is required"
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: the board has nothing to boot from\n$"
 	COMMAND ${smirror} -M raspi3b)
+
+add_expect_test(cli.sd-not-found
+	STATUS 1
+	STDERR "^smirror: cannot open no/such/card.img: "
+	COMMAND ${smirror} -M raspi3b -sd no/such/card.img)
 
 add_expect_test(cli.kernel-not-found
 	STATUS 1
@@ -56,6 +61,14 @@ add_expect_test(cli.serial-unknown
 	STATUS 1
 	STDERR "^smirror: unknown -serial device 'bogus'\n$"
 	COMMAND ${smirror} -M raspi3b -serial bogus)
+
+# The card's image is closed when the command line fails after -sd.
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img "")
+add_expect_test(cli.sd-then-serial-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -serial device 'bogus'\n$"
+	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
+		-serial bogus)
 
 add_expect_test(cli.serial-twice
 	STATUS 1

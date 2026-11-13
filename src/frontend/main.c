@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "backend/block/file.h"
 #include "backend/char/file.h"
 #include "backend/char/stdio.h"
 #include "core/machine.h"
@@ -29,6 +30,7 @@ typedef struct Options {
 	const char *machine; /* -M */
 	const char *kernel;  /* -kernel */
 	const char *serial;  /* -serial */
+	const char *sd;      /* -sd */
 } Options;
 
 static void print_usage(FILE *out)
@@ -39,6 +41,10 @@ static void print_usage(FILE *out)
 	      "  -M, -machine NAME  Board to emulate; -M help lists them\n"
 	      "  -kernel FILE       Image to boot, loaded as the board's "
 	      "firmware would\n"
+	      "  -sd FILE           SD card image, which the board boots from "
+	      "without\n"
+	      "                     -kernel; what the guest writes goes to "
+	      "FILE\n"
 	      "  -serial DEV        Where the serial console goes: stdio (the "
 	      "default),\n"
 	      "                     null or file:PATH\n"
@@ -95,6 +101,8 @@ static const char **option_value(Options *options, const char *name)
 		return &options->kernel;
 	if (strcmp(name, "serial") == 0)
 		return &options->serial;
+	if (strcmp(name, "sd") == 0)
+		return &options->sd;
 	return NULL;
 }
 
@@ -131,6 +139,13 @@ static bool open_serial(const char *spec, CharStream **stream)
 		return false;
 	}
 	return true;
+}
+
+/* What the board does not do, or ignores, but goes on without. */
+static void warn(void *ctx, const char *message)
+{
+	(void)ctx;
+	fprintf(stderr, "smirror: warning: %s\n", message);
 }
 
 /* Ctrl-A x on the terminal. */
@@ -210,11 +225,20 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	BoardOptions board_options = {.kernel = options.kernel};
+	BoardOptions board_options = {.kernel = options.kernel, .warn = warn};
 	char error[512];
 
-	if (!open_serial(options.serial, &board_options.serial))
+	if (options.sd != NULL) {
+		board_options.sd = block_file_open(options.sd, error, sizeof(error));
+		if (board_options.sd == NULL) {
+			fprintf(stderr, "smirror: %s\n", error);
+			return EXIT_FAILURE;
+		}
+	}
+	if (!open_serial(options.serial, &board_options.serial)) {
+		block_destroy(board_options.sd);
 		return EXIT_FAILURE;
+	}
 
 	CharStream *terminal =
 		strcmp(options.serial, "stdio") == 0 ? board_options.serial : NULL;

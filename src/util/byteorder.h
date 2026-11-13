@@ -2,11 +2,12 @@
 /* Copyright (C) 2026 Huy Luong Duc */
 
 /*
- * Little-endian loads and stores.
+ * Little-endian and big-endian loads and stores.
  *
  * They read and write bytes one at a time, so they work on any host byte
  * order and at any alignment. Compilers turn each of them into a single
- * load or store on little-endian hosts.
+ * load or store on little-endian hosts, plus a byte swap for the
+ * big-endian ones.
  */
 
 #ifndef UTIL_BYTEORDER_H
@@ -94,6 +95,40 @@ static inline void store_le(void *ptr, unsigned size, uint64_t value)
 		store_le64(ptr, value);
 		break;
 	}
+}
+
+/* Big-endian, as in devicetree blobs. */
+static inline uint32_t load_be32(const void *ptr)
+{
+	const uint8_t *p = ptr;
+
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
+	       (uint32_t)p[3];
+}
+
+static inline uint64_t load_be64(const void *ptr)
+{
+	const uint8_t *p = ptr;
+
+	return (uint64_t)load_be32(p) << 32 | (uint64_t)load_be32(p + 4);
+}
+
+static inline void store_be32(void *ptr, uint32_t value)
+{
+	uint8_t *p = ptr;
+
+	p[0] = (uint8_t)(value >> 24);
+	p[1] = (uint8_t)(value >> 16);
+	p[2] = (uint8_t)(value >> 8);
+	p[3] = (uint8_t)value;
+}
+
+static inline void store_be64(void *ptr, uint64_t value)
+{
+	uint8_t *p = ptr;
+
+	store_be32(p, (uint32_t)(value >> 32));
+	store_be32(p + 4, (uint32_t)value);
 }
 
 #endif /* UTIL_BYTEORDER_H */

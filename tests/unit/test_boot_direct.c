@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Copyright (C) 2026 Huy Luong Duc */
 
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,8 @@
 
 #include "boot/direct.h"
 #include "test.h"
+
+#include <unistd.h>
 
 /* Test files go to the current directory: the build tree under CTest. */
 #define IMAGE "test_boot_direct.bin"
@@ -91,9 +94,63 @@ static void test_errors(void)
 	remove(EMPTY);
 }
 
+static int free_fd(void)
+{
+	int fd = open("/dev/null", O_RDONLY);
+
+	CHECK(fd >= 0);
+	close(fd);
+	return fd;
+}
+
+/* boot_direct_read(): a whole file into memory, within a limit. */
+static void test_read(void)
+{
+	static uint8_t big[200000];
+	uint8_t *data = NULL;
+	size_t size = 0;
+	char error[256] = "";
+	int fd = free_fd();
+
+	for (size_t i = 0; i < sizeof(big); i++)
+		big[i] = (uint8_t)(i * 13 + (i >> 16));
+	write_file(IMAGE, big, sizeof(big));
+	CHECK(boot_direct_read(IMAGE, sizeof(big), &data, &size, error,
+	                       sizeof(error)));
+	CHECK_EQ(size, sizeof(big));
+	CHECK(data != NULL && memcmp(data, big, sizeof(big)) == 0);
+	free(data);
+	CHECK_EQ(free_fd(), fd);
+
+	CHECK(!boot_direct_read(IMAGE, sizeof(big) - 1, &data, &size, error,
+	                        sizeof(error)));
+	CHECK(strcmp(error, IMAGE ": is larger than 0x30d3f bytes") == 0);
+	CHECK_EQ(free_fd(), fd);
+
+	write_file(EMPTY, "", 0);
+	CHECK(!boot_direct_read(EMPTY, 100, &data, &size, error, sizeof(error)));
+	CHECK(strcmp(error, EMPTY ": the file is empty") == 0);
+	CHECK_EQ(free_fd(), fd);
+	write_file(EMPTY, "k", 1);
+	CHECK(boot_direct_read(EMPTY, 1, &data, &size, error, sizeof(error)));
+	CHECK_EQ(size, 1);
+	CHECK_EQ(data[0], 'k');
+	free(data);
+
+	CHECK(!boot_direct_read(".", 100, &data, &size, error, sizeof(error)));
+	CHECK(strncmp(error, ".: ", 3) == 0);
+	CHECK_EQ(free_fd(), fd);
+	CHECK(!boot_direct_read("no/such/file", 100, &data, &size, error,
+	                        sizeof(error)));
+	CHECK(strncmp(error, "no/such/file: ", 14) == 0);
+	remove(IMAGE);
+	remove(EMPTY);
+}
+
 int main(void)
 {
 	RUN_TEST(test_load);
 	RUN_TEST(test_errors);
+	RUN_TEST(test_read);
 	return test_summary();
 }

@@ -14,16 +14,20 @@
 
 #include "machine/raspi3b.h"
 
-#include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-#include "boot/direct.h"
 #include "cpu/arm64/cpu.h"
 #include "hw/char/bcm2835_aux.h"
 #include "hw/char/pl011.h"
 #include "hw/gpio/bcm2835_gpio.h"
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
+#include "hw/misc/bcm2835_mbox.h"
+#include "hw/sd/bcm2835_sdhost.h"
+#include "hw/sd/sd_card.h"
+#include "machine/raspi3b_firmware.h"
+#include "machine/raspi3b_property.h"
 #include "machine/raspi3b_serial.h"
 #include "util/macros.h"
 
@@ -71,28 +75,13 @@ static const Pl011Config bcm2835_pl011 = {.fifo_depth = 16, .periph_id = 0};
  */
 #define UART_CLOCK_HZ 48000000
 
-/*
- * The core (VPU) clock, the system clock of the mini UART: with
- * enable_uart=1, the firmware keeps it at 250 MHz (Raspberry Pi
- * documentation, "Configure UARTs").
- */
-#define CORE_CLOCK_HZ 250000000
-
-/* What the firmware writes to set up the console; see firmware_uart(). */
-#define GPFSEL1 (RASPI3B_GPIO_BASE + 0x04)
-#define AUX_ENABLES (RASPI3B_AUX_BASE + 0x04)
-#define AUX_MU_LCR_REG (RASPI3B_AUX_BASE + 0x4c)
-#define AUX_MU_BAUD_REG (RASPI3B_AUX_BASE + 0x68)
+#define CORE_CLOCK_HZ RASPI3B_CORE_CLOCK_HZ
 
 /*
- * The boot stub, assembled from raspi3b_stub.s: run `make stub` after
- * changing that file.
+ * How long the firmware takes over a message in the mailbox. Not
+ * documented: our choice, short enough for every timeout of its users.
  */
-static const uint32_t stub[] = {
-#include "machine/raspi3b_stub.inc"
-};
-
-static_assert(sizeof(stub) == RASPI3B_STUB_SIZE, "the stub has the wrong size");
+#define VC_LATENCY_NS 1000
 
 static void destroy_serial(void *ctx)
 {
@@ -165,6 +154,26 @@ static void destroy_uart(void *ctx)
 	pl011_destroy(ctx);
 }
 
+static void reset_property(void *ctx)
+{
+	raspi3b_property_reset(ctx);
+}
+
+static void destroy_property(void *ctx)
+{
+	raspi3b_property_destroy(ctx);
+}
+
+static void reset_mbox(void *ctx)
+{
+	bcm2835_mbox_reset(ctx);
+}
+
+static void destroy_mbox(void *ctx)
+{
+	bcm2835_mbox_destroy(ctx);
+}
+
 static void reset_gpio(void *ctx)
 {
 	bcm2835_gpio_reset(ctx);
@@ -190,89 +199,66 @@ static void destroy_aux(void *ctx)
 	bcm2835_aux_destroy(ctx);
 }
 
-/*
- * Set up the console as the firmware does with enable_uart=1, which a
- * serial console on the Raspberry Pi 3 needs (Raspberry Pi documentation,
- * "Configure UARTs"): the mini UART on GPIO 14 and 15, their ALT5, which
- * U-Boot checks and keeps (drivers/serial/serial_bcm283x_mu.c), enabled,
- * with 8-bit characters at 115200 baud: 250 MHz / (8 * (270 + 1)) is
- * 115313 baud. The firmware's own register writes are not documented.
- * Returns the status of the first write that fails.
- */
-static BusStatus firmware_uart(Machine *m)
-{
-	static const struct {
-		uint64_t address;
-		uint32_t value;
-	} writes[] = {
-		{GPFSEL1, BCM2835_GPIO_ALT5 << 12 | BCM2835_GPIO_ALT5 << 15},
-		{AUX_ENABLES, 1},
-		{AUX_MU_LCR_REG, 3},
-		{AUX_MU_BAUD_REG, 270},
-	};
+/* The firmware's boot, which a reset of the board runs again. */
+typedef struct Firmware {
+	Raspi3bFirmwareConfig config;
+} Firmware;
 
-	for (unsigned i = 0; i < ARRAY_SIZE(writes); i++) {
-		BusStatus status =
-			bus_write(m->bus, writes[i].address, 4, writes[i].value);
-
-		if (status != BUS_OK)
-			return status;
-	}
-	return BUS_OK;
-}
-
-/* A reset of the board runs the firmware again. */
 static void reset_firmware(void *ctx)
 {
-	firmware_uart(ctx);
+	Firmware *fw = ctx;
+	char error[256];
+
+	fw->config.warn = NULL; /* warned at the first boot */
+	if (!raspi3b_firmware_boot(&fw->config, error, sizeof(error)))
+		machine_stop(fw->config.machine, MACHINE_STOP_ERROR, "firmware: %s",
+		             error);
 }
 
-static bool write_word(Machine *m, uint64_t address, unsigned size,
-                       uint64_t value, char *error, size_t error_size)
+static void destroy_firmware(void *ctx)
 {
-	BusStatus status = bus_write(m->bus, address, size, value);
+	free(ctx);
+}
 
-	if (status != BUS_OK) {
-		snprintf(error, error_size, "cannot write the boot stub: %s",
-		         bus_status_str(status));
-		return false;
-	}
-	return true;
+static void destroy_card(void *ctx)
+{
+	block_destroy(ctx);
 }
 
 /*
- * Do what the firmware does for kernel8.img: load it at 0x80000 and the
- * boot stub at 0, and tell the stub where the kernel and the device tree
- * are. The cores are left as they reset, at EL3 at the stub's first
- * instruction: running the stub moves them to EL2, and starts core 0 in
- * the kernel.
+ * The SD card. A reset of the board does not cut its power, but the boot
+ * ROM's CMD0 puts it back in the idle state.
  */
-static bool boot(Machine *m, const char *kernel, char *error, size_t error_size)
+static void reset_sd_card(void *ctx)
 {
-	if (kernel == NULL) {
-		snprintf(error, error_size,
-		         "-kernel is required: booting from an SD card image is not "
-		         "implemented yet");
-		return false;
-	}
-	if (!boot_direct_load(m->bus, kernel, RASPI3B_KERNEL_ADDRESS,
-	                      RASPI3B_RAM_SIZE, error, error_size))
-		return false;
+	sd_card_power(ctx, true);
+}
 
-	for (unsigned i = 0; i < ARRAY_SIZE(stub); i++) {
-		if (!write_word(m, RASPI3B_STUB_ADDRESS + 4 * i, 4, stub[i], error,
-		                error_size))
+static void destroy_sd_card(void *ctx)
+{
+	sd_card_destroy(ctx);
+}
+
+static void reset_sdhost(void *ctx)
+{
+	bcm2835_sdhost_reset(ctx);
+}
+
+static void destroy_sdhost(void *ctx)
+{
+	bcm2835_sdhost_destroy(ctx);
+}
+
+/*
+ * The card's slot is wired to GPIO 48 to 53 (CLK, CMD, DAT0 to DAT3:
+ * bcm2710-rpi-3-b.dts): SDHOST reaches the card when they all have ALT0.
+ */
+static bool slot_connected(void *ctx)
+{
+	for (unsigned pin = 48; pin <= 53; pin++)
+		if (bcm2835_gpio_function(ctx, pin) != BCM2835_GPIO_ALT0)
 			return false;
-	}
-	/*
-	 * The magic number and the version are also the spin table entry of
-	 * core 3, which must read 0 until the operating system releases it.
-	 * There is no device tree yet: its address is 0.
-	 */
-	return write_word(m, RASPI3B_STUB_MAGIC, 8, 0, error, error_size) &&
-	       write_word(m, RASPI3B_STUB_DTB, 4, 0, error, error_size) &&
-	       write_word(m, RASPI3B_STUB_KERNEL, 4, RASPI3B_KERNEL_ADDRESS, error,
-	                  error_size);
+	return true;
 }
 
 static Machine *raspi3b_create(const BoardOptions *options, char *error,
@@ -288,13 +274,25 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Raspi3bSerial *cable;
 	Pl011 *uart;
 	Bcm2835Aux *aux;
+	Raspi3bProperty *property;
+	Bcm2835Mbox *mbox;
+	SdCard *sd_card = NULL;
+	Bcm2835Sdhost *sdhost;
+	Firmware *fw;
 
 	if (m == NULL) {
 		char_stream_destroy(options->serial);
+		block_destroy(options->sd);
 		goto out_of_memory;
 	}
 	if (!machine_add_device(m, options->serial, NULL, destroy_serial)) {
 		char_stream_destroy(options->serial);
+		block_destroy(options->sd);
+		goto out_of_memory;
+	}
+	if (options->sd != NULL &&
+	    !machine_add_device(m, options->sd, NULL, destroy_card)) {
+		block_destroy(options->sd);
 		goto out_of_memory;
 	}
 
@@ -357,6 +355,30 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	bcm2835_ic_connect(ic, bcm2836_local_gpu_input(local, false),
 	                   bcm2836_local_gpu_input(local, true));
 
+	/* The firmware answers the Arm through the mailboxes. */
+	property = raspi3b_property_create(m, RASPI3B_RAM_SIZE);
+	if (property == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, property, reset_property, destroy_property)) {
+		raspi3b_property_destroy(property);
+		goto out_of_memory;
+	}
+	mbox = bcm2835_mbox_create(
+		m, &(Bcm2835MboxVc){raspi3b_property_receive, property}, VC_LATENCY_NS,
+		bcm2835_ic_arm_input(ic, BCM2835_IC_ARM_MAILBOX));
+	if (mbox == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, mbox, reset_mbox, destroy_mbox)) {
+		bcm2835_mbox_destroy(mbox);
+		goto out_of_memory;
+	}
+	status = bcm2835_mbox_map(mbox, m->bus, "mbox", RASPI3B_MBOX_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the mailboxes: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+
 	for (unsigned i = 0; i < BCM2835_GPIO_NUM_IRQS; i++)
 		gpio_irqs[i] = bcm2835_ic_gpu_input(ic, BCM2835_IC_GPIO0 + i);
 	gpio = bcm2835_gpio_create(m, gpio_irqs);
@@ -414,17 +436,53 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		goto fail;
 	}
 
-	/* After the devices it sets up, so that it resets after them. */
-	status = firmware_uart(m);
+	/* The SD card in its slot, and its controller. */
+	if (options->sd != NULL) {
+		sd_card = sd_card_create(m, options->sd, error, error_size);
+		if (sd_card == NULL)
+			goto fail;
+		if (!machine_add_device(m, sd_card, reset_sd_card, destroy_sd_card)) {
+			sd_card_destroy(sd_card);
+			goto out_of_memory;
+		}
+		sd_card_power(sd_card, true);
+	}
+	sdhost = bcm2835_sdhost_create(
+		m, CORE_CLOCK_HZ,
+		&(Bcm2835SdhostSlot){
+			.card = sd_card, .connected = slot_connected, .ctx = gpio},
+		bcm2835_ic_gpu_input(ic, BCM2835_IC_SDHOST));
+	if (sdhost == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, sdhost, reset_sdhost, destroy_sdhost)) {
+		bcm2835_sdhost_destroy(sdhost);
+		goto out_of_memory;
+	}
+	status = bcm2835_sdhost_map(sdhost, m->bus, "sdhost", RASPI3B_SDHOST_BASE);
 	if (status != BUS_OK) {
-		snprintf(error, error_size, "cannot set up the mini UART: %s",
+		snprintf(error, error_size, "cannot map SDHOST: %s",
 		         bus_status_str(status));
 		goto fail;
 	}
-	if (!machine_add_device(m, m, reset_firmware, NULL))
-		goto out_of_memory;
 
-	if (!boot(m, options->kernel, error, error_size))
+	/* After the devices it sets up, so that it resets after them. */
+	fw = calloc(1, sizeof(*fw));
+	if (fw == NULL)
+		goto out_of_memory;
+	fw->config = (Raspi3bFirmwareConfig){
+		.machine = m,
+		.gpio = gpio,
+		.property = property,
+		.kernel = options->kernel,
+		.card = options->sd,
+		.warn = options->warn,
+		.warn_ctx = options->warn_ctx,
+	};
+	if (!machine_add_device(m, fw, reset_firmware, destroy_firmware)) {
+		free(fw);
+		goto out_of_memory;
+	}
+	if (!raspi3b_firmware_boot(&fw->config, error, error_size))
 		goto fail;
 	return m;
 

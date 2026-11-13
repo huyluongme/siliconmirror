@@ -45,7 +45,11 @@ Requirements: a C11 compiler (GCC or Clang), GNU Make, CMake 3.25 or
 later and Ninja. The bare-metal tests also need the GNU binutils for
 AArch64 (`binutils-aarch64-linux-gnu` on Debian and Ubuntu); without
 them, those tests are skipped. `make stub` needs them too; it is only
-used after changing the AArch64 code of a board's boot stub.
+used after changing the AArch64 code of a board's boot stub. The tests
+that boot from an SD card image make the image and its device tree as
+real cards are made, with `sfdisk`, `mkfs.fat`, mtools and `dtc` (the
+`fdisk`, `dosfstools`, `mtools` and `device-tree-compiler` packages);
+without them, those tests are skipped too.
 
 ```sh
 make test                  # build and run the tests
@@ -86,14 +90,25 @@ contains `compile_commands.json` for editors and language servers.
 ## Running
 
 ```sh
+./build/debug/smirror -M raspi3b -sd card.img
 ./build/debug/smirror -M raspi3b -kernel hello.bin
 ```
 
 | Option         | What it does                                                                |
 |----------------|-----------------------------------------------------------------------------|
 | `-M NAME`      | Board to emulate; `-M help` lists them                                      |
+| `-sd FILE`     | SD card image; without `-kernel` the board boots from it, as the real one   |
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
 | `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
+
+The SD card image is used as it is, as a real card would be: what the
+guest writes goes to the file, and two smirror processes cannot use the
+same image at once. On the `raspi3b`, the board boots from the card as
+its firmware does: `bootcode.bin` and `start.elf` must be there (smirror
+does not run them), `config.txt` needs `arm_64bit=1` for a 64-bit
+kernel, and `enable_uart=1` for a console; see
+[docs/boards/raspi3b.md](docs/boards/raspi3b.md), "Boot from the SD
+card". smirror prints a warning for each setting it does not apply.
 
 With `-serial stdio`, the board's serial console is connected to the
 terminal: what the guest sends shows up there, and what you type goes

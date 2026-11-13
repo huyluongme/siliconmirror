@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Huy Luong Duc
+
+// A device tree with the nodes that the Raspberry Pi firmware fills in,
+// laid out as in the Raspberry Pi's bcm2710-rpi-3-b.dts: the memory, the
+// command line and the Ethernet controller that ethernet0 names.
+
+/dts-v1/;
+
+/ {
+	model = "Raspberry Pi 3 Model B";
+	compatible = "raspberrypi,3-model-b", "brcm,bcm2837";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	aliases {
+		ethernet0 = "/soc/usb@7e980000/usb1@1/ethernet@1";
+	};
+
+	chosen {
+		bootargs = "coherent_pool=1M";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x0>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		usb@7e980000 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			usb1@1 {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <1>;
+
+				ethernet@1 {
+					reg = <1>;
+				};
+			};
+		};
+	};
+};

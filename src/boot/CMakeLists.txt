@@ -4,6 +4,9 @@
 # Boot methods. See docs/architecture.md.
 
 add_library(boot STATIC
-	direct.c)
+	direct.c
+	fat.c
+	mbr.c
+	rpi_config.c)
 
 target_link_libraries(boot PUBLIC core)

@@ -75,8 +75,10 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
+| `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
+| `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
@@ -354,13 +356,235 @@ in error. The BCM2835's PL011 has no DSR, DCD or RI inputs, and its CTS
 input comes through a GPIO pin that is not modelled, so the modem
 status interrupts never come either. Loopback is not modelled yet.
 
+## The mailboxes and the firmware
+
+The Arm cores and the VideoCore, where the firmware runs, talk through
+two mailboxes at `0x3f00b880`. Mailbox 1 carries messages to the
+VideoCore, mailbox 0 back to the Arm; each holds eight 32-bit words. A
+message is a channel in bits 3:0 and data in bits 31:4.
+
+| Offset | Register                   | Arm access                          |
+|--------|----------------------------|-------------------------------------|
+| `0x00` | Mailbox 0 read             | Read: takes the oldest word         |
+| `0x10` | Mailbox 0 peek             | Read: the oldest word, left in      |
+| `0x18` | Mailbox 0 status           | Read: bit 31 full, bit 30 empty     |
+| `0x1c` | Mailbox 0 configuration    | Bit 0: interrupt while it has data  |
+| `0x20` | Mailbox 1 write            | Write: adds a word                  |
+| `0x38` | Mailbox 1 status           | Read: bit 31 full, bit 30 empty     |
+
+The interrupt is ARM interrupt 1 of the interrupt controller ("ARM
+Mailbox"). The BCM2835 datasheet does not describe these registers: the
+firmware wiki and Linux's driver do, as listed under Sources. smirror
+stops on what they leave open: reading an empty mailbox or writing a
+full one, the sender registers at `0x14` and `0x34`, the Arm reading
+mailbox 1 or writing mailbox 0, the other configuration bits, and
+accesses that are not 32-bit. The low bits of a status register read
+as 0.
+
+The firmware takes each message 1 µs after it could start on it, one at
+a time; the real firmware's time is not documented, and this is short
+enough for every timeout of the software that waits for it. It answers
+only channel 8, the property channel: any other channel stops the
+machine.
+
+On the property channel, the Arm puts a buffer of tags in memory and
+sends its address; the firmware answers in the buffer and sends the
+same address back. The address may carry a bus alias in bits 31:30, as
+Linux's does (`0xc0000000`, uncached): the firmware drops it. smirror
+follows the wiki's format: the answer to each tag is cut to its value
+buffer while its length says how long it is, unknown tags are left
+unanswered, and a buffer without an end tag gets the code `0x80000001`.
+
+| Tag          | Answer on smirror's board                                          |
+|--------------|--------------------------------------------------------------------|
+| `0x00000001` | Firmware revision `0x6af5d384`, the time of a firmware release     |
+| `0x00010002` | Board revision `0xa02082`: 3 Model B 1.2, 1 GB, Sony UK            |
+| `0x00010003` | MAC address `b8:27:eb:ff:ee:03`                                    |
+| `0x00010004` | Serial number `0x00000000c0ffee03`                                 |
+| `0x00010005` | Arm memory: from 0, 948 MB (1024 MB less `gpu_mem`, 76 MB)         |
+| `0x00010006` | VideoCore memory: the 76 MB above it                               |
+| `0x00050001` | The kernel's command line, without a terminating 0                 |
+| `0x00028001` | Power on or off: the state comes back; devices 9 and up are absent |
+| `0x00020001` | Power state, once the Arm has set it                               |
+| `0x00030002` | Clock rate; `0x00030004` the maximum, `0x00030007` the minimum     |
+| `0x00038002` | Set a clock rate, kept within the clock's range                    |
+| `0x00030009` | Turbo, 0 at boot; `0x00038009` sets it                             |
+| `0x00038042` | Set SDHOST's clock: the fastest not above the one asked            |
+
+The rates are the defaults of `config.txt` on a Raspberry Pi 3: the
+Arm runs at 600 to 1200 MHz, the core at 250 to 400 MHz (250 MHz with
+`enable_uart=1`, as smirror sets up the console), V3D, H.264 and ISP at
+250 to 400 MHz, the SDRAM at 400 to 450 MHz, and UART0's clock at
+48 MHz. HEVC does not exist on the Pi 3: its rate is 0. A new rate for
+the Arm changes nothing in the emulation, whose time does not depend on
+it; a new rate for the core or for UART0's clock, or turbo while the
+core clock may rise, stops the machine, as the UARTs would change speed.
+
+The firmware knows many more tags (the wiki and Linux's
+`raspberrypi-firmware.h` list them): one that smirror does not answer
+stops the machine, and so do values that nothing documents for this
+board: the power state of a device before the Arm sets it, the time a
+device takes to power up, and the rates of the EMMC, PIXEL and PWM
+clocks. A reset of the board starts the firmware again: the clocks,
+turbo and the power states are back to those of boot.
+
+## The SD card
+
+`-sd FILE` is the card in the board's microSD slot, wired to GPIO 48 to
+53 (CLK, CMD, DAT0 to DAT3). It is a card of the SD Physical Layer
+specification, version 3.01, as big as its image: an SDSC card up to
+2 GB, SDHC up to 32 GB, SDXC above, as real cards are made, so the
+image must be a multiple of 512 KB. It speaks SD mode at 3.3 V, on 1 or
+4 data lines, at default or high speed (CMD6), and does what a host
+needs of it: identification, reads and writes of one block or more,
+CMD23, erase (the blocks then read as 0), the SD status and the SCR.
+Writes go to the image at once. Its CID names no real manufacturer:
+`MID` 0, `OID` "SM", product "SMSD1". The card answers at once; it
+is ready 1 ms after the first `ACMD41`. Commands that a card must have
+but smirror does not emulate stop the machine: locking (`CMD42`),
+`PROGRAM_CSD`, `GEN_CMD` and the security commands. A reset of the
+board puts the card back in the idle state, as the boot ROM's `CMD0`
+does; it keeps its power.
+
+SDHOST, the BCM2835's own SD controller, drives it; the Arasan
+controller (EMMC) goes to the WiFi chip, which is not modelled. No
+datasheet describes SDHOST: smirror follows the drivers, Raspberry Pi's
+`bcm2835-sdhost.c`, Linux's `bcm2835.c` and U-Boot's
+`bcm2835_sdhost.c`.
+
+| Offset | Register | What smirror does                                                     |
+|--------|----------|-----------------------------------------------------------------------|
+| `0x00` | `SDCMD`  | Command index, flags; `NEW` starts it and clears when it is done      |
+| `0x04` | `SDARG`  | Argument                                                              |
+| `0x08` | `SDTOUT` | Data and busy timeout, in SD clocks                                   |
+| `0x0c` | `SDCDIV` | Clock divider: core clock / (`SDCDIV` + 2); 507 at reset              |
+| `0x10` | `SDRSP0` | Response; a long one in `SDRSP0` (bits 31:0) to `SDRSP3`              |
+| `0x20` | `SDHSTS` | Errors and interrupts, write 1 to clear; bit 0, `DATA_FLAG`, the FIFO |
+| `0x30` | `SDVDD`  | Power: commands with it off stop the machine                          |
+| `0x34` | `SDEDM`  | FIFO thresholds; state machine and FIFO fill, read-only               |
+| `0x38` | `SDHCFG` | Bus width, `SLOW_CARD`, interrupt enables                             |
+| `0x3c` | `SDHBCT` | Bytes a block                                                         |
+| `0x40` | `SDDATA` | The FIFO, 16 words                                                    |
+| `0x50` | `SDHBLC` | Blocks of the transfer                                                |
+
+Commands, responses and data take their bits' time at the SD clock: 48
+bits a command, 48 or 136 a response 2 clocks later, 32 clocks a word
+on 1 line or 8 on 4, a block's data 2 clocks after the response, its
+CRC and end bit, and after a written block the CRC status and 8 clocks
+of busy (our choice), as after an R1b command. The clock stops while
+the FIFO is full on a read or empty on a write, as on the real
+controller. With `SLOW_CARD`, which every driver sets, the divider is
+the whole of `SDCDIV`; without it, in data mode (after `CMD3`), only
+its low 3 bits count, as the driver's comment says. A command the card
+does not answer fails after 64 clocks with `CMD_TIME_OUT`; data that
+does not come fails after `SDTOUT` clocks with `REW_TIME_OUT`. `DATA_FLAG`
+is set while the FIFO holds the read threshold of `SDEDM`, or the end of
+a block, or has room for the write threshold; `BLOCK_IRPT` comes at the
+end of each block, `BUSY_IRPT` at the end of a busy period. The
+interrupt, GPU interrupt 56, is high while one of them is set and
+enabled.
+
+Without the card, or while GPIO 48 to 53 are not all ALT0, commands
+time out, as with an empty slot. CRC errors never happen, but a block
+of another length than `SDHBCT`, or a card on another number of lines
+than `WIDE_EXT_BUS`, ends with `CRC16_ERROR`; a response of another
+length than `LONG` asks for ends with `CRC7_ERROR`. What the drivers do
+not show stops the machine: other offsets, accesses that are not
+32-bit, reading an empty FIFO or writing a full one, a command while
+another runs or, but for `CMD12`, while data moves, and bits the
+drivers never set. The DMA request (DREQ 13) is not modelled yet.
+
+The firmware leaves SDHOST at its reset values, with the card in the
+idle state; drivers set it up again anyway.
+
+## Boot from the SD card
+
+On the real board, the VideoCore boots first: its boot ROM loads
+`bootcode.bin` from the SD card, which loads the firmware, `start.elf`,
+which sets the board up, loads the kernel and starts the Arm cores.
+smirror does what that firmware does, without running it:
+
+1. `-sd FILE` is the card. Its partition table must be an MBR, and its
+   first partition a FAT12, FAT16 or FAT32 file system, the boot
+   partition. Long file names work, as on the real card.
+2. The boot partition must hold `bootcode.bin` and the start file, as
+   on the real board, which stops without them: smirror does not run
+   them, so any file of that name will do. The start file is
+   `start.elf`, or what `start_file`, `start_debug=1`, `start_x=1` or
+   `gpu_mem=16` choose.
+3. `config.txt`, with the files it includes, is read as the
+   documentation describes it: one `property=value` a line, `#`
+   comments, 98 characters a line. Its filters see a Pi 3 Model B:
+   `[pi3]`, `[board-type=0x8]` and `[0xc0ffee03]` (the serial number)
+   match, `[gpioN=0|1]` reads the pins, `[cust_otpN...]` sees OTP rows
+   that are not programmed and `[partition...]` a first boot; `[EDID=]`
+   and `[tryboot]` never match, as no display is connected and nothing
+   asked for a try boot. After a filter smirror does not know, nothing
+   applies until `[all]`, with a warning.
+4. The memory split: `gpu_mem` (76 MB by default, 16 at least),
+   `gpu_mem_1024` and `total_mem`, from `config.txt` itself and not from
+   an included file, as `bootcode.bin` reads them. The Arm gets the rest,
+   948 MB by default, which the mailboxes and the device tree report.
+5. The pins, as the firmware's `dt-blob.dts` sets them for the Pi 3
+   Model B rev 1.2: GPIO 14 and 15 to UART0 (ALT0), 15 pulled up; 34 to
+   39 inputs pulled up (the WiFi chip's, before Linux takes them); 40
+   and 41 to PWM (ALT0, the audio jack), 42 and 43 to GPCLK1 and 2
+   (ALT0) pulled down; 44 to 47 inputs pulled up; 48 to 53 to the SD
+   card's controller (ALT0), pulled up. With `enable_uart=1`, GPIO 14
+   and 15 go to the mini UART instead (ALT5), which is turned on at
+   115200 baud, and the core clock stays at 250 MHz. `enable_uart` is 0
+   by default on the Pi 3, as its console is the mini UART.
+6. The kernel: `kernel=`, or `kernel8.img` with `arm_64bit=1`. On the
+   Pi 3 `arm_64bit` is 0 by default, which boots `kernel7.img` as a
+   32-bit kernel: smirror runs only 64-bit kernels, and stops with a
+   message instead. A kernel named `kernel7.img`, `kernel7l.img` or
+   `kernel.img` is 32-bit too, as the documentation says. Kernels
+   compressed with gzip are not supported yet. `os_prefix` is put
+   before the names of the kernel, the initramfs, `cmdline.txt` and the
+   device tree, if the kernel and the device tree are there with it.
+7. Where the kernel goes: `kernel_address`, or, for an image with the
+   Linux arm64 header (the magic `ARM\x64` at byte 56), its
+   `text_offset`, 2 MB higher if that would overlap the stub; so Linux
+   5.8 and later go to `0x200000`. Other images, such as U-Boot or a
+   bare-metal program, go to `0x80000`.
+8. The initramfs: `initramfs FILES ADDRESS|followkernel`, `ramfsfile`
+   with `ramfsaddr`, or `auto_initramfs=1`. Several files, separated by
+   commas, are loaded one after the other. `followkernel` puts them
+   right after the kernel, at the next 4 KB: the firmware's own
+   alignment is not documented.
+9. The command line: the first line of `cmdline.txt`, or of the file
+   `cmdline=` names.
+10. The device tree: `device_tree=`, or `bcm2710-rpi-3-b.dtb`, or else
+    the upstream `bcm2837-rpi-3-b.dtb`; `device_tree=` with no name boots
+    without one. The firmware fills in the memory node (`reg`, after
+    `#address-cells` and `#size-cells` of the root), adds the command
+    line after the tree's own `/chosen/bootargs`, sets
+    `/chosen/linux,initrd-start` and `linux,initrd-end`, and gives the
+    node that the alias `ethernet0` names the board's MAC address in
+    `local-mac-address`. It goes at `device_tree_address`, or ends just
+    below `0x2f000000` (or the end of the Arm's memory, or
+    `device_tree_end`), on 256 bytes: U-Boot on a real Pi 3 found it at
+    `0x2effb300`, but the firmware's rule is not documented.
+11. The stub, as with `-kernel` below, with the kernel's address and the
+    device tree's.
+
+What `config.txt` sets but smirror does not apply, such as `dtoverlay`,
+`dtparam` or the video settings, is listed in a warning, and the boot
+goes on. A reset of the board runs this boot again, from the card as it
+is then.
+
+With `-kernel`, the card is not read: the kernel comes from the host,
+goes where the rules of 7 put it, and boots without a device tree; the
+settings are those of an empty `config.txt` with `enable_uart=1`. The
+card, if any, stays in its slot.
+
 ## Boot with `-kernel`
 
 For `kernel8.img`, the Raspberry Pi firmware does the following:
 
-1. It loads the image at `0x80000`, and a small stub of Arm code,
-   armstub8, at address 0. It writes the addresses of the kernel and of
-   the device tree into the stub.
+1. It loads the image at its address (see above), and a small stub of
+   Arm code, armstub8, at address 0. It writes the addresses of the
+   kernel and of the device tree into the stub.
 2. It starts all four cores at address 0, at EL3, in the stub.
 3. The stub sets up the registers that only EL3 can write, and moves
    each core to EL2 with D, A, I and F masked.
@@ -390,8 +614,8 @@ it is 256 bytes long and ends with its data:
 
 The magic number and the version overlap the spin table entry of
 core 3. After loading the stub, the board clears them, as armstub8's
-comments say the firmware does, and writes `0x80000` and 0 (no device
-tree yet) into the last two words.
+comments say the firmware does, and writes the addresses of the kernel
+and of the device tree (0 for none) into the last two words.
 
 At EL3, every core writes these System registers, in this order:
 
@@ -430,11 +654,21 @@ to quit.
 
 ## Differences from the real board
 
-- No device tree is passed yet: X0 is 0.
+- With `-kernel`, no device tree is passed: X0 is 0.
+- The firmware reads the card from its image, not through SDHOST, and
+  leaves SDHOST at its reset values: what the real firmware leaves there
+  is not documented.
+- SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
+  the DMA controller.
+- The firmware's device tree overlays and parameters (`dtoverlay`,
+  `dtparam`) are not applied, nor are the other settings of `config.txt`
+  that smirror does not list above; a warning names each. The firmware
+  also adds things of its own to the command line, which are not
+  documented, and smirror does not.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
-- Of the interrupt controller's sources, only the mini UART, the GPIO
-  and UART0 are modelled yet.
+- Of the interrupt controller's sources, only the mini UART, the GPIO,
+  UART0 and the mailboxes are modelled yet.
 - The cores have no performance monitors, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -443,8 +677,11 @@ to quit.
   1 µs before it was sent. smirror notices that the bus has gone quiet
   at the end of such a turn, so the AXI outstanding interrupt can come
   up to 1 µs late.
-- The GPU's share of the RAM, a firmware setting, is not modelled: all
-  of the RAM below the peripherals is free.
+- The firmware gives the Arm 948 MB, but nothing uses the GPU's 76 MB
+  above it: the Arm can use all of the RAM below the peripherals, as
+  on the real board, without the GPU changing it.
+- Turning a power domain on or off through the firmware changes
+  nothing yet.
 - The serial lines carry bytes, not bits: the GPIO sees no edges on
   GPIO 14 and 15 while bytes go, the mini UART's break is not sent, and
   UART0 sees an idle line, not a break, when its receive line is held
@@ -472,10 +709,10 @@ to quit.
 - The BCM2837 has one physical address space for Secure and Non-secure
   accesses, so the NS bit of a descriptor only changes what `PAR_EL1`
   reports and what `SCR_EL3.SIF` allows.
-- smirror sets up the mini UART as the firmware does with
-  `enable_uart=1`, whatever `config.txt` says, as it reads no
-  `config.txt` yet. A program that uses UART0 must give it GPIO 14 and
-  15 and set it up itself. The PL011 resets to a baud rate divisor of 0,
+- With `enable_uart=0`, the real core clock rises to 400 MHz under
+  load, which changes the mini UART's speed: smirror keeps it at
+  250 MHz, as when idle. A program that uses UART0 must set it up
+  itself; with `enable_uart=0` GPIO 14 and 15 are already UART0's. The PL011 resets to a baud rate divisor of 0,
   which is invalid, and to 5-bit characters: set `UARTIBRD` and
   `UARTFBRD` (26 and 3 for 115200 baud), then `UARTLCR_H` to 8 bits,
   before sending.
@@ -559,9 +796,91 @@ to quit.
   entries (D8.17, R_MMZTY), and `AArch64_S1Translate()` with the
   functions it calls (J1.2.4); `DC`, `IC`, `AT` and `TLBI` (C5.3 to
   C5.5), and `DCZID_EL0`.
+- Raspberry Pi firmware wiki:
+  [Mailboxes](https://github.com/raspberrypi/firmware/wiki/Mailboxes)
+  and
+  [Accessing mailboxes](https://github.com/raspberrypi/firmware/wiki/Accessing-mailboxes):
+  the mailbox registers, their depth and flags, the channels;
+  [Mailbox property interface](https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface):
+  the buffer, its tags and their values.
+- Linux,
+  [bcm2835-mailbox.c](https://github.com/torvalds/linux/blob/master/drivers/mailbox/bcm2835-mailbox.c):
+  bit 0 of the configuration register enables the interrupt;
+  [raspberrypi-firmware.h](https://github.com/torvalds/linux/blob/master/include/soc/bcm2835/raspberrypi-firmware.h):
+  the tags that the firmware knows;
+  [raspberrypi.c](https://github.com/torvalds/linux/blob/master/drivers/firmware/raspberrypi.c):
+  the firmware revision is the time it was built.
+- Raspberry Pi documentation,
+  [revision codes](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/raspberry-pi/revision-codes.adoc):
+  `a02082`, and serial numbers of 64 bits;
+  [gpu_mem](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/memory.adoc):
+  76 MB by default with 1 GB;
+  [overclocking options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/overclocking.adoc):
+  the default clock rates of the Raspberry Pi 3.
+- The [IEEE OUI registry](https://standards-oui.ieee.org/oui/oui.txt):
+  `B8-27-EB` is the Raspberry Pi Foundation's.
 - Raspberry Pi documentation, `kernel_address` in the
   [2021 version of the config.txt boot options](https://github.com/raspberrypi/documentation/blob/16480247dcac12d1f828c0f2556a3bc430de3c90/configuration/config-txt/boot.md):
-  64-bit kernels load at `0x80000`.
+  64-bit kernels load at `0x80000`; the
+  [current one](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/boot.adoc)
+  says `0x200000`, and
+  [raspberrypi/firmware issue #1415](https://github.com/raspberrypi/firmware/issues/1415)
+  gives the rule behind both: the header's `text_offset`, 2 MB higher
+  when it would overlap the stub; images without the header still load
+  at `0x80000`.
+- Raspberry Pi documentation, `config.txt`:
+  [the file and include](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/what_is_config_txt.adoc),
+  [conditional filters](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/conditional.adoc),
+  [boot options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/boot.adoc)
+  (`kernel`, `arm_64bit`, `initramfs`, `ramfsfile`, `auto_initramfs`,
+  `os_prefix`, `enable_uart`, `start_file`) and their
+  [legacy options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/boot.adoc)
+  (`start_x`, `start_debug`, `kernel_address`);
+  [the boot sequence of the BCM2837](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/raspberry-pi/bootflow-legacy.adoc);
+  and, in the 2024 page on device trees, `device_tree`,
+  `device_tree_address` and `device_tree_end`, and that the firmware
+  loads `bcm2710-rpi-3-b.dtb` or an upstream one.
+- [dt-blob.dts](https://github.com/raspberrypi/firmware/blob/master/extra/dt-blob.dts),
+  `pins_3b2`: the pins as the firmware sets them on the Pi 3 Model B
+  rev 1.2.
+- The Raspberry Pi device trees,
+  [bcm270x.dtsi](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/arch/arm/boot/dts/broadcom/bcm270x.dtsi),
+  [bcm2708-rpi.dtsi](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/arch/arm/boot/dts/broadcom/bcm2708-rpi.dtsi)
+  and
+  [bcm283x-rpi-smsc9514.dtsi](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/arch/arm/boot/dts/broadcom/bcm283x-rpi-smsc9514.dtsi):
+  the memory node that the firmware fills in, the command line it adds
+  to, and the Ethernet node that `ethernet0` names.
+- Linux,
+  [Documentation/arch/arm64/booting.rst](https://github.com/torvalds/linux/blob/master/Documentation/arch/arm64/booting.rst):
+  the header of an arm64 image.
+- The U-Boot mailing list,
+  [May 2018](https://lists.denx.de/pipermail/u-boot/2018-May/329386.html):
+  the device tree of a real Pi 3 at `0x2effb300`.
+- [SD Physical Layer Simplified Specification, version 9.10](https://www.sdcard.org/downloads/pls/),
+  SD Association: card identification (4.2), data transfer (4.3), the
+  switch function (4.3.10), CRC7 and its examples (4.5), the commands
+  (4.7.4) and the state transitions (4.8), the responses (4.9), the card
+  status and the SD status (4.10), the timings Ncr and Nac (4.12), and
+  the registers OCR, CID, CSD and SCR (chapter 5).
+- The SDHOST drivers:
+  [bcm2835-sdhost.c](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/drivers/mmc/host/bcm2835-sdhost.c)
+  of Raspberry Pi's Linux (registers, bits, the clock divider and its
+  comment, `SET_SDHOST_CLOCK`),
+  [bcm2835.c](https://github.com/torvalds/linux/blob/master/drivers/mmc/host/bcm2835.c)
+  of Linux and
+  [bcm2835_sdhost.c](https://github.com/u-boot/u-boot/blob/master/drivers/mmc/bcm2835_sdhost.c)
+  of U-Boot (the polling, the long responses in `SDRSP0` to `SDRSP3`);
+  the device tree
+  [bcm283x.dtsi](https://github.com/raspberrypi/linux/blob/rpi-6.6.y/arch/arm/boot/dts/broadcom/bcm283x.dtsi):
+  SDHOST at `0x7e202000`, GPU interrupt 56.
+- [Devicetree Specification v0.4](https://github.com/devicetree-org/devicetree-specification/releases/tag/v0.4),
+  chapter 5: the blob that smirror reads and writes.
+- [ECMA-107](https://ecma-international.org/publications-and-standards/standards/ecma-107/),
+  2nd edition: FAT12 and FAT16; Wikipedia,
+  [File Allocation Table](https://en.wikipedia.org/wiki/File_Allocation_Table):
+  FAT32, the type by the number of clusters, and long file names;
+  Wikipedia, [Master boot record](https://en.wikipedia.org/wiki/Master_boot_record):
+  the partition table.
 - Raspberry Pi documentation, `arm_freq` in
   [config.txt, Overclocking options](https://www.raspberrypi.com/documentation/computers/config_txt.html#overclocking-options):
   the Raspberry Pi 3 runs its cores at 1200 MHz.

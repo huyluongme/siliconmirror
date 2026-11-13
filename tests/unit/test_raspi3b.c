@@ -12,6 +12,8 @@
 #include <string.h>
 
 #include "backend/char/file.h"
+#include "block_mem.h"
+#include "core/event.h"
 #include "cpu/arm64/cpu.h"
 #include "cpu/arm64/sysreg.h"
 #include "machine/board.h"
@@ -140,7 +142,7 @@ static void test_board_list(void)
 	CHECK(board_list[1] == NULL);
 }
 
-static void test_kernel_is_required(void)
+static void test_nothing_to_boot(void)
 {
 	FILE *out = tmpfile();
 	BoardOptions options = {.serial = char_file_create(out, false)};
@@ -148,8 +150,8 @@ static void test_kernel_is_required(void)
 
 	/* The board frees the serial back end when it fails. */
 	CHECK(raspi3b_board.create(&options, error, sizeof(error)) == NULL);
-	CHECK(strcmp(error, "-kernel is required: booting from an SD card "
-	                    "image is not implemented yet") == 0);
+	CHECK(strcmp(error, "no SD card and no -kernel: the board has nothing "
+	                    "to boot from") == 0);
 	fclose(out);
 
 	options = (BoardOptions){.kernel = "no/such/kernel"};
@@ -486,6 +488,195 @@ static void test_gpu_interrupt_wiring(void)
 	remove(KERNEL);
 }
 
+/* Send the property buffer at 0x1000 through the mailboxes. */
+static void property_call(Machine *m, const uint32_t *words, size_t count)
+{
+	uint64_t now = m->events.now, value;
+
+	for (size_t i = 0; i < count; i++)
+		CHECK_EQ(bus_write(m->bus, 0x1000 + 4 * i, 4, words[i]), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_MBOX_BASE + 0x20, 4, 0xc0001008),
+	         BUS_OK);
+	event_queue_run_until(&m->events, now + 999);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_MBOX_BASE + 0x18, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x40000000); /* mailbox 0 is still empty */
+	event_queue_run_until(&m->events, now + 1000);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_MBOX_BASE + 0x18, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+}
+
+/*
+ * The firmware answers through the mailboxes, after 1 us; their
+ * interrupt is ARM interrupt 1 of the interrupt controller. A reset of
+ * the board starts the firmware again.
+ */
+static void test_mailbox(void)
+{
+	uint32_t buf[] = {
+		sizeof(uint32_t[17]),
+		0,
+		0x00010005,
+		8,
+		0,
+		0,
+		0, /* ARM memory */
+		0x00030002,
+		8,
+		0,
+		4,
+		0, /* the core clock */
+		0x00038002,
+		12,
+		0,
+		5,
+		300000000,
+		0,
+		0, /* V3D to 300 MHz */
+	};
+	uint32_t get_v3d[] = {sizeof(uint32_t[8]), 0, 0x00030002, 8, 0, 5, 0, 0};
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t value;
+
+	buf[0] = sizeof(buf);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x18, 4, 1u << 1), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_MBOX_BASE + 0x1c, 4, 1), BUS_OK);
+	property_call(m, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x00, 4, &value), BUS_OK);
+	CHECK_EQ(value & 0xff, 1u << 1);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_LOCAL_BASE + 0x60, 4, &value), BUS_OK);
+	CHECK_EQ(value, 1u << 8); /* the GPU interrupt of core 0 */
+	CHECK_EQ(bus_read(m->bus, RASPI3B_MBOX_BASE + 0x00, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0xc0001008);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x00, 4, &value), BUS_OK);
+	CHECK_EQ(value & 0xff, 0);
+
+	CHECK_EQ(bus_read(m->bus, 0x1004, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x80000000);
+	CHECK_EQ(bus_read(m->bus, 0x1018, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x3b400000);
+	/* As with enable_uart=1, which sets up the console. */
+	CHECK_EQ(bus_read(m->bus, 0x102c, 4, &value), BUS_OK);
+	CHECK_EQ(value, 250000000);
+	CHECK_EQ(bus_read(m->bus, 0x1040, 4, &value), BUS_OK);
+	CHECK_EQ(value, 300000000);
+
+	/* A reset empties the mailboxes and sets the clocks back. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_MBOX_BASE + 0x20, 4, 0xc0001008),
+	         BUS_OK);
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_MBOX_BASE + 0x1c, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	property_call(m, get_v3d, ARRAY_SIZE(get_v3d));
+	CHECK_EQ(bus_read(m->bus, 0x1018, 4, &value), BUS_OK);
+	CHECK_EQ(value, 400000000);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/* A command to SDHOST, waited for; returns SDCMD. */
+static uint32_t sdhost_command(Machine *m, uint32_t cmd, uint32_t arg)
+{
+	uint64_t value = 0;
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x04, 4, arg), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE, 4, cmd | 0x8000), BUS_OK);
+	for (int i = 0; i < 10000; i++) {
+		CHECK_EQ(bus_read(m->bus, RASPI3B_SDHOST_BASE, 4, &value), BUS_OK);
+		if (!(value & 0x8000))
+			break;
+		event_queue_run_until(&m->events, m->events.now + 10000);
+	}
+	return (uint32_t)value;
+}
+
+/*
+ * The SD card: SDHOST at 0x3f202000 reaches it through GPIO 48 to 53,
+ * which the firmware gives ALT0; its interrupt is GPU interrupt 56.
+ */
+static void test_sd_card(void)
+{
+	BlockMem card;
+	char error[256];
+	uint64_t value;
+
+	write_kernel(park, ARRAY_SIZE(park));
+	block_mem_init(&card, 1024 * 1024);
+	BoardOptions options = {.kernel = KERNEL, .sd = &card.dev};
+	Machine *m = raspi3b_board.create(&options, error, sizeof(error));
+
+	CHECK(m != NULL);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_SDHOST_BASE + 0x0c, 4, &value), BUS_OK);
+	CHECK_EQ(value, 507);
+	/* SDHOST runs from the core clock, 250 MHz with enable_uart=1. */
+	CHECK_EQ(RASPI3B_CORE_CLOCK_HZ, 250000000);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x30, 4, 1), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x38, 4, 0x408), BUS_OK);
+	CHECK_EQ(sdhost_command(m, 0x400 | 0, 0), 0x400);
+	CHECK_EQ(sdhost_command(m, 8, 0x1aa), 8);
+	/* GPIO 50, DAT0, taken away: the card is out of reach. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 0x14, 4, 0x920), BUS_OK);
+	CHECK_EQ(sdhost_command(m, 8, 0x1aa), 0x4000 | 8);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x20, 4, 0x7f8), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_GPIO_BASE + 0x14, 4, 0x924), BUS_OK);
+	CHECK_EQ(sdhost_command(m, 8, 0x1aa), 8);
+	/* Each of GPIO 48 to 53 taken away, then given back. */
+	for (unsigned pin = 48; pin <= 53; pin++) {
+		uint64_t reg = RASPI3B_GPIO_BASE + 4 * (pin / 10), fsel;
+		unsigned shift = 3 * (pin % 10);
+
+		CHECK_EQ(bus_read(m->bus, reg, 4, &fsel), BUS_OK);
+		CHECK_EQ((fsel >> shift) & 7, 4); /* ALT0 */
+		CHECK_EQ(bus_write(m->bus, reg, 4, fsel & ~(7ull << shift)), BUS_OK);
+		CHECK_EQ(sdhost_command(m, 8, 0x1aa), 0x4000 | 8);
+		CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x20, 4, 0x7f8),
+		         BUS_OK);
+		CHECK_EQ(bus_write(m->bus, reg, 4, fsel), BUS_OK);
+		CHECK_EQ(sdhost_command(m, 8, 0x1aa), 8);
+	}
+	/* Identify the card; CMD7's busy raises GPU interrupt 56. */
+	for (int i = 0; i < 10; i++) {
+		sdhost_command(m, 55, 0);
+		sdhost_command(m, 41, 0x40ff8000);
+		CHECK_EQ(bus_read(m->bus, RASPI3B_SDHOST_BASE + 0x10, 4, &value),
+		         BUS_OK);
+		if (value & (1u << 31))
+			break;
+		event_queue_run_until(&m->events, m->events.now + 500000);
+	}
+	CHECK(value & (1u << 31));
+	sdhost_command(m, 0x200 | 2, 0);
+	sdhost_command(m, 3, 0);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x14, 4, 1u << 24), BUS_OK);
+	CHECK_EQ(sdhost_command(m, 0x800 | 7, 0xaaaa0000), 0x800 | 7);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &value), BUS_OK);
+	CHECK_EQ(value, 1u << 24);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x20, 4, 0x400), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(sdhost_command(m, 13, 0xaaaa0000), 13);
+
+	/* A reset puts the card in the idle state: it no longer answers. */
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_SDHOST_BASE + 0x38, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0); /* SDHOST is reset too */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_SDHOST_BASE + 0x30, 4, 1), BUS_OK);
+	CHECK_EQ(sdhost_command(m, 13, 0xaaaa0000), 0x4000 | 13);
+	CHECK_EQ(sdhost_command(m, 8, 0x1aa), 8);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+
+	/* An image that is not a card's size. */
+	card.dev.size = 1024 * 1024 + 512;
+	options = (BoardOptions){.kernel = KERNEL, .sd = &card.dev};
+	CHECK(raspi3b_board.create(&options, error, sizeof(error)) == NULL);
+	CHECK(strstr(error, "an SD card holds a multiple of 512 KB") != NULL);
+	block_mem_free(&card);
+	remove(KERNEL);
+}
+
 /*
  * UART0 runs from a 48 MHz UARTCLK: at 115200 baud, a byte takes 86823 ns.
  * GPIO 14 and 15 must carry its signals, ALT0, for the cable to get it.
@@ -605,12 +796,14 @@ static void test_reset_runs_the_stub_again(void)
 int main(void)
 {
 	RUN_TEST(test_board_list);
-	RUN_TEST(test_kernel_is_required);
+	RUN_TEST(test_nothing_to_boot);
 	RUN_TEST(test_state_before_the_stub);
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
 	RUN_TEST(test_interrupt_wiring);
 	RUN_TEST(test_gpu_interrupt_wiring);
+	RUN_TEST(test_mailbox);
+	RUN_TEST(test_sd_card);
 	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_secondary_cores);

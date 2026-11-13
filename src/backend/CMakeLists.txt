@@ -3,6 +3,7 @@
 
 # Host resources used by devices. See docs/architecture.md.
 add_library(backend STATIC
+	block/file.c
 	char/file.c
 	char/stdio.c)
 

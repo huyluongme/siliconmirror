@@ -1,0 +1,7 @@
+# The card of baremetal.sd-boot-fat16: files with long names, in
+# directories.
+arm_64bit=1
+enable_uart=1
+kernel=images/sd-boot-kernel.bin
+device_tree=dtbs/raspberry-pi-3.dtb
+cmdline=command-line.txt
