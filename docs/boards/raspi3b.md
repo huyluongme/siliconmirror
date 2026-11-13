@@ -76,6 +76,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
+| `0x3f100000` | 276 B   | Power manager: power domains, reset lines, watchdog      | The watchdog               |
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
@@ -603,6 +604,34 @@ detection, the checksum offload engines, pause frames on demand, and
 the PHY's loopback and collision test. The GPIO pins are inputs that
 read 1 and never interrupt. The bulk IN delay is not waited.
 
+## The watchdog
+
+The power manager at `0x3f100000` holds the power domains, some reset
+lines and a watchdog (its devicetree binding, `brcm,bcm2835-pm`).
+Broadcom does not document it; smirror follows how Linux's and U-Boot's
+drivers use its three watchdog registers:
+
+- Every write carries the password `0x5a` in bits 31:24; a write
+  without it does nothing.
+- `WDOG` (`0x24`) holds the count, 20 bits of ticks at 65536 a second
+  (Linux and U-Boot turn a second into `x << 16` ticks, at most
+  `0xfffff`, just under 16 s). It runs down while the `WRCFG` field of
+  `RSTC` (`0x1c`, bits 5:4) is `0b10`, a full reset; reading it gives the
+  ticks left. When it reaches 0 the whole board resets: every device,
+  the cores, and the firmware, which boots again.
+- `RSTS` (`0x20`) survives that reset. The firmware reads there, in bits
+  0, 2, 4, 6, 8 and 10, the partition to boot from (Linux's
+  `bcm2835_wdt.c`). 0 is the usual boot; 63 asks it not to boot, which is
+  how Linux powers the board off: smirror then stops, as `shutdown`.
+  Another partition is not emulated and stops the machine.
+
+U-Boot's `reset` writes 10 ticks and a full reset: the board boots again
+about 153 µs later. What `RSTC` and `RSTS` hold at power on, and the
+other bits of `RSTS` after a reset, are not documented: smirror starts
+them at 0 and sets nothing in `RSTS`. The power domains and reset lines,
+and the other kinds of watchdog reset (`WRCFG` `0b01` and `0b11`), stop
+the machine.
+
 ## Boot from the SD card
 
 On the real board, the VideoCore boots first: its boot ROM loads
@@ -764,6 +793,9 @@ to quit.
 - The firmware reads the card from its image, not through SDHOST, and
   leaves SDHOST at its reset values: what the real firmware leaves there
   is not documented.
+- After a watchdog reset the firmware boots again at once: the time the
+  real bootcode.bin and start.elf take is not modelled, as at power on.
+  Only partition 0 boots; 63 halts.
 - SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
   the DMA controller.
 - The WiFi chip behind the EMMC controller is not modelled. Full- and
@@ -845,6 +877,18 @@ to quit.
   Microchip DS00002306A: the hub's configuration without an EEPROM
   (Tables 3-3 to 3-5), the Ethernet controller's defaults (Table
   3-11), the EEPROM pins (Table 2-1) and timing (Table 4-8).
+- The power manager's watchdog: Linux's
+  [bcm2835_wdt.c](https://github.com/torvalds/linux/blob/master/drivers/watchdog/bcm2835_wdt.c)
+  (registers, password, ticks, the partition in `RSTS` and 63 for a
+  halt), U-Boot's
+  [bcm2835_wdt.c](https://github.com/u-boot/u-boot/blob/master/drivers/watchdog/bcm2835_wdt.c)
+  and
+  [reset.c](https://github.com/u-boot/u-boot/blob/master/arch/arm/mach-bcm283x/reset.c),
+  and the devicetree binding
+  [brcm,bcm2835-pm.yaml](https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/soc/bcm/brcm%2Cbcm2835-pm.yaml)
+  with the node in
+  [bcm2835-common.dtsi](https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2835-common.dtsi)
+  (`0x7e100000`, 0x114 bytes).
 - [LAN950x datasheet](https://www.microchip.com/content/dam/mchp/documents/UNG/ProductDocuments/DataSheets/LAN950x-Data-Sheet-DS00001875D.pdf),
   Microchip DS00001875D: the Ethernet controller's endpoints,
   descriptors and vendor commands (5.3), its FIFOs and frame formats

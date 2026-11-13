@@ -65,6 +65,7 @@ bool machine_add_device(Machine *m, void *ctx, void (*reset)(void *ctx),
 
 void machine_reset(Machine *m)
 {
+	m->reset_pending = false;
 	for (unsigned i = 0; i < m->num_devices; i++) {
 		MachineDevice *dev = &m->devices[i];
 
@@ -73,6 +74,11 @@ void machine_reset(Machine *m)
 	}
 	for (unsigned i = 0; i < m->num_cpus; i++)
 		m->cpus[i]->ops->reset(m->cpus[i]);
+}
+
+void machine_request_reset(Machine *m)
+{
+	m->reset_pending = true;
 }
 
 void machine_stop(Machine *m, MachineStop reason, const char *fmt, ...)
@@ -237,6 +243,8 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 			break;
 
 		event_queue_run_until(&m->events, end);
+		if (m->reset_pending)
+			machine_reset(m);
 		poll_inputs(m);
 		if (m->insns >= limit)
 			machine_stop(m, MACHINE_STOP_LIMIT,

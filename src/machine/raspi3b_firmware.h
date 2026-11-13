@@ -28,12 +28,14 @@
 #include "core/block.h"
 #include "core/machine.h"
 #include "hw/gpio/bcm2835_gpio.h"
+#include "hw/misc/bcm2835_pm.h"
 #include "machine/raspi3b_property.h"
 
 typedef struct Raspi3bFirmwareConfig {
 	Machine *machine;
 	Bcm2835Gpio *gpio;
 	Raspi3bProperty *property;
+	Bcm2835Pm *pm;      /* its RSTS gives the partition, or NULL for 0 */
 	const char *kernel; /* -kernel: an image on the host, or NULL */
 	BlockDevice *card;  /* the SD card, or NULL */
 

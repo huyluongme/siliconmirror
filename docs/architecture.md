@@ -35,7 +35,7 @@ src/
     sd/               SD host controllers and SD cards
     usb/              USB: host controllers (dwc2), devices, hubs
     net/              Ethernet controllers (lan95xx, on USB)
-    misc/             Everything else (bcm2835_mbox)
+    misc/             Everything else (bcm2835_mbox, bcm2835_pm)
   backend/            Host resources used by devices
     char/             Character streams: stdio, file, socket
     block/            Block storage: raw image files

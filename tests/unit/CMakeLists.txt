@@ -81,6 +81,10 @@ add_executable(test_bcm2835_mbox test_bcm2835_mbox.c)
 target_link_libraries(test_bcm2835_mbox PRIVATE hw)
 add_test(NAME unit.bcm2835_mbox COMMAND test_bcm2835_mbox)
 
+add_executable(test_bcm2835_pm test_bcm2835_pm.c)
+target_link_libraries(test_bcm2835_pm PRIVATE hw)
+add_test(NAME unit.bcm2835_pm COMMAND test_bcm2835_pm)
+
 add_executable(test_sd_card test_sd_card.c)
 target_link_libraries(test_sd_card PRIVATE hw)
 add_test(NAME unit.sd_card COMMAND test_sd_card)

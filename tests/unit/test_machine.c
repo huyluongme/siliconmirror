@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/event.h"
 #include "core/machine.h"
 #include "test.h"
 #include "util/macros.h"
@@ -554,6 +555,43 @@ static void test_devices(void)
 	CHECK(strcmp(device_log, "ba") == 0);
 }
 
+/* An event that asks for a reset, as a watchdog does. */
+static void request_reset(void *ctx)
+{
+	machine_request_reset(ctx);
+}
+
+/* The reset happens at the end of the turn, then the machine goes on. */
+static void test_reset_request(void)
+{
+	static const char letter = 'r';
+	Machine *m = machine_create();
+	FakeCpu *cpu = add_fake_cpu(m, UINT64_MAX);
+	Event ev;
+
+	CHECK(machine_add_device(m, (void *)&letter, log_letter, NULL));
+	device_log[0] = '\0';
+	machine_request_reset(m);
+	CHECK(m->reset_pending);
+	CHECK_EQ(device_log[0], '\0'); /* not yet */
+	machine_reset(m);
+	CHECK(!m->reset_pending);
+	CHECK(strcmp(device_log, "r") == 0);
+
+	device_log[0] = '\0';
+	event_init(&ev, request_reset, m);
+	event_schedule(&m->events, &ev, 5000);
+	CHECK_EQ(machine_run(m, 4000), MACHINE_STOP_LIMIT);
+	CHECK_EQ(device_log[0], '\0');
+	CHECK_EQ(cpu->resets, 1);
+	CHECK_EQ(machine_run(m, 4000), MACHINE_STOP_LIMIT);
+	CHECK(strcmp(device_log, "r") == 0);
+	CHECK_EQ(cpu->resets, 2);
+	CHECK(!m->reset_pending);
+	CHECK_EQ(m->events.now, 8000); /* time goes on through a reset */
+	machine_destroy(m);
+}
+
 static void test_device_limit(void)
 {
 	Machine *m = machine_create();
@@ -591,6 +629,7 @@ int main(void)
 	RUN_TEST(test_first_stop_reason_wins);
 	RUN_TEST(test_reset_and_cpu_limit);
 	RUN_TEST(test_devices);
+	RUN_TEST(test_reset_request);
 	RUN_TEST(test_now_in_a_turn);
 	RUN_TEST(test_idle_listener);
 	RUN_TEST(test_idle_listener_schedules);

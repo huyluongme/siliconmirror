@@ -24,6 +24,7 @@
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_mbox.h"
+#include "hw/misc/bcm2835_pm.h"
 #include "hw/net/lan95xx.h"
 #include "hw/sd/bcm2835_emmc.h"
 #include "hw/sd/bcm2835_sdhost.h"
@@ -176,6 +177,16 @@ static void reset_mbox(void *ctx)
 static void destroy_mbox(void *ctx)
 {
 	bcm2835_mbox_destroy(ctx);
+}
+
+static void reset_pm(void *ctx)
+{
+	bcm2835_pm_reset(ctx);
+}
+
+static void destroy_pm(void *ctx)
+{
+	bcm2835_pm_destroy(ctx);
 }
 
 static void reset_gpio(void *ctx)
@@ -381,6 +392,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Aux *aux;
 	Raspi3bProperty *property;
 	Bcm2835Mbox *mbox;
+	Bcm2835Pm *pm;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Emmc *emmc;
@@ -484,6 +496,19 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	status = bcm2835_mbox_map(mbox, m->bus, "mbox", RASPI3B_MBOX_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map the mailboxes: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	pm = bcm2835_pm_create(m);
+	if (pm == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, pm, reset_pm, destroy_pm)) {
+		bcm2835_pm_destroy(pm);
+		goto out_of_memory;
+	}
+	status = bcm2835_pm_map(pm, m->bus, "pm", RASPI3B_PM_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the watchdog: %s",
 		         bus_status_str(status));
 		goto fail;
 	}
@@ -625,6 +650,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		.machine = m,
 		.gpio = gpio,
 		.property = property,
+		.pm = pm,
 		.kernel = options->kernel,
 		.card = options->sd,
 		.warn = options->warn,

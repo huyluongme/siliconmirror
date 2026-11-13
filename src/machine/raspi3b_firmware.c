@@ -822,7 +822,26 @@ bool raspi3b_firmware_boot(const Raspi3bFirmwareConfig *config, char *error,
 	uint64_t enable_uart = 1, kernel = 0;
 	uint32_t dtb = 0;
 	const char *kernel_file = NULL;
+	unsigned partition;
 	bool ok;
+
+	/*
+	 * bootcode.bin reads the partition in the watchdog's RSTS first: 63
+	 * asks it not to boot, which is how the board powers off (Linux's
+	 * bcm2835_wdt.c).
+	 */
+	partition = config->pm != NULL ? bcm2835_pm_partition(config->pm) : 0;
+	if (partition == BCM2835_PM_HALT_PARTITION) {
+		machine_stop(config->machine, MACHINE_STOP_SHUTDOWN,
+		             "the board halted: RSTS gives the firmware partition "
+		             "63, which it does not boot");
+		return true;
+	}
+	if (partition != 0)
+		return fail(&b,
+		            "booting from partition %u, which RSTS asks for, "
+		            "is not emulated",
+		            partition);
 
 	/* With -kernel, the firmware boots as with enable_uart=1 alone. */
 	ok = config->kernel != NULL || open_card(&b);

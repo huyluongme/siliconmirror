@@ -989,6 +989,26 @@ static void test_reset(void)
 	run_kernel(m, &x0, &where);
 	CHECK_EQ(where, 0x80000);
 
+	/* RSTS gives partition 63: the firmware halts the board. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x20, 4, 0x5a000555), BUS_OK);
+	m->stop = MACHINE_STOP_NONE;
+	machine_reset(m);
+	CHECK_EQ(m->stop, MACHINE_STOP_SHUTDOWN);
+	CHECK(strstr(m->stop_message, "the board halted") != NULL);
+	/* Another partition than 0 is not emulated. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x20, 4, 0x5a000001), BUS_OK);
+	m->stop = MACHINE_STOP_NONE;
+	machine_reset(m);
+	CHECK_EQ(m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(m->stop_message, "partition 1, which RSTS asks for") != NULL);
+	/* Partition 0 again: the board boots. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x20, 4, 0x5a0002aa), BUS_OK);
+	m->stop = MACHINE_STOP_NONE;
+	machine_reset(m);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	run_kernel(m, &x0, &where);
+	CHECK_EQ(where, 0x80000);
+
 	/* bootcode.bin is gone: the board stops at the reset. */
 	v = fat_open(&c.fs.m.dev, BASE, (uint64_t)c.fs.total * SECTOR, error,
 	             sizeof(error));

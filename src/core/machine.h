@@ -92,7 +92,8 @@ struct Machine {
 	uint64_t insns; /* instructions run so far, by all CPUs */
 	MachineStop stop;
 	char stop_message[256];
-	bool idle; /* no CPU runs, as last told to the idle listener */
+	bool reset_pending; /* machine_request_reset(), done between turns */
+	bool idle;          /* no CPU runs, as last told to the idle listener */
 	MachineIdleListener idle_listener;
 	void *idle_ctx;
 	MachineInput inputs[MACHINE_MAX_INPUTS];
@@ -142,6 +143,12 @@ void machine_remove_input(Machine *m, void *ctx);
 
 /* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);
+
+/*
+ * Ask for machine_reset(), as a board's reset line does: the main loop
+ * carries it out at the end of the turn, after the turn's events.
+ */
+void machine_request_reset(Machine *m);
 
 /*
  * Run until the machine stops, and return why. max_insns limits how many
