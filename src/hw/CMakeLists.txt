@@ -9,6 +9,7 @@ add_library(hw STATIC
 	intc/bcm2835_ic.c
 	intc/bcm2836_local.c
 	misc/bcm2835_mbox.c
+	net/lan95xx.c
 	sd/bcm2835_emmc.c
 	sd/bcm2835_sdhost.c
 	sd/sd_card.c

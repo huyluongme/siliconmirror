@@ -97,7 +97,14 @@ static inline void store_le(void *ptr, unsigned size, uint64_t value)
 	}
 }
 
-/* Big-endian, as in devicetree blobs. */
+/* Big-endian, as in devicetree blobs and network headers. */
+static inline uint16_t load_be16(const void *ptr)
+{
+	const uint8_t *p = ptr;
+
+	return (uint16_t)(p[0] << 8 | p[1]);
+}
+
 static inline uint32_t load_be32(const void *ptr)
 {
 	const uint8_t *p = ptr;

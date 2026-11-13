@@ -26,6 +26,8 @@ static const uint8_t config_desc[25] = {
 /* The device of the tests: endpoint 1 IN gives "ok"; a vendor request. */
 static unsigned configured_with = 99;
 static uint8_t vendor_out[4];
+static bool fake_is_busy;
+static uint8_t vendor_in = 0x11;
 
 static bool fake_request(UsbDevice *d, const UsbSetup *s, uint8_t *data,
                          size_t *len)
@@ -35,6 +37,7 @@ static bool fake_request(UsbDevice *d, const UsbSetup *s, uint8_t *data,
 		return false;
 	if (s->b_request == 0xa1 && (s->bm_request_type & USB_DIR_IN)) {
 		memcpy(data, "\x11\x22\x33\x44", 4);
+		data[0] = vendor_in;
 		*len = 4;
 		return true;
 	}
@@ -63,6 +66,12 @@ static void fake_configured(UsbDevice *d, unsigned config)
 	configured_with = config;
 }
 
+static bool fake_busy(UsbDevice *d)
+{
+	(void)d;
+	return fake_is_busy;
+}
+
 static const UsbDeviceClass fake = {
 	.device = device_desc,
 	.config = config_desc,
@@ -70,6 +79,7 @@ static const UsbDeviceClass fake = {
 	.request = fake_request,
 	.in = fake_in,
 	.configured = fake_configured,
+	.busy = fake_busy,
 };
 
 /* A control transfer: SETUP, the data stage, the status stage. */
@@ -177,6 +187,8 @@ static void test_status_and_features(void)
 	CHECK(got == 2 && buf[0] == 1 && buf[1] == 0); /* self-powered */
 	CHECK_EQ(control(&d, 0x81, 0, 0, 0, 2, buf, &got), USB_STALL);
 	CHECK_EQ(control(&d, 0x80, 6, 0x0600, 0, 10, buf, &got), USB_STALL);
+	/* No remote wakeup in this configuration's attributes. */
+	CHECK_EQ(control(&d, 0x00, 3, 1, 0, 0, NULL, &got), USB_STALL);
 	CHECK_EQ(control(&d, 0, 9, 3, 0, 0, NULL, &got), USB_ACK);
 	CHECK_EQ(control(&d, 0x81, 0, 0, 0, 2, buf, &got), USB_ACK);
 	CHECK_EQ(control(&d, 0x81, 0, 0, 1, 2, buf, &got), USB_STALL);
@@ -233,10 +245,36 @@ static void test_vendor_requests(void)
 	CHECK_EQ(control(&d, 0xc0, 0xa1, 0, 0x100, 4, buf, &got), USB_ACK);
 }
 
+/* A busy device NAKs all but SETUP; IN data is what it has then. */
+static void test_busy(void)
+{
+	UsbDevice d;
+	uint8_t buf[8];
+	uint8_t read[8] = {0xc0, 0xa1, 0, 0, 0, 1, 4, 0};
+	size_t len;
+
+	usb_device_init(&d, &fake, NULL, USB_SPEED_HIGH);
+	fake_is_busy = true;
+	CHECK_EQ(usb_device_setup(&d, read), USB_ACK);
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_NAK);
+	CHECK_EQ(usb_device_out(&d, 0, NULL, 0), USB_NAK);
+	vendor_in = 0x55;
+	fake_is_busy = false;
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_ACK);
+	CHECK(len == 4 && buf[0] == 0x55);
+	CHECK_EQ(usb_device_out(&d, 0, NULL, 0), USB_ACK);
+	vendor_in = 0x11;
+	/* A request that stalls does so at the data stage. */
+	read[1] = 0xa5;
+	CHECK_EQ(usb_device_setup(&d, read), USB_ACK);
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+}
+
 int main(void)
 {
 	RUN_TEST(test_enumeration);
 	RUN_TEST(test_status_and_features);
 	RUN_TEST(test_vendor_requests);
+	RUN_TEST(test_busy);
 	return test_summary();
 }

@@ -9,11 +9,12 @@
  * The device framework of chapter 9 is common to every device: the
  * states (Default, Address, Configured, 9.1), the three stages of a
  * control transfer on endpoint 0 (8.5.3), and the standard requests
- * (9.4): GET_STATUS, CLEAR_FEATURE, SET_FEATURE (ENDPOINT_HALT),
- * SET_ADDRESS, GET_DESCRIPTOR (device, configuration, device qualifier),
- * GET_CONFIGURATION, SET_CONFIGURATION, GET_INTERFACE, SET_INTERFACE.
- * A device brings its descriptors and its class or vendor requests; a
- * request that neither knows gets a STALL, as 9.2.7 asks.
+ * (9.4): GET_STATUS, CLEAR_FEATURE, SET_FEATURE (ENDPOINT_HALT, and
+ * DEVICE_REMOTE_WAKEUP when the configuration has it), SET_ADDRESS,
+ * GET_DESCRIPTOR (device, configuration, device qualifier), GET_CONFIGURATION,
+ * SET_CONFIGURATION, GET_INTERFACE, SET_INTERFACE. A device brings its
+ * descriptors and its class or vendor requests; a request that neither knows
+ * gets a STALL, as 9.2.7 asks.
  */
 
 #ifndef HW_USB_USB_H
@@ -79,6 +80,8 @@ typedef struct UsbDeviceClass {
 	/* A bus reset, or the configuration that SET_CONFIGURATION chose. */
 	void (*reset)(UsbDevice *d);
 	void (*configured)(UsbDevice *d, unsigned config);
+	/* True while the device NAKs every transaction but SETUP. */
+	bool (*busy)(UsbDevice *d);
 } UsbDeviceClass;
 
 typedef enum UsbControlStage {
@@ -98,6 +101,7 @@ struct UsbDevice {
 	uint8_t address;
 	uint8_t config;                /* 0: not configured */
 	uint8_t alternate;             /* of interface 0 */
+	bool remote_wakeup;            /* DEVICE_REMOTE_WAKEUP (9.4.5) */
 	bool halted[USB_ENDPOINTS][2]; /* [ep][1 for IN] */
 
 	/* The control transfer in progress on endpoint 0. */
@@ -105,6 +109,7 @@ struct UsbDevice {
 	UsbSetup setup;
 	uint8_t data[USB_CONTROL_MAX];
 	size_t len, pos;
+	bool pending;    /* an IN request, carried out at its first IN */
 	int new_address; /* SET_ADDRESS, after its status stage; or -1 */
 };
 

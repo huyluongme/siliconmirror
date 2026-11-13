@@ -555,8 +555,53 @@ hub, as its datasheet sets it up without an EEPROM, as on the board:
 vendor `0x0424`, product `0x9514`, 5 ports with port 1 not removable,
 self-powered, a compound device with a transaction translator a port.
 Its device release depends on the chip's revision; smirror says 2.00.
-Port 1, the LAN9514's Ethernet controller, is empty yet, and the other
-four ports have nothing attached.
+The other four ports have nothing attached.
+
+## Ethernet
+
+On the hub's port 1 is the LAN9514's Ethernet controller, a USB device
+with a 10/100 MAC and PHY, which Linux and U-Boot drive with
+`smsc95xx`. Microchip documents its core in the LAN950x datasheet;
+smirror follows it, without the LAN9500A's additions:
+
+- USB: vendor `0x0424`, product `0xec00`, self-powered with remote
+  wakeup, 2 mA (the LAN9514's defaults without an EEPROM); endpoint 1
+  bulk IN, 2 bulk OUT, 3 interrupt IN every 4 ms; no strings. The device
+  release, 2.00, and the device protocol, 1, are those a LAN9512 board's
+  `lsusb` shows (the same core); `ID_REV` holds chip ID `0xec00` (Linux's
+  `ID_REV_CHIP_ID_9512_`) and revision 0, which is unknown.
+- The vendor commands that read and write a register or give the
+  statistics; the system and MAC registers; the PHY's through
+  `MII_ACCESS`, identity `0x0007c0c3` (the LAN9500's).
+- The resets: a USB reset or a lite reset puts every register back, and
+  the PHY powers down after a USB reset; the PHY's reset through
+  `PMT_CTL` takes 2 ms, while every transfer gets a NAK, and its soft
+  reset 256 µs.
+- No EEPROM, as on the board: the MAC address registers hold
+  `FF:FF:FF:FF:FF:FF` and the firmware's MAC address comes through the
+  device tree or U-Boot's `usbethaddr`. The EEPROM's data pin has a
+  pull-down, so a read gives 0 after its 20 clocks of 1.12 µs and a
+  write times out after 30 ms.
+- Transmit: the TX commands A and B, frames split into buffers, padding
+  to 64 bytes and the FCS, and the errors that stall bulk OUT; an 8 KB
+  FIFO that NAKs when less than 512 bytes are free.
+- Receive: address filtering (perfect, hash, inverse, multicast,
+  promiscuous), the RX status word, errors, VLAN tags, pad stripping; a
+  20 KB FIFO; one frame a bulk IN burst or several (MEF), the burst cap,
+  a ZLP or a NAK when empty; the interrupt endpoint and the MAC's
+  loopback.
+
+No cable is plugged in, as nothing on the host carries the frames yet:
+the link stays down, and U-Boot's `dhcp` says `Waiting for Ethernet
+connection... unable to connect.` as a board without a cable does. The
+model has a cable for its tests: a partner that negotiates 10 or 100
+Mb/s, half or full duplex, with the link up 2 s after a reset (our
+choice), and frames that cross it at once. Not modelled, and the machine
+stops when software uses them: the soft reset `SRST` (a USB disconnect),
+the data port, the debug registers, wake-up frames and wake-up
+detection, the checksum offload engines, pause frames on demand, and
+the PHY's loopback and collision test. The GPIO pins are inputs that
+read 1 and never interrupt. The bulk IN delay is not waited.
 
 ## Boot from the SD card
 
@@ -721,10 +766,11 @@ to quit.
   is not documented.
 - SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
   the DMA controller.
-- The WiFi chip behind the EMMC controller is not modelled, and the
-  LAN9514's Ethernet controller is not attached to its hub yet: U-Boot
-  finds the hub but no Ethernet. Full- and low-speed devices, which need
-  the hub's transaction translators, cannot be attached yet.
+- The WiFi chip behind the EMMC controller is not modelled. Full- and
+  low-speed devices, which need the hub's transaction translators,
+  cannot be attached yet.
+- The Ethernet has no cable: nothing on the host carries its frames yet.
+  Its checksum offload engines, which Linux turns on, stop the machine.
 - The firmware's device tree overlays and parameters (`dtoverlay`,
   `dtparam`) are not applied, nor are the other settings of `config.txt`
   that smirror does not list above; a warning names each. The firmware
@@ -797,8 +843,18 @@ to quit.
   reset times (7.1.7.5) and the hub (chapter 11).
 - [LAN9514/LAN9514i datasheet](https://www.microchip.com/en-us/product/lan9514),
   Microchip DS00002306A: the hub's configuration without an EEPROM
-  (Tables 3-3 to 3-5) and the Ethernet controller's defaults (Table
-  3-11).
+  (Tables 3-3 to 3-5), the Ethernet controller's defaults (Table
+  3-11), the EEPROM pins (Table 2-1) and timing (Table 4-8).
+- [LAN950x datasheet](https://www.microchip.com/content/dam/mchp/documents/UNG/ProductDocuments/DataSheets/LAN950x-Data-Sheet-DS00001875D.pdf),
+  Microchip DS00001875D: the Ethernet controller's endpoints,
+  descriptors and vendor commands (5.3), its FIFOs and frame formats
+  (5.4), address filtering and VLAN tags (5.5), the EEPROM controller
+  (5.7), the resets (5.13), and its registers and the PHY's (chapter 7).
+- A LAN9512 board's `lsusb -v`
+  ([a Volumio forum post](https://community.volumio.com/uploads/short-url/lOB1cc2lCcK5LTQ7RxJU6oPWK5l.txt)):
+  the Ethernet controller's device release and protocol. Linux's
+  [smsc95xx.h](https://github.com/torvalds/linux/blob/master/drivers/net/usb/smsc95xx.h):
+  its chip ID, `ID_REV_CHIP_ID_9512_`.
 - USB: Linux's
   [drivers/usb/dwc2](https://github.com/torvalds/linux/tree/master/drivers/usb/dwc2)
   (`hw.h`, `core.c`, `hcd.c`) and U-Boot's

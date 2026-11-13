@@ -101,6 +101,10 @@ add_executable(test_usb_hub test_usb_hub.c)
 target_link_libraries(test_usb_hub PRIVATE hw)
 add_test(NAME unit.usb_hub COMMAND test_usb_hub)
 
+add_executable(test_lan95xx test_lan95xx.c)
+target_link_libraries(test_lan95xx PRIVATE hw)
+add_test(NAME unit.lan95xx COMMAND test_lan95xx)
+
 add_executable(test_dwc2 test_dwc2.c)
 target_link_libraries(test_dwc2 PRIVATE hw)
 add_test(NAME unit.dwc2 COMMAND test_dwc2)

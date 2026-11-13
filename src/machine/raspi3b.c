@@ -24,6 +24,7 @@
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_mbox.h"
+#include "hw/net/lan95xx.h"
 #include "hw/sd/bcm2835_emmc.h"
 #include "hw/sd/bcm2835_sdhost.h"
 #include "hw/sd/sd_card.h"
@@ -309,6 +310,40 @@ static void destroy_hub(void *ctx)
 	usb_hub_destroy(ctx);
 }
 
+/*
+ * The LAN9514's Ethernet controller without an EEPROM. Its USB identity
+ * and descriptors: the LAN9514 datasheet's defaults (Table 3-4: 0424:EC00,
+ * self-powered with remote wakeup, 2 mA, a 4 ms polling interval); the
+ * release and the device protocol, which the datasheets leave to the
+ * chip, as a LAN9512 board's lsusb shows them (the same core). Chip ID
+ * EC00h is Linux's ID_REV_CHIP_ID_9512_; the revision is unknown, 0 here.
+ * The PHY's identity is the LAN9500's (Note 7-25), whose core it shares.
+ */
+static const Lan95xxConfig lan9514_eth = {
+	.vendor = 0x0424,
+	.product = 0xec00,
+	.release = 0x0200,
+	.device_protocol = 1,
+	.chip_id = 0xec00,
+	.chip_rev = 0,
+	.phy_id1 = 0x0007,
+	.phy_id2 = 0xc0c3,
+	.max_power = 1,
+	.interval = 4,
+	.self_powered = true,
+	.remote_wakeup = true,
+};
+
+static void reset_eth(void *ctx)
+{
+	lan95xx_reset(ctx);
+}
+
+static void destroy_eth(void *ctx)
+{
+	lan95xx_destroy(ctx);
+}
+
 static void reset_emmc(void *ctx)
 {
 	bcm2835_emmc_reset(ctx);
@@ -351,6 +386,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Emmc *emmc;
 	Dwc2 *usb;
 	UsbHub *hub;
+	Lan95xx *eth;
 	Firmware *fw;
 
 	if (m == NULL) {
@@ -572,6 +608,14 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		goto out_of_memory;
 	}
 	dwc2_attach(usb, usb_hub_device(hub));
+	eth = lan95xx_create(m, &lan9514_eth);
+	if (eth == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, eth, reset_eth, destroy_eth)) {
+		lan95xx_destroy(eth);
+		goto out_of_memory;
+	}
+	usb_hub_attach(hub, 1, lan95xx_device(eth)); /* port 1, on the chip */
 
 	/* After the devices it sets up, so that it resets after them. */
 	fw = calloc(1, sizeof(*fw));

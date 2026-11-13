@@ -22,7 +22,7 @@ enum {
 	SET_INTERFACE = 11,
 };
 enum { DESC_DEVICE = 1, DESC_CONFIG = 2, DESC_QUALIFIER = 6 };
-enum { ENDPOINT_HALT = 0 };
+enum { ENDPOINT_HALT = 0, DEVICE_REMOTE_WAKEUP = 1 };
 
 void usb_device_init(UsbDevice *d, const UsbDeviceClass *cls, void *ctx,
                      UsbSpeed speed)
@@ -39,8 +39,10 @@ void usb_device_reset(UsbDevice *d)
 	d->address = 0;
 	d->config = 0;
 	d->alternate = 0;
+	d->remote_wakeup = false;
 	memset(d->halted, 0, sizeof(d->halted));
 	d->stage = USB_CONTROL_IDLE;
+	d->pending = false;
 	d->new_address = -1;
 	if (d->cls->reset != NULL)
 		d->cls->reset(d);
@@ -75,7 +77,9 @@ static bool standard(UsbDevice *d, const UsbSetup *s, uint8_t *data,
 		memset(data, 0, 2);
 		*len = 2;
 		if (recipient == USB_RECIP_DEVICE) {
-			data[0] = (d->cls->config[7] & 0x40) ? 1 : 0; /* self-powered */
+			/* Self Powered, then Remote Wakeup (Figure 9-4). */
+			data[0] = (uint8_t)(((d->cls->config[7] & 0x40) ? 1 : 0) |
+			                    (d->remote_wakeup ? 2 : 0));
 			return true;
 		}
 		if (recipient == USB_RECIP_INTERFACE)
@@ -87,6 +91,14 @@ static bool standard(UsbDevice *d, const UsbSetup *s, uint8_t *data,
 		return false;
 	case CLEAR_FEATURE:
 	case SET_FEATURE:
+		/* Remote wakeup, for a device whose configuration has it. */
+		if (recipient == USB_RECIP_DEVICE) {
+			if (s->w_value != DEVICE_REMOTE_WAKEUP || s->w_index != 0 ||
+			    !(d->cls->config[7] & 0x20))
+				return false;
+			d->remote_wakeup = s->b_request == SET_FEATURE;
+			return true;
+		}
 		if (recipient != USB_RECIP_ENDPOINT || s->w_value != ENDPOINT_HALT ||
 		    !endpoint_of(s, &ep, &in) || (ep != 0 && d->config == 0))
 			return false;
@@ -180,6 +192,7 @@ UsbResult usb_device_setup(UsbDevice *d, const uint8_t packet[8])
 	s->w_index = load_le16(packet + 4);
 	s->w_length = load_le16(packet + 6);
 	d->new_address = -1;
+	d->pending = false;
 	d->pos = 0;
 	d->len = s->w_length < USB_CONTROL_MAX ? s->w_length : USB_CONTROL_MAX;
 	if (s->w_length > USB_CONTROL_MAX && !(s->bm_request_type & USB_DIR_IN)) {
@@ -191,12 +204,13 @@ UsbResult usb_device_setup(UsbDevice *d, const uint8_t packet[8])
 		d->stage = USB_CONTROL_DATA_OUT;
 		return USB_ACK;
 	}
-	if (!carry_out(d))
-		d->stage = USB_CONTROL_STALLED;
-	else if (s->bm_request_type & USB_DIR_IN && s->w_length != 0)
+	/* The data the device has when it answers the first IN, not before. */
+	if (s->bm_request_type & USB_DIR_IN && s->w_length != 0) {
 		d->stage = USB_CONTROL_DATA_IN;
-	else
-		d->stage = USB_CONTROL_STATUS_IN;
+		d->pending = true;
+		return USB_ACK;
+	}
+	d->stage = carry_out(d) ? USB_CONTROL_STATUS_IN : USB_CONTROL_STALLED;
 	return USB_ACK;
 }
 
@@ -207,6 +221,13 @@ static UsbResult control_in(UsbDevice *d, uint8_t *buf, size_t max, size_t *len)
 	*len = 0;
 	switch (d->stage) {
 	case USB_CONTROL_DATA_IN:
+		if (d->pending) {
+			d->pending = false;
+			if (!carry_out(d)) {
+				d->stage = USB_CONTROL_STALLED;
+				return USB_STALL;
+			}
+		}
 		n = d->len - d->pos < max ? d->len - d->pos : max;
 		memcpy(buf, d->data + d->pos, n);
 		d->pos += n;
@@ -251,6 +272,8 @@ UsbResult usb_device_in(UsbDevice *d, unsigned ep, uint8_t *buf, size_t max,
                         size_t *len)
 {
 	*len = 0;
+	if (d->cls->busy != NULL && d->cls->busy(d))
+		return USB_NAK;
 	if (ep == 0)
 		return control_in(d, buf, max, len);
 	if (ep >= USB_ENDPOINTS || d->config == 0 || d->halted[ep][1] ||
@@ -262,6 +285,8 @@ UsbResult usb_device_in(UsbDevice *d, unsigned ep, uint8_t *buf, size_t max,
 UsbResult usb_device_out(UsbDevice *d, unsigned ep, const uint8_t *buf,
                          size_t len)
 {
+	if (d->cls->busy != NULL && d->cls->busy(d))
+		return USB_NAK;
 	if (ep == 0)
 		return control_out(d, buf, len);
 	if (ep >= USB_ENDPOINTS || d->config == 0 || d->halted[ep][0] ||
