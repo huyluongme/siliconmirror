@@ -298,7 +298,7 @@ static void test_clock_rates(void)
 		{15, 0, 0, 0},
 		{0xffffffff, 0, 0, 0},
 	};
-	static const uint32_t unknown[] = {1, 9, 10, 12, 13, 14};
+	static const uint32_t unknown[] = {9, 10, 12, 13, 14};
 	Setup s;
 
 	setup(&s);
@@ -307,7 +307,8 @@ static void test_clock_rates(void)
 		CHECK_EQ(rate(&s, 0x00030004, rates[i].clock), rates[i].max);
 		CHECK_EQ(rate(&s, 0x00030007, rates[i].clock), rates[i].min);
 	}
-	CHECK_EQ(rate(&s, 0x00030002, 2), 48 * MHZ); /* UART */
+	CHECK_EQ(rate(&s, 0x00030002, 2), 48 * MHZ);  /* UART */
+	CHECK_EQ(rate(&s, 0x00030002, 1), 200 * MHZ); /* EMMC */
 	for (unsigned i = 0; i < ARRAY_SIZE(unknown); i++) {
 		uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00030002, 8, 0,
 		                  unknown[i],          0, 0};
@@ -381,14 +382,14 @@ static void test_set_clock_rate(void)
 	uint32_t uart[] = {
 		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 2, 3 * MHZ, 0, 0};
 	uint32_t emmc[] = {
-		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 1, 3 * MHZ, 0, 0};
+		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 9, 3 * MHZ, 0, 0};
 
 	send_stops(&s, core, ARRAY_SIZE(core),
 	           "changing the rate of clock 4 is not emulated");
 	send_stops(&s, uart, ARRAY_SIZE(uart),
 	           "changing the rate of clock 2 is not emulated");
 	send_stops(&s, emmc, ARRAY_SIZE(emmc),
-	           "the rates of clock 1 are not documented");
+	           "the rates of clock 9 are not documented");
 
 	/* A reset brings back the rates of boot. */
 	raspi3b_property_reset(s.p);
@@ -509,6 +510,13 @@ static void test_format(void)
 	CHECK_EQ(word(&s, BUF + 24), 0);
 	CHECK_EQ(word(&s, BUF + 28), 0x99);
 
+	/* The reserved bits of a request code: U-Boot's request length. */
+	uint32_t uboot[] = {sizeof(uint32_t[7]), 0, 0x00010002, 4, 4, 0, 0};
+
+	send(&s, uboot, ARRAY_SIZE(uboot));
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(4));
+	CHECK_EQ(word(&s, BUF + 20), RASPI3B_BOARD_REVISION);
+
 	/* A buffer of 12 bytes: only the end tag. */
 	uint32_t empty[] = {12, 0, 0};
 
@@ -522,7 +530,8 @@ static void test_stops(void)
 {
 	Setup s;
 	uint32_t known[] = {sizeof(uint32_t[6]), 0, 0x00040001, 0, 0, 0};
-	uint32_t tag_code[] = {sizeof(uint32_t[7]), 0, 0x00010002, 4, 1, 0, 0};
+	uint32_t tag_code[] = {sizeof(uint32_t[7]), 0, 0x00010002, 4,
+	                       0x80000004,          0, 0};
 	uint32_t buf_code[] = {sizeof(uint32_t[3]), 1, 0};
 	uint32_t tiny[] = {8, 0, 0};
 	uint32_t huge[] = {(1u << 20) + 4, 0, 0};
@@ -534,7 +543,7 @@ static void test_stops(void)
 	setup(&s);
 	send_stops(&s, known, ARRAY_SIZE(known), "tag 0x00040001 is not emulated");
 	send_stops(&s, tag_code, ARRAY_SIZE(tag_code),
-	           "a tag request code of 0x00000001 is not documented");
+	           "a tag request code of 0x80000004 is not documented");
 	send_stops(&s, buf_code, ARRAY_SIZE(buf_code),
 	           "a buffer request code of 0x00000001 is not documented");
 	send_stops(&s, tiny, ARRAY_SIZE(tiny),
@@ -635,6 +644,21 @@ static void test_sdhost_clock(void)
 	teardown(&s);
 }
 
+/* No display is connected: its size is 0 by 0. */
+static void test_display(void)
+{
+	Setup s;
+	uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00040003, 8, 0, 7, 7, 0};
+
+	setup(&s);
+	send(&s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(&s, BUF + 4), OK);
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(&s, BUF + 20), 0);
+	CHECK_EQ(word(&s, BUF + 24), 0);
+	teardown(&s);
+}
+
 /* The MAC address: the Raspberry Pi OUI, then the serial's low bytes. */
 static void test_mac(void)
 {
@@ -678,7 +702,7 @@ static void test_known_tags(void)
 	static const uint32_t answered[] = {
 		0x00000001, 0x00010002, 0x00010003, 0x00010004, 0x00010005, 0x00010006,
 		0x00020001, 0x00020002, 0x00028001, 0x00030002, 0x00030004, 0x00030007,
-		0x00030009, 0x00038002, 0x00038009, 0x00038042, 0x00050001,
+		0x00030009, 0x00038002, 0x00038009, 0x00038042, 0x00040003, 0x00050001,
 	};
 	Setup s;
 
@@ -909,6 +933,7 @@ int main(void)
 	RUN_TEST(test_format);
 	RUN_TEST(test_stops);
 	RUN_TEST(test_mac);
+	RUN_TEST(test_display);
 	RUN_TEST(test_sdhost_clock);
 	RUN_TEST(test_known_tags);
 	RUN_TEST(test_short_values);

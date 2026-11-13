@@ -24,8 +24,10 @@
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_mbox.h"
+#include "hw/sd/bcm2835_emmc.h"
 #include "hw/sd/bcm2835_sdhost.h"
 #include "hw/sd/sd_card.h"
+#include "hw/usb/dwc2.h"
 #include "machine/raspi3b_firmware.h"
 #include "machine/raspi3b_property.h"
 #include "machine/raspi3b_serial.h"
@@ -249,6 +251,40 @@ static void destroy_sdhost(void *ctx)
 	bcm2835_sdhost_destroy(ctx);
 }
 
+static void reset_usb(void *ctx)
+{
+	dwc2_reset(ctx);
+}
+
+static void destroy_usb(void *ctx)
+{
+	dwc2_destroy(ctx);
+}
+
+/*
+ * The USB controller's identity, as TinyUSB measured it on a BCM2711
+ * (dwc2_info.md, "BCM2711 (Pi4)"): the same core, 2.80a, as the
+ * BCM2837's, whose drivers Linux and U-Boot share with it.
+ */
+static const Dwc2Config usb_config = {
+	.guid = 0x2708a000,
+	.snpsid = 0x4f54280a,
+	.hwcfg1 = 0x00000000,
+	.hwcfg2 = 0x228ddd50,
+	.hwcfg3 = 0x0ff000e8,
+	.hwcfg4 = 0x1ff00020,
+};
+
+static void reset_emmc(void *ctx)
+{
+	bcm2835_emmc_reset(ctx);
+}
+
+static void destroy_emmc(void *ctx)
+{
+	bcm2835_emmc_destroy(ctx);
+}
+
 /*
  * The card's slot is wired to GPIO 48 to 53 (CLK, CMD, DAT0 to DAT3:
  * bcm2710-rpi-3-b.dts): SDHOST reaches the card when they all have ALT0.
@@ -278,6 +314,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Mbox *mbox;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
+	Bcm2835Emmc *emmc;
+	Dwc2 *usb;
 	Firmware *fw;
 
 	if (m == NULL) {
@@ -461,6 +499,33 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	status = bcm2835_sdhost_map(sdhost, m->bus, "sdhost", RASPI3B_SDHOST_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map SDHOST: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	emmc = bcm2835_emmc_create(m, RASPI3B_EMMC_CLOCK_HZ,
+	                           bcm2835_ic_gpu_input(ic, BCM2835_IC_EMMC));
+	if (emmc == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, emmc, reset_emmc, destroy_emmc)) {
+		bcm2835_emmc_destroy(emmc);
+		goto out_of_memory;
+	}
+	status = bcm2835_emmc_map(emmc, m->bus, "emmc", RASPI3B_EMMC_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map EMMC: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	usb = dwc2_create(m, &usb_config, bcm2835_ic_gpu_input(ic, BCM2835_IC_USB));
+	if (usb == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, usb, reset_usb, destroy_usb)) {
+		dwc2_destroy(usb);
+		goto out_of_memory;
+	}
+	status = dwc2_map(usb, m->bus, "usb", RASPI3B_USB_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map USB: %s",
 		         bus_status_str(status));
 		goto fail;
 	}

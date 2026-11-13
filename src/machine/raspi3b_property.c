@@ -154,7 +154,12 @@ static void reset_clocks(Raspi3bProperty *p)
 
 	for (unsigned i = 0; i < NUM_CLOCKS; i++)
 		p->clocks[i] = (Clock){CLOCK_ABSENT, 0, 0, 0};
-	p->clocks[CLOCK_EMMC].kind = CLOCK_UNKNOWN;
+	/*
+	 * Firmware 7fdcd00e and later sets the Arasan controller's EMMC
+	 * clock to 200 MHz (U-Boot's bcm2835_sdhci.c history); its range is
+	 * not documented.
+	 */
+	p->clocks[CLOCK_EMMC] = (Clock){CLOCK_FIXED, 200 * MB, 0, 0};
 	p->clocks[CLOCK_PIXEL].kind = CLOCK_UNKNOWN;
 	p->clocks[CLOCK_PWM].kind = CLOCK_UNKNOWN;
 	p->clocks[CLOCK_EMMC2].kind = CLOCK_UNKNOWN;
@@ -308,6 +313,19 @@ static bool get_vc_memory(Raspi3bProperty *p, Value *v)
 {
 	answer(v, 0, raspi3b_property_arm_memory(p));
 	answer(v, 1, p->settings.gpu_mem_mb * MIB);
+	return true;
+}
+
+/*
+ * The display's size: 0 by 0, as no display is connected. The firmware
+ * reports none then (raspberrypi/firmware issue #1157, which U-Boot's
+ * commit 970baf16 follows).
+ */
+static bool get_physical_size(Raspi3bProperty *p, Value *v)
+{
+	(void)p;
+	answer(v, 0, 0);
+	answer(v, 1, 0);
 	return true;
 }
 
@@ -550,6 +568,7 @@ static const Handler handlers[] = {
 	{0x00010005, get_arm_memory},
 	{0x00010006, get_vc_memory},
 	{0x00050001, get_command_line},
+	{0x00040003, get_physical_size},
 	{0x00020001, get_power_state},
 	{0x00020002, get_timing},
 	{0x00028001, set_power_state},
@@ -583,7 +602,12 @@ static bool answer_tag(Raspi3bProperty *p, uint8_t *buf, uint32_t offset,
 		stop(p, "tag 0x%08" PRIx32 " is not emulated", tag);
 		return false;
 	}
-	if (code != 0) {
+	/*
+	 * The wiki: b31 clear for a request, b30-b0 reserved. U-Boot puts
+	 * the request's length there (BCM2835_MBOX_INIT_TAG), and the
+	 * firmware answers it: the reserved bits are ignored.
+	 */
+	if (code & TAG_RESPONSE) {
 		stop(p, "a tag request code of 0x%08" PRIx32 " is not documented",
 		     code);
 		return false;

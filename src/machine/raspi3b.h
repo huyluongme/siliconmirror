@@ -16,7 +16,9 @@
 #define RASPI3B_GPIO_BASE (RASPI3B_PERIPHERAL_BASE + 0x200000)
 #define RASPI3B_UART0_BASE (RASPI3B_PERIPHERAL_BASE + 0x201000)
 #define RASPI3B_SDHOST_BASE (RASPI3B_PERIPHERAL_BASE + 0x202000)
-#define RASPI3B_AUX_BASE (RASPI3B_PERIPHERAL_BASE + 0x215000) /* mini UART */
+#define RASPI3B_AUX_BASE (RASPI3B_PERIPHERAL_BASE + 0x215000)  /* mini UART */
+#define RASPI3B_EMMC_BASE (RASPI3B_PERIPHERAL_BASE + 0x300000) /* Arasan */
+#define RASPI3B_USB_BASE (RASPI3B_PERIPHERAL_BASE + 0x980000)  /* DWC2 */
 #define RASPI3B_LOCAL_BASE 0x40000000 /* the ARM local peripherals */
 
 #define RASPI3B_NUM_CPUS 4
@@ -27,6 +29,12 @@
  * "Configure UARTs"); smirror always does.
  */
 #define RASPI3B_CORE_CLOCK_HZ 250000000
+
+/*
+ * The EMMC clock of the Arasan controller: 200 MHz, which the firmware
+ * sets from its commit 7fdcd00e on (U-Boot's bcm2835_sdhci.c history).
+ */
+#define RASPI3B_EMMC_CLOCK_HZ 200000000
 
 /* Where the firmware loads a 64-bit kernel, and boots core 0. */
 #define RASPI3B_KERNEL_ADDRESS 0x80000

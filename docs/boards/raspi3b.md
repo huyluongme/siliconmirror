@@ -80,6 +80,8 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
+| `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
+| `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host, port empty yet  |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
@@ -410,12 +412,15 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00038002` | Set a clock rate, kept within the clock's range                    |
 | `0x00030009` | Turbo, 0 at boot; `0x00038009` sets it                             |
 | `0x00038042` | Set SDHOST's clock: the fastest not above the one asked            |
+| `0x00040003` | Display size: 0 by 0, as no display is connected                   |
 
 The rates are the defaults of `config.txt` on a Raspberry Pi 3: the
 Arm runs at 600 to 1200 MHz, the core at 250 to 400 MHz (250 MHz with
 `enable_uart=1`, as smirror sets up the console), V3D, H.264 and ISP at
-250 to 400 MHz, the SDRAM at 400 to 450 MHz, and UART0's clock at
-48 MHz. HEVC does not exist on the Pi 3: its rate is 0. A new rate for
+250 to 400 MHz, the SDRAM at 400 to 450 MHz, UART0's clock at 48 MHz,
+and the EMMC clock of the Arasan controller at 200 MHz, which the
+firmware sets from its commit 7fdcd00e on (U-Boot's
+`bcm2835_sdhci.c`). HEVC does not exist on the Pi 3: its rate is 0. A new rate for
 the Arm changes nothing in the emulation, whose time does not depend on
 it; a new rate for the core or for UART0's clock, or turbo while the
 core clock may rise, stops the machine, as the UARTs would change speed.
@@ -424,8 +429,8 @@ The firmware knows many more tags (the wiki and Linux's
 `raspberrypi-firmware.h` list them): one that smirror does not answer
 stops the machine, and so do values that nothing documents for this
 board: the power state of a device before the Arm sets it, the time a
-device takes to power up, and the rates of the EMMC, PIXEL and PWM
-clocks. A reset of the board starts the firmware again: the clocks,
+device takes to power up, the rates of the PIXEL and PWM clocks, and
+the range of the UART and EMMC clocks. A reset of the board starts the firmware again: the clocks,
 turbo and the power states are back to those of boot.
 
 ## The SD card
@@ -447,7 +452,7 @@ board puts the card back in the idle state, as the boot ROM's `CMD0`
 does; it keeps its power.
 
 SDHOST, the BCM2835's own SD controller, drives it; the Arasan
-controller (EMMC) goes to the WiFi chip, which is not modelled. No
+controller (EMMC) goes to the WiFi chip, as described below. No
 datasheet describes SDHOST: smirror follows the drivers, Raspberry Pi's
 `bcm2835-sdhost.c`, Linux's `bcm2835.c` and U-Boot's
 `bcm2835_sdhost.c`.
@@ -496,6 +501,46 @@ drivers never set. The DMA request (DREQ 13) is not modelled yet.
 
 The firmware leaves SDHOST at its reset values, with the card in the
 idle state; drivers set it up again anyway.
+
+## The WiFi controller (EMMC)
+
+The BCM2835's External Mass Media Controller, an Arasan SD host
+controller, is at `0x3f300000` with GPU interrupt 62, as chapter 5 of
+the BCM2835 datasheet describes it. On the Pi 3 Model B it goes to the
+WiFi chip, a BCM43438, which is an SDIO card only (`mmcnr`,
+`non-removable` in `bcm2710-rpi-3-b.dts`). smirror models the
+controller but not the chip: a command that sets up a memory card,
+which the chip does not answer, ends with a command timeout after its
+48 bits and the 64 clocks of Ncr, as on the real board; an SDIO command
+(`CMD5`, `CMD52`, `CMD53`), which the chip would answer, stops the
+machine. Its base clock is the firmware's EMMC clock, 200 MHz.
+
+The registers are those of the datasheet, accessed 32 bits wide. The
+datasheet leaves out the capability registers at `0x40` and `0x44`,
+which drivers read: they hold the values that Linux's `sdhci-iproc.c`
+gives this controller, as it does not trust the hardware's (blocks of
+1024 bytes, 3.3 V, high speed; driver types A and C). `SLOTISR_VER`
+reads SD Host Controller version 3.00, whose 10-bit clock divider and
+UHS mode bits the datasheet describes, and vendor 0, its documented
+reset value. Commands start when `CMDTM` is written; the software
+resets and the internal clock's stability are immediate.
+
+## USB
+
+The USB controller at `0x3f980000`, GPU interrupt 9, is a Synopsys
+DesignWare USB 2.0 On-The-Go controller (DWC2), core 2.80a. Synopsys
+does not publish its databook: smirror follows Linux's and U-Boot's
+`dwc2` drivers. Its identity registers hold the values that TinyUSB
+measured on the BCM2711's controller, the same core: `GSNPSID`
+`0x4f54280a`, `GHWCFG2` `0x228ddd50` (8 host channels, internal DMA),
+`GHWCFG3` `0x0ff000e8`, `GHWCFG4` `0x1ff00020`, `GUID` `0x2708a000`.
+
+It works as a host, as on the Pi 3, whose port is wired to the LAN9514
+hub. smirror models the core's resets and FIFO flushes, the FIFO sizes,
+the root port's power, reset and change bits, and the halt of the host
+channels. The LAN9514 is not attached yet, so the port shows nothing
+connected; a transfer on a channel, device mode and the data FIFOs stop
+the machine.
 
 ## Boot from the SD card
 
@@ -660,6 +705,9 @@ to quit.
   is not documented.
 - SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
   the DMA controller.
+- The WiFi chip behind the EMMC controller is not modelled, and the
+  LAN9514, the USB hub and Ethernet controller, is not attached to the
+  USB port yet: U-Boot finds no Ethernet, and only the root hub.
 - The firmware's device tree overlays and parameters (`dtoverlay`,
   `dtparam`) are not applied, nor are the other settings of `config.txt`
   that smirror does not list above; a warning names each. The firmware
@@ -668,7 +716,8 @@ to quit.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
 - Of the interrupt controller's sources, only the mini UART, the GPIO,
-  UART0 and the mailboxes are modelled yet.
+  UART0, the mailboxes, SDHOST, the EMMC controller and USB are
+  modelled yet.
 - The cores have no performance monitors, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -718,6 +767,24 @@ to quit.
   before sending.
 
 ## Sources
+
+- BCM2835 ARM Peripherals, chapter 5: the EMMC controller's registers.
+  Linux,
+  [sdhci-iproc.c](https://github.com/torvalds/linux/blob/master/drivers/mmc/host/sdhci-iproc.c):
+  the capabilities it gives the BCM2835's controller; U-Boot,
+  [bcm2835_sdhci.c](https://github.com/u-boot/u-boot/blob/master/drivers/mmc/bcm2835_sdhci.c)
+  and its history: the firmware sets the EMMC clock to 200 MHz from its
+  commit 7fdcd00e on.
+- USB: Linux's
+  [drivers/usb/dwc2](https://github.com/torvalds/linux/tree/master/drivers/usb/dwc2)
+  (`hw.h`, `core.c`, `hcd.c`) and U-Boot's
+  [dwc2.c](https://github.com/u-boot/u-boot/blob/master/drivers/usb/host/dwc2.c):
+  the controller's registers as they use them; TinyUSB's
+  [dwc2_info.md](https://github.com/hathach/tinyusb/blob/master/src/portable/synopsys/dwc2/dwc2_info.md):
+  the identity registers of the BCM2711's controller.
+- The display: the firmware reports none when none is connected
+  ([raspberrypi/firmware issue #1157](https://github.com/raspberrypi/firmware/issues/1157)),
+  which U-Boot's commit 970baf16 follows.
 
 - Linux device trees
   [bcm2837.dtsi](https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2837.dtsi)
