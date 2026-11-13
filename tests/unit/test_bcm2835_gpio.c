@@ -170,6 +170,27 @@ static void test_function_select(void)
 	CHECK_EQ(bcm2835_gpio_function(s.gpio, 53), BCM2835_GPIO_ALT3);
 	bcm2835_gpio_set_function(s.gpio, 40, BCM2835_GPIO_ALT0);
 	CHECK_EQ(reg_read(&s, GPFSEL0 + 16), BCM2835_GPIO_ALT0);
+
+	/* The codes of Table 6-2: 000 input ... 010 ALT5. */
+	reg_write(&s, GPFSEL2,
+	          0 | 1 << 3 | 2 << 6 | 3 << 9 | 4 << 12 | 5 << 15 | 6 << 18 |
+	              7 << 21);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 20), BCM2835_GPIO_INPUT);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 21), BCM2835_GPIO_OUTPUT);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 22), BCM2835_GPIO_ALT5);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 23), BCM2835_GPIO_ALT4);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 24), BCM2835_GPIO_ALT0);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 25), BCM2835_GPIO_ALT1);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 26), BCM2835_GPIO_ALT2);
+	CHECK_EQ(bcm2835_gpio_function(s.gpio, 27), BCM2835_GPIO_ALT3);
+	CHECK_EQ(BCM2835_GPIO_INPUT, 0);
+	CHECK_EQ(BCM2835_GPIO_OUTPUT, 1);
+	CHECK_EQ(BCM2835_GPIO_ALT5, 2);
+	CHECK_EQ(BCM2835_GPIO_ALT4, 3);
+	CHECK_EQ(BCM2835_GPIO_ALT0, 4);
+	CHECK_EQ(BCM2835_GPIO_ALT1, 5);
+	CHECK_EQ(BCM2835_GPIO_ALT2, 6);
+	CHECK_EQ(BCM2835_GPIO_ALT3, 7);
 	teardown(&s);
 }
 
@@ -418,6 +439,7 @@ static void test_stops(void)
 		{false, GPCLR1, 4, "4-byte read from offset 0x02c"},
 		{true, GPLEV1, 4, "4-byte write to offset 0x038"},
 		{true, 0x99, 4, "4-byte write to offset 0x099"},
+		{false, 0xffc, 4, "4-byte read from offset 0xffc"}, /* the last */
 	};
 
 	for (unsigned i = 0; i < sizeof(stops) / sizeof(stops[0]); i++) {
@@ -426,13 +448,19 @@ static void test_stops(void)
 
 		setup(&s);
 		if (stops[i].write)
-			bus_write(s.m->bus, BASE + stops[i].offset, stops[i].size, 0);
+			bus_write(s.m->bus, BASE + stops[i].offset, stops[i].size,
+			          UINT32_MAX);
 		else
 			bus_read(s.m->bus, BASE + stops[i].offset, stops[i].size, &value);
 		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
 		CHECK(strstr(s.m->stop_message, stops[i].message) != NULL);
 		CHECK(strstr(s.m->stop_message, "bcm2835-gpio: ") != NULL);
 		CHECK_EQ(value, 0);
+		/* The access changed nothing. */
+		for (unsigned r = 0; r < 6; r++)
+			CHECK_EQ(reg_read(&s, GPFSEL0 + 4 * r), 0);
+		CHECK_EQ(reg_read(&s, GPLEV0), RESET_LEV0);
+		CHECK_EQ(reg_read(&s, GPLEV1), RESET_LEV1);
 		teardown(&s);
 	}
 
@@ -441,7 +469,7 @@ static void test_stops(void)
 
 	setup(&s);
 	reg_write(&s, GPPUD, 3);
-	reg_write(&s, GPPUDCLK1, 1);
+	reg_write(&s, GPPUDCLK1, 1u << 14); /* pin 46, pulled up */
 	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
 	CHECK(strstr(s.m->stop_message,
 	             "GPPUD holds the reserved value 3 when GPPUDCLK1 clocks it") !=

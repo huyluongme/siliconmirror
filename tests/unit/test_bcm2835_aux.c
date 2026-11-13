@@ -678,6 +678,41 @@ static void test_create(void)
 	machine_destroy(m);
 }
 
+/*
+ * The block ends at 0xff: its last word is the mini UART's, past the SPI
+ * masters, and 0x100 is not the block's.
+ */
+static void test_extent(void)
+{
+	Setup s;
+	uint64_t value = 0;
+
+	setup(&s);
+	CHECK_EQ(bus_read(s.m->bus, BASE + 0x100, 1, &value), BUS_ERR_UNMAPPED);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	CHECK_EQ(bus_read(s.m->bus, BASE + 0xfc, 4, &value), BUS_OK);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(s.m->stop_message, "offset 0xfc is not described"));
+	teardown(&s);
+}
+
+/* Destroyed while sending and receiving: nothing fires afterwards. */
+static void test_destroy_busy(void)
+{
+	Setup s;
+
+	setup(&s);
+	configure(&s);
+	type(&s, "ab", 2);
+	reg_write(&s, IO, 'x');
+	CHECK(event_queue_next(&s.m->events) != EVENT_NEVER);
+	bcm2835_aux_destroy(s.aux);
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	advance(&s, 10 * FRAME_8);
+	CHECK_EQ(s.serial.len, 0);
+	machine_destroy(s.m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_reset_values);
@@ -692,5 +727,7 @@ int main(void)
 	RUN_TEST(test_rts);
 	RUN_TEST(test_stops);
 	RUN_TEST(test_create);
+	RUN_TEST(test_extent);
+	RUN_TEST(test_destroy_busy);
 	return test_summary();
 }
