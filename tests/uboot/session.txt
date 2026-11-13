@@ -1,0 +1,56 @@
+# A U-Boot session on the raspi3b: the card of scripts/uboot-card.sh,
+# from power on to the prompt; the SD card, USB, Ethernet; a reset.
+# drive.c runs it; see its comment for the commands.
+
+# The boot, about 75 s on a fast host.
+timeout 900
+expect U-Boot 2026.07
+expect DRAM:  948 MiB
+expect RPI 3 Model B (0xa02082)
+expect MMC:   mmc@7e202000: 0, mmcnr@7e300000: 1
+expect Bus usb@7e980000: 3 USB Device(s) found
+expect Hit any key to stop autoboot
+type \x20
+expect U-Boot>
+
+timeout 120
+type version\r
+expect U-Boot 2026.07
+expect U-Boot>
+
+# The SD card through SDHOST: its files, and one of them read.
+type mmc info\r
+expect Device: mmc@7e202000
+expect U-Boot>
+type fatls mmc 0:1\r
+expect 52624   bootcode.bin
+expect 657880   u-boot.bin
+expect 7 file(s), 0 dir(s)
+expect U-Boot>
+type fatload mmc 0:1 ${kernel_addr_r} config.txt\r
+expect 44 bytes read
+expect U-Boot>
+type md.b ${kernel_addr_r} 0x2c\r
+expect arm_64bit=1.enab
+expect =u-boot.bin.
+expect U-Boot>
+
+# USB: the LAN9514's hub and its Ethernet controller.
+type usb tree\r
+expect +-2  Hub (480 Mb/s, 2mA)
+expect +-3  Vendor specific (480 Mb/s, 2mA)
+expect U-Boot>
+type net list\r
+expect eth0 : smsc95xx_eth
+expect U-Boot>
+
+# The watchdog resets the board, which boots again.
+type reset\r
+expect resetting ...
+timeout 900
+expect U-Boot 2026.07
+expect Bus usb@7e980000: 3 USB Device(s) found
+expect Hit any key to stop autoboot
+type \x20
+expect U-Boot>
+quit

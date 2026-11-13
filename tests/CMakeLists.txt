@@ -29,6 +29,7 @@ endfunction()
 add_subdirectory(unit)
 add_subdirectory(cli)
 add_subdirectory(baremetal)
+add_subdirectory(uboot)
 
 # Each module under src/ may only include headers from the modules below
 # it. See docs/architecture.md, "Layers".

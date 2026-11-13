@@ -51,6 +51,14 @@ real cards are made, with `sfdisk`, `mkfs.fat`, mtools and `dtc` (the
 `fdisk`, `dosfstools`, `mtools` and `device-tree-compiler` packages);
 without them, those tests are skipped too.
 
+One more test boots U-Boot on the `raspi3b` and uses its console, as a
+user would: the SD card, USB, Ethernet, a reset. It needs a card that
+`scripts/uboot-card.sh` makes in `~/.cache/siliconmirror-uboot`: it
+builds U-Boot 2026.07 (with `git`, an `aarch64-linux-gnu-` GCC, `bison`
+and `flex`) and fetches the Raspberry Pi firmware files. The test takes
+a few minutes, so only the `release` and `ci-release` builds run it
+(`make PRESET=release test`); without the card it is skipped.
+
 ```sh
 make test                  # build and run the tests
 ./build/debug/smirror -version

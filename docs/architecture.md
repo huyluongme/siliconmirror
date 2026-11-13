@@ -49,6 +49,7 @@ tests/
   unit/               C unit tests for single modules
   cli/                Command-line tests
   baremetal/          AArch64 test programs run inside the emulator
+  uboot/              A U-Boot session on the raspi3b
 ```
 
 ## Layers
@@ -202,3 +203,10 @@ Known limits, to be handled when the devices that need it arrive:
 - `tests/baremetal/`: small AArch64 programs, built with the cross
   toolchain, that run inside the emulator and print their result on the
   UART.
+- `tests/uboot/`: U-Boot from power on, as a user at the serial console
+  sees it: `drive.c` runs `smirror` on a pseudo-terminal, waits for what
+  `session.txt` expects and types what it says. Its SD card comes from
+  `scripts/uboot-card.sh`, which builds U-Boot and fetches the firmware
+  files, both at pinned versions. The session takes minutes, so only
+  optimized builds run it, and only on a host that has the card; the CI
+  does not.
