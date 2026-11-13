@@ -93,6 +93,14 @@ add_executable(test_bcm2835_emmc test_bcm2835_emmc.c)
 target_link_libraries(test_bcm2835_emmc PRIVATE hw)
 add_test(NAME unit.bcm2835_emmc COMMAND test_bcm2835_emmc)
 
+add_executable(test_usb test_usb.c)
+target_link_libraries(test_usb PRIVATE hw)
+add_test(NAME unit.usb COMMAND test_usb)
+
+add_executable(test_usb_hub test_usb_hub.c)
+target_link_libraries(test_usb_hub PRIVATE hw)
+add_test(NAME unit.usb_hub COMMAND test_usb_hub)
+
 add_executable(test_dwc2 test_dwc2.c)
 target_link_libraries(test_dwc2 PRIVATE hw)
 add_test(NAME unit.dwc2 COMMAND test_dwc2)

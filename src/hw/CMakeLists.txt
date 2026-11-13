@@ -12,6 +12,8 @@ add_library(hw STATIC
 	sd/bcm2835_emmc.c
 	sd/bcm2835_sdhost.c
 	sd/sd_card.c
-	usb/dwc2.c)
+	usb/dwc2.c
+	usb/usb.c
+	usb/usb_hub.c)
 
 target_link_libraries(hw PUBLIC core)

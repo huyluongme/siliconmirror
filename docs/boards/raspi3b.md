@@ -81,7 +81,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
-| `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host, port empty yet  |
+| `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host                  |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
@@ -537,10 +537,26 @@ measured on the BCM2711's controller, the same core: `GSNPSID`
 
 It works as a host, as on the Pi 3, whose port is wired to the LAN9514
 hub. smirror models the core's resets and FIFO flushes, the FIFO sizes,
-the root port's power, reset and change bits, and the halt of the host
-channels. The LAN9514 is not attached yet, so the port shows nothing
-connected; a transfer on a channel, device mode and the data FIFOs stop
+the root port (connected once powered, enabled at high speed when
+software ends its reset), the frame number, and the host channels with
+buffer DMA, whose addresses are bus addresses: a transfer goes to the
+device packet by packet and ends, after the time its packets take at
+480 Mb/s (a packet's token, handshake and gaps count as 16 bytes, our
+choice), with the transfer done, a NAK, a STALL, a babble, or a
+transaction error when no device answers, as the drivers expect. Device
+mode, the data FIFOs, split transactions and isochronous endpoints stop
 the machine.
+
+The USB devices follow chapter 9 of the USB 2.0 specification (device
+states, control transfers, the standard requests), and the hub chapter
+11 (the hub descriptor and class requests, port power and a 10 ms port
+reset, the status change endpoint). On the root port is the LAN9514's
+hub, as its datasheet sets it up without an EEPROM, as on the board:
+vendor `0x0424`, product `0x9514`, 5 ports with port 1 not removable,
+self-powered, a compound device with a transaction translator a port.
+Its device release depends on the chip's revision; smirror says 2.00.
+Port 1, the LAN9514's Ethernet controller, is empty yet, and the other
+four ports have nothing attached.
 
 ## Boot from the SD card
 
@@ -706,8 +722,9 @@ to quit.
 - SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
   the DMA controller.
 - The WiFi chip behind the EMMC controller is not modelled, and the
-  LAN9514, the USB hub and Ethernet controller, is not attached to the
-  USB port yet: U-Boot finds no Ethernet, and only the root hub.
+  LAN9514's Ethernet controller is not attached to its hub yet: U-Boot
+  finds the hub but no Ethernet. Full- and low-speed devices, which need
+  the hub's transaction translators, cannot be attached yet.
 - The firmware's device tree overlays and parameters (`dtoverlay`,
   `dtparam`) are not applied, nor are the other settings of `config.txt`
   that smirror does not list above; a warning names each. The firmware
@@ -775,6 +792,13 @@ to quit.
   [bcm2835_sdhci.c](https://github.com/u-boot/u-boot/blob/master/drivers/mmc/bcm2835_sdhci.c)
   and its history: the firmware sets the EMMC clock to 200 MHz from its
   commit 7fdcd00e on.
+- [Universal Serial Bus Specification, Revision 2.0](https://www.usb.org/document-library/usb-20-specification):
+  the device framework (chapter 9), control transfers (8.5.3), port
+  reset times (7.1.7.5) and the hub (chapter 11).
+- [LAN9514/LAN9514i datasheet](https://www.microchip.com/en-us/product/lan9514),
+  Microchip DS00002306A: the hub's configuration without an EEPROM
+  (Tables 3-3 to 3-5) and the Ethernet controller's defaults (Table
+  3-11).
 - USB: Linux's
   [drivers/usb/dwc2](https://github.com/torvalds/linux/tree/master/drivers/usb/dwc2)
   (`hw.h`, `core.c`, `hcd.c`) and U-Boot's

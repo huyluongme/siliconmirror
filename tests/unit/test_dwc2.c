@@ -10,9 +10,11 @@
 #include <string.h>
 
 #include "core/bus.h"
+#include "core/event.h"
 #include "core/irq.h"
 #include "core/machine.h"
 #include "hw/usb/dwc2.h"
+#include "hw/usb/usb_hub.h"
 #include "test.h"
 #include "util/macros.h"
 
@@ -58,6 +60,7 @@ static const Dwc2Config config = {
 	.hwcfg2 = 0x228ddd50,
 	.hwcfg3 = 0x0ff000e8,
 	.hwcfg4 = 0x1ff00020,
+	.dma_mask = 0x3fffffff,
 };
 
 typedef struct Setup {
@@ -210,7 +213,7 @@ static void test_stops(void)
 		uint32_t value;
 		const char *message;
 	} stops[] = {
-		{true, HCCHAR0, 4, CHENA, "a transfer, with no device"},
+		{true, HCCHAR0, 4, CHENA, "a transfer with the port disabled"},
 		{true, GUSBCFG, 4, 1u << 30, "device mode"},
 		{false, 0x800, 4, 0, "is not emulated (device mode"},
 		{false, 0x1000, 4, 0, "is not emulated (device mode"},
@@ -244,6 +247,194 @@ static void test_stops(void)
 	teardown(&s);
 }
 
+#define HCSPLT0 0x504
+#define HCTSIZ0 0x510
+#define HCDMA0 0x514
+#define RAM 0x100000
+#define ALIAS 0xc0000000u /* the uncached bus alias of the RAM */
+
+#define XFERCOMPL (1u << 0)
+#define STALLED (1u << 3)
+#define NAKED (1u << 4)
+#define ACKED (1u << 5)
+#define XACTERR (1u << 7)
+#define BBLERR (1u << 8)
+#define PID_DATA1 (2u << 29)
+#define PID_SETUP (3u << 29)
+
+static const UsbHubConfig hub_config = {
+	.vendor = 0x0424,
+	.product = 0x9514,
+	.release = 0x0200,
+	.ports = 5,
+	.removable = 0x02,
+	.characteristics = 0x000d,
+	.power_on_time = 0x32,
+	.controller_current = 2,
+	.max_power = 1,
+	.self_powered = true,
+	.multi_tt = true,
+};
+
+/* A transfer on channel 0; returns HCINT once it is done. */
+static uint32_t transfer(Setup *s, uint32_t hcchar, uint32_t size,
+                         uint32_t packets, uint32_t pid, uint64_t *ns)
+{
+	uint64_t t;
+
+	wr(s, HCTSIZ0, pid | packets << 19 | size);
+	wr(s, HCDMA0, ALIAS | RAM);
+	wr(s, HCINT0, 0x3fff);
+	t = s->m->events.now;
+	wr(s, HCCHAR0, CHENA | hcchar);
+	CHECK(rd(s, HCCHAR0) & CHENA);
+	for (int i = 0; i < 100000 && (rd(s, HCCHAR0) & CHENA); i++)
+		event_queue_run_until(&s->m->events, s->m->events.now + 1);
+	if (ns != NULL)
+		*ns = s->m->events.now - t;
+	return rd(s, HCINT0);
+}
+
+/* HCCHAR for a device address, an endpoint, IN or not, a type, a size. */
+static uint32_t hcchar(unsigned addr, unsigned ep, bool in, unsigned type,
+                       unsigned mps)
+{
+	return addr << 22 | type << 18 | (in ? 1u << 15 : 0) | ep << 11 | mps;
+}
+
+/*
+ * The hub on the root port: power, a reset that software ends, then
+ * control transfers through channel 0 with DMA, as U-Boot does them.
+ */
+static void test_transfers(void)
+{
+	static const uint8_t get_device[8] = {0x80, 6, 0, 1, 0, 0, 18, 0};
+	Setup s;
+	UsbHub *hub;
+	uint8_t buf[18];
+	uint64_t ns;
+
+	setup(&s);
+	CHECK_EQ(bus_map_ram(s.m->bus, "ram", 0, 0x200000), BUS_OK);
+	hub = usb_hub_create(s.m, &hub_config);
+	dwc2_attach(s.d, usb_hub_device(hub));
+	CHECK_EQ(rd(&s, HPRT0), 0); /* no power, nothing seen */
+	wr(&s, HPRT0, 1u << 12);
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 3); /* CONNSTS, CONNDET */
+	CHECK_EQ(rd(&s, GINTSTS), 1u << 24 | 1);
+	wr(&s, HPRT0, 1u << 12 | 2);
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 1);
+	CHECK_EQ(rd(&s, HFNUM), 0);
+	wr(&s, HPRT0, 1u << 12 | 1u << 8); /* reset */
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 1u << 8 | 1);
+	event_queue_run_until(&s.m->events, s.m->events.now + 50000000);
+	wr(&s, HPRT0, 1u << 12);
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 0xd); /* ENA, ENCHNG, high speed */
+	wr(&s, HPRT0, 1u << 12 | 8);
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 5);
+	/* Microframes of 125 us from the enable; the time left, at 60 MHz. */
+	event_queue_run_until(&s.m->events, s.m->events.now + 3 * 125000 + 25000);
+	CHECK_EQ(rd(&s, HFNUM), 6000u << 16 | 3);
+
+	/* SETUP: GET_DESCRIPTOR(device), 8 bytes, then the data, 18. */
+	CHECK_EQ(bus_write_block(s.m->bus, RAM, get_device, 8), BUS_OK);
+	CHECK_EQ(transfer(&s, hcchar(0, 0, false, 0, 64), 8, 1, PID_SETUP, &ns),
+	         XFERCOMPL | 2 | ACKED);
+	CHECK_EQ(ns, 400);                    /* 24 bytes at 480 Mb/s */
+	CHECK_EQ(rd(&s, HCTSIZ0), PID_DATA1); /* nothing left; DATA1 next */
+	CHECK_EQ(rd(&s, HCDMA0), ALIAS | (RAM + 8));
+	CHECK_EQ(transfer(&s, hcchar(0, 0, true, 0, 64), 64, 1, PID_DATA1, &ns),
+	         XFERCOMPL | 2 | ACKED);
+	CHECK_EQ(rd(&s, HCTSIZ0), 46); /* a short packet: 46 not sent */
+	CHECK_EQ(bus_read_block(s.m->bus, RAM, buf, 18), BUS_OK);
+	CHECK_EQ(buf[0], 18);
+	CHECK(buf[8] == 0x24 && buf[9] == 0x04 && buf[10] == 0x14);
+	CHECK_EQ(transfer(&s, hcchar(0, 0, false, 0, 64), 0, 1, PID_DATA1, &ns),
+	         XFERCOMPL | 2 | ACKED);
+	/* Two packets of 8: the data toggles back to DATA1. */
+	CHECK_EQ(bus_write_block(s.m->bus, RAM, get_device, 8), BUS_OK);
+	transfer(&s, hcchar(0, 0, false, 0, 8), 8, 1, PID_SETUP, NULL);
+	CHECK_EQ(transfer(&s, hcchar(0, 0, true, 0, 8), 16, 2, PID_DATA1, &ns),
+	         XFERCOMPL | 2 | ACKED);
+	CHECK_EQ(rd(&s, HCTSIZ0), PID_DATA1);
+	CHECK_EQ(ns, 2 * 400);
+	/* More than the transfer has room for: babble. */
+	CHECK_EQ(transfer(&s, hcchar(0, 0, true, 0, 8), 1, 1, PID_DATA1, NULL),
+	         BBLERR | 2);
+
+	/* STALL: endpoint 1 before a configuration; NAK once configured. */
+	CHECK_EQ(transfer(&s, hcchar(0, 1, true, 3, 1), 1, 1, 0, NULL),
+	         STALLED | 2);
+	CHECK_EQ(bus_write_block(s.m->bus, RAM, "\0\x09\x01\0\0\0\0\0", 8), BUS_OK);
+	transfer(&s, hcchar(0, 0, false, 0, 64), 8, 1, PID_SETUP, NULL);
+	transfer(&s, hcchar(0, 0, true, 0, 64), 0, 1, PID_DATA1, NULL);
+	CHECK_EQ(transfer(&s, hcchar(0, 1, true, 3, 1), 1, 1, 0, &ns), NAKED | 2);
+	CHECK_EQ(ns, 267);
+	CHECK_EQ(rd(&s, HCTSIZ0), 1u << 19 | 1); /* nothing moved */
+	/* No device at address 5: no answer. */
+	CHECK_EQ(transfer(&s, hcchar(5, 0, true, 0, 64), 8, 1, PID_DATA1, &ns),
+	         XACTERR | 2);
+	CHECK_EQ(ns, 3 * 267);
+	/* A SETUP that is not 8 bytes gets no answer either. */
+	CHECK_EQ(transfer(&s, hcchar(0, 0, false, 0, 64), 7, 1, PID_SETUP, NULL),
+	         XACTERR | 2);
+
+	/* A halt while the transfer runs ends it at once. */
+	wr(&s, HCTSIZ0, PID_DATA1 | 1u << 19 | 8);
+	wr(&s, HCINT0, 0x3fff);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 0, true, 0, 64));
+	wr(&s, HCCHAR0, CHENA | CHDIS | hcchar(5, 0, true, 0, 64));
+	CHECK_EQ(rd(&s, HCCHAR0) & CHENA, 0);
+	CHECK_EQ(rd(&s, HCINT0), XACTERR | 2);
+	/* Another write to it while it runs stops the machine. */
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 0, true, 0, 64));
+	wr(&s, HCCHAR0, hcchar(5, 0, true, 0, 64));
+	CHECK(strstr(s.m->stop_message, "a change to a channel that runs"));
+	s.m->stop = MACHINE_STOP_NONE;
+	/* A reset of the board ends it too. */
+	dwc2_reset(s.d);
+	event_queue_run_until(&s.m->events, s.m->events.now + 100000);
+	CHECK_EQ(rd(&s, HCINT0), 0);
+	CHECK_EQ(rd(&s, HPRT0), 0);
+
+	/* What is not modelled: splits, isochronous, a disabled port. */
+	wr(&s, HPRT0, 1u << 12);
+	wr(&s, HCTSIZ0, 1u << 19);
+	wr(&s, HCCHAR0, CHENA | hcchar(0, 0, true, 0, 64));
+	CHECK(strstr(s.m->stop_message, "with the port disabled"));
+	s.m->stop = MACHINE_STOP_NONE;
+	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	wr(&s, HPRT0, 1u << 12);
+	wr(&s, HCSPLT0, 1u << 31);
+	wr(&s, HCCHAR0, CHENA | hcchar(0, 0, true, 0, 64));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	s.m->stop = MACHINE_STOP_NONE;
+	wr(&s, HCSPLT0, 0);
+	wr(&s, HCCHAR0, CHENA | hcchar(0, 1, true, 1, 64));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	s.m->stop = MACHINE_STOP_NONE;
+	wr(&s, HCTSIZ0, 0);
+	wr(&s, HCCHAR0, CHENA | hcchar(0, 0, true, 0, 64));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	s.m->stop = MACHINE_STOP_NONE;
+	/* Power off disables the port; writing ENA does too. */
+	wr(&s, HPRT0, 0);
+	CHECK_EQ(rd(&s, HPRT0) & 0x1005, 0); /* PWR, CONNSTS, ENA */
+	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	wr(&s, HPRT0, 1u << 12);
+	wr(&s, HPRT0, 1u << 12 | 4);
+	CHECK_EQ(rd(&s, HPRT0) & 4, 0);
+	/* Destroyed while a channel runs. */
+	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	wr(&s, HPRT0, 1u << 12);
+	wr(&s, HCTSIZ0, PID_DATA1 | 1u << 19 | 8);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 0, true, 0, 64));
+	dwc2_destroy(s.d);
+	event_queue_run_until(&s.m->events, s.m->events.now + 100000);
+	usb_hub_destroy(hub);
+	machine_destroy(s.m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_identity);
@@ -251,5 +442,6 @@ int main(void)
 	RUN_TEST(test_port);
 	RUN_TEST(test_channels);
 	RUN_TEST(test_stops);
+	RUN_TEST(test_transfers);
 	return test_summary();
 }

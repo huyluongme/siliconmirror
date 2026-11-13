@@ -13,9 +13,13 @@
  *
  * What is modelled: the core's resets, host mode (the ID pin of an
  * A-device, as on boards whose port is a host only), the FIFO size
- * registers, the root port (power, connection, reset, enable) and the
- * host channels' halt. Nothing is attached to the port yet: a transfer
- * on a channel, device mode and the data FIFOs stop the machine.
+ * registers, the root port (power, connection, a reset that software
+ * ends, enable; a high-speed device), the frame number, and the host
+ * channels with buffer DMA: a transfer goes packet by packet to the
+ * device, and ends with the transfer done, a NAK, a STALL, a babble or a
+ * transaction error, as the drivers expect, after the time its packets
+ * take at 480 Mb/s. Device mode, the data FIFOs (slave mode), split
+ * transactions and isochronous endpoints stop the machine.
  */
 
 #ifndef HW_USB_DWC2_H
@@ -26,6 +30,7 @@
 #include "core/bus.h"
 #include "core/irq.h"
 #include "core/machine.h"
+#include "hw/usb/usb.h"
 
 #define DWC2_MMIO_SIZE 0x10000
 #define DWC2_NUM_CHANNELS_MAX 16
@@ -35,6 +40,7 @@ typedef struct Dwc2Config {
 	uint32_t guid; /* its reset value; software may change it */
 	uint32_t snpsid;
 	uint32_t hwcfg1, hwcfg2, hwcfg3, hwcfg4;
+	uint32_t dma_mask; /* the bits of a DMA address that reach memory */
 } Dwc2Config;
 
 typedef struct Dwc2 Dwc2;
@@ -44,5 +50,8 @@ Dwc2 *dwc2_create(Machine *m, const Dwc2Config *config, IrqLine *irq);
 void dwc2_destroy(Dwc2 *dwc2);
 void dwc2_reset(Dwc2 *dwc2);
 BusStatus dwc2_map(Dwc2 *dwc2, Bus *bus, const char *name, uint64_t base);
+
+/* Attach dev to the root port, for good. */
+void dwc2_attach(Dwc2 *dwc2, UsbDevice *dev);
 
 #endif /* HW_USB_DWC2_H */

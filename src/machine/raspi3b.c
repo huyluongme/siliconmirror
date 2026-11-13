@@ -28,6 +28,7 @@
 #include "hw/sd/bcm2835_sdhost.h"
 #include "hw/sd/sd_card.h"
 #include "hw/usb/dwc2.h"
+#include "hw/usb/usb_hub.h"
 #include "machine/raspi3b_firmware.h"
 #include "machine/raspi3b_property.h"
 #include "machine/raspi3b_serial.h"
@@ -273,7 +274,40 @@ static const Dwc2Config usb_config = {
 	.hwcfg2 = 0x228ddd50,
 	.hwcfg3 = 0x0ff000e8,
 	.hwcfg4 = 0x1ff00020,
+	.dma_mask = 0x3fffffff, /* bus addresses: the alias in bits 31:30 goes */
 };
+
+/*
+ * The LAN9514's hub without an EEPROM, as on the board: its hardware
+ * defaults (LAN9514 datasheet, Table 3-3 and 3-4): 5 ports, port 1 the
+ * Ethernet controller, not removable; self-powered; individual power
+ * switching and over-current sensing; a compound device; a TT for each
+ * port; 100 ms from power on to power good; 2 mA. Its device release
+ * depends on the chip's revision: 2.00 is smirror's.
+ */
+static const UsbHubConfig lan9514_hub = {
+	.vendor = 0x0424,
+	.product = 0x9514,
+	.release = 0x0200,
+	.ports = 5,
+	.removable = 0x02,
+	.characteristics = 0x000d,
+	.power_on_time = 0x32,
+	.controller_current = 2,
+	.max_power = 1,
+	.self_powered = true,
+	.multi_tt = true,
+};
+
+static void reset_hub(void *ctx)
+{
+	usb_device_reset(usb_hub_device(ctx));
+}
+
+static void destroy_hub(void *ctx)
+{
+	usb_hub_destroy(ctx);
+}
 
 static void reset_emmc(void *ctx)
 {
@@ -316,6 +350,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Emmc *emmc;
 	Dwc2 *usb;
+	UsbHub *hub;
 	Firmware *fw;
 
 	if (m == NULL) {
@@ -529,6 +564,14 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+	hub = usb_hub_create(m, &lan9514_hub);
+	if (hub == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, hub, reset_hub, destroy_hub)) {
+		usb_hub_destroy(hub);
+		goto out_of_memory;
+	}
+	dwc2_attach(usb, usb_hub_device(hub));
 
 	/* After the devices it sets up, so that it resets after them. */
 	fw = calloc(1, sizeof(*fw));

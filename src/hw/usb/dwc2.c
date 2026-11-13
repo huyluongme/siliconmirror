@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/event.h"
+#include "util/muldiv.h"
+
 /* Global registers. */
 enum {
 	GOTGCTL = 0x000,
@@ -67,11 +70,33 @@ enum { HCCHAR, HCSPLT = 4, HCINT = 8, HCINTMSK = 12, HCTSIZ = 16, HCDMA = 20 };
 #define HPRT0_ENCHNG (1u << 3)
 #define HPRT0_OVRCURRCHNG (1u << 5)
 #define HPRT0_CHANGES (HPRT0_CONNDET | HPRT0_ENCHNG | HPRT0_OVRCURRCHNG)
+#define HPRT0_RST (1u << 8)
+#define HPRT0_PWR (1u << 12)
 #define HPRT0_RW 0x1f1c0u /* RES, SUSP, RST, PWR and TSTCTL */
 
 #define HCCHAR_CHDIS (1u << 30)
 #define HCCHAR_CHENA (1u << 31)
+#define HCSPLT_SPLTENA (1u << 31)
+
+/* HCINT */
+#define XFERCOMPL (1u << 0)
 #define HCINT_CHHLTD (1u << 1)
+#define STALL (1u << 3)
+#define NAK (1u << 4)
+#define ACK (1u << 5)
+#define XACTERR (1u << 7)
+#define BBLERR (1u << 8)
+
+/* HCTSIZ's PID field. */
+enum { PID_DATA0 = 0, PID_DATA1 = 2, PID_SETUP = 3 };
+
+/*
+ * Bus times, at 480 Mb/s: a byte takes 50/3 ns. A transaction adds its
+ * token, handshake and gaps, which smirror counts as 16 bytes; a device
+ * that does not answer costs three tries of a 16-byte timeout each.
+ */
+#define OVERHEAD_BYTES 16
+#define MICROFRAME_NS 125000
 
 struct Dwc2 {
 	Machine *machine;
@@ -82,10 +107,18 @@ struct Dwc2 {
 	uint32_t gotgctl, gahbcfg, gusbcfg, grstctl, gintsts, gintmsk;
 	uint32_t grxfsiz, gnptxfsiz, hptxfsiz, gi2cctl, gpvndctl, ggpio, guid;
 	uint32_t hcfg, hfir, haintmsk, pcgcctl;
-	uint32_t hprt0; /* the RW bits and the change bits */
+	uint32_t hprt0;      /* the RW bits and the change bits */
+	UsbDevice *port_dev; /* on the root port, or NULL */
+	bool port_enabled;
+	uint64_t frames_from; /* when the port started sending frames */
 	struct Channel {
+		Dwc2 *dwc2;
 		uint32_t hcchar, hcsplt, hcint, hcintmsk, hctsiz, hcdma;
+		bool busy;
+		uint32_t pending; /* HCINT bits at the end of the transfer */
+		Event done;
 	} hc[DWC2_NUM_CHANNELS_MAX];
+	uint8_t packet[1024]; /* the largest packet, high-speed bulk's 512 */
 };
 
 static void stop(Dwc2 *d, const char *access, uint64_t offset, unsigned size,
@@ -125,16 +158,153 @@ static void update_irq(Dwc2 *d)
 	                    (gintsts(d) & d->gintmsk) != 0);
 }
 
-/* The port: nothing attached, so never connected, never enabled. */
+/* The root port: connected while powered with a device; high speed. */
 static uint32_t hprt0(const Dwc2 *d)
 {
-	return d->hprt0;
+	uint32_t v = d->hprt0;
+
+	if ((v & HPRT0_PWR) && d->port_dev != NULL)
+		v |= HPRT0_CONNSTS;
+	if (d->port_enabled)
+		v |= HPRT0_ENA; /* PRTSPD 0: high speed */
+	return v;
+}
+
+/* HPRT0: power, then a reset that ends when software ends it. */
+static void write_hprt0(Dwc2 *d, uint32_t v)
+{
+	uint32_t old = d->hprt0;
+
+	d->hprt0 = (old & HPRT0_CHANGES & ~v) | (v & HPRT0_RW);
+	if (v & HPRT0_ENA) /* writing 1 disables the port */
+		d->port_enabled = false;
+	if ((v & HPRT0_PWR) && !(old & HPRT0_PWR) && d->port_dev != NULL)
+		d->hprt0 |= HPRT0_CONNDET;
+	if (!(v & HPRT0_PWR))
+		d->port_enabled = false;
+	if (v & HPRT0_RST)
+		d->port_enabled = false;
+	if ((old & HPRT0_RST) && !(v & HPRT0_RST) && (v & HPRT0_PWR) &&
+	    d->port_dev != NULL) {
+		usb_device_reset(d->port_dev);
+		d->port_enabled = true;
+		d->frames_from = machine_now(d->machine);
+		d->hprt0 |= HPRT0_ENCHNG;
+	}
+}
+
+/* HFNUM: the microframe number and the time left in it, in 60 MHz clocks. */
+static uint32_t hfnum(const Dwc2 *d)
+{
+	uint64_t t;
+
+	if (!d->port_enabled)
+		return 0;
+	t = machine_now(d->machine) - d->frames_from;
+	return (uint32_t)((MICROFRAME_NS - t % MICROFRAME_NS) * 60 / 1000) << 16 |
+	       (uint32_t)(t / MICROFRAME_NS & 0x3fff);
+}
+
+static void channel_done(void *ctx)
+{
+	struct Channel *c = ctx;
+
+	c->busy = false;
+	c->hcchar &= ~(HCCHAR_CHENA | HCCHAR_CHDIS);
+	c->hcint |= c->pending;
+	update_irq(c->dwc2);
 }
 
 static void halt_channels(Dwc2 *d)
 {
-	for (unsigned n = 0; n < d->num_channels; n++)
+	for (unsigned n = 0; n < d->num_channels; n++) {
+		event_cancel(&d->machine->events, &d->hc[n].done);
+		d->hc[n].busy = false;
 		d->hc[n].hcchar &= ~(HCCHAR_CHENA | HCCHAR_CHDIS);
+	}
+}
+
+static uint64_t bytes_ns(uint64_t bytes)
+{
+	return mul_div_ceil(bytes, 50, 3);
+}
+
+/*
+ * The packets of a channel's transfer, as the core does them with DMA:
+ * HCTSIZ's packets of HCCHAR's maximum size, each to the device, until
+ * the last, a short IN packet, a NAK, a STALL or no answer. The device
+ * acts at once; HCINT says so when the bus time has passed.
+ */
+static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
+{
+	uint32_t ch = c->hcchar, ts = c->hctsiz;
+	unsigned mps = ch & 0x7ff, ep = ch >> 11 & 0xf, in = ch >> 15 & 1;
+	unsigned type = ch >> 18 & 3, address = ch >> 22 & 0x7f;
+	uint32_t size = ts & 0x7ffff, packets = ts >> 19 & 0x3ff;
+	unsigned pid = ts >> 29 & 3;
+	uint64_t dma = c->hcdma & d->config.dma_mask, ns = 0;
+	uint32_t result = 0;
+	UsbDevice *dev;
+
+	if (!d->port_enabled || (c->hcsplt & HCSPLT_SPLTENA) || type == 1 ||
+	    mps == 0 || mps > sizeof(d->packet) || packets == 0) {
+		stop(d, "write to", offset, 4,
+		     "is not emulated: a transfer with the port disabled, a "
+		     "split, an isochronous endpoint or no packets");
+		return;
+	}
+	dev = usb_device_find(d->port_dev, address);
+	while (result == 0) {
+		size_t len = 0;
+		UsbResult r;
+
+		if (dev == NULL) {
+			r = USB_NO_RESPONSE;
+		} else if (!in) {
+			len = size < mps ? size : mps;
+			bus_read_block(d->machine->bus, dma, d->packet, len);
+			if (pid == PID_SETUP && type == 0)
+				r = len == 8 ? usb_device_setup(dev, d->packet)
+				             : USB_NO_RESPONSE;
+			else
+				r = usb_device_out(dev, ep, d->packet, len);
+		} else {
+			r = usb_device_in(dev, ep, d->packet, mps, &len);
+			if (r == USB_ACK && len > size) {
+				result = BBLERR | HCINT_CHHLTD;
+				break;
+			}
+			if (r == USB_ACK)
+				bus_write_block(d->machine->bus, dma, d->packet, len);
+		}
+		ns += bytes_ns(len + OVERHEAD_BYTES);
+		switch (r) {
+		case USB_NAK:
+			result = NAK | HCINT_CHHLTD;
+			continue;
+		case USB_STALL:
+			result = STALL | HCINT_CHHLTD;
+			continue;
+		case USB_NO_RESPONSE:
+			ns += 2 * bytes_ns(OVERHEAD_BYTES);
+			result = XACTERR | HCINT_CHHLTD;
+			continue;
+		case USB_ACK:
+			break;
+		}
+		dma += len;
+		size -= (uint32_t)len;
+		packets--;
+		pid = pid == PID_DATA1 ? PID_DATA0 : PID_DATA1;
+		if (packets == 0 || (in && len < mps))
+			result = XFERCOMPL | ACK | HCINT_CHHLTD;
+	}
+	c->hctsiz = (ts & (1u << 31)) | pid << 29 | packets << 19 | size;
+	c->hcdma = (c->hcdma & ~d->config.dma_mask) | (uint32_t)dma;
+	c->pending = result;
+	c->busy = true;
+	c->hcchar = ch;
+	event_schedule(&d->machine->events, &c->done, machine_now(d->machine) + ns);
 }
 
 static uint64_t channel_read(Dwc2 *d, unsigned n, unsigned reg)
@@ -164,10 +334,21 @@ static void channel_write(Dwc2 *d, uint64_t offset, unsigned n, unsigned reg,
 
 	switch (reg) {
 	case HCCHAR:
+		if (c->busy) {
+			if ((v & (HCCHAR_CHENA | HCCHAR_CHDIS)) !=
+			    (HCCHAR_CHENA | HCCHAR_CHDIS)) {
+				stop(d, "write to", offset, 4,
+				     "is not emulated: a change to a channel that runs");
+				return;
+			}
+			/* A halt: the transfer ends now, as far as it went. */
+			event_cancel(&d->machine->events, &c->done);
+			channel_done(c);
+			return;
+		}
 		if ((v & HCCHAR_CHENA) && !(v & HCCHAR_CHDIS)) {
-			stop(d, "write to", offset, 4,
-			     "is not emulated: a transfer, with no device on the "
-			     "port");
+			c->hcchar = v;
+			start_transfer(d, offset, c);
 			return;
 		}
 		if (v & HCCHAR_CHENA) {
@@ -266,7 +447,7 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 	case HFIR:
 		return d->hfir;
 	case HFNUM:
-		return 0; /* no frames while the port is disabled */
+		return hfnum(d);
 	case HPTXSTS:
 		return 8u << 16 | (d->hptxfsiz >> 16);
 	case HAINT:
@@ -300,7 +481,14 @@ static void reset_registers(Dwc2 *d)
 	d->guid = d->config.guid;
 	d->hcfg = d->hfir = d->haintmsk = d->pcgcctl = 0;
 	d->hprt0 = 0;
-	memset(d->hc, 0, sizeof(d->hc));
+	d->port_enabled = false;
+	halt_channels(d);
+	for (unsigned n = 0; n < DWC2_NUM_CHANNELS_MAX; n++) {
+		struct Channel *c = &d->hc[n];
+
+		c->hcchar = c->hcsplt = c->hcint = c->hcintmsk = 0;
+		c->hctsiz = c->hcdma = c->pending = 0;
+	}
 	update_irq(d);
 }
 
@@ -383,8 +571,7 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 		d->haintmsk = v & ((1u << d->num_channels) - 1);
 		break;
 	case HPRT0:
-		/* Writing 1 clears the change bits; ENA cannot be set. */
-		d->hprt0 = (d->hprt0 & HPRT0_CHANGES & ~v) | (v & HPRT0_RW);
+		write_hprt0(d, v);
 		break;
 	case PCGCCTL:
 		d->pcgcctl = v;
@@ -418,13 +605,23 @@ Dwc2 *dwc2_create(Machine *m, const Dwc2Config *config, IrqLine *irq)
 	d->irq = irq;
 	/* GHWCFG2 bits 17:14: the number of host channels, less 1. */
 	d->num_channels = ((config->hwcfg2 >> 14) & 0xf) + 1;
+	for (unsigned n = 0; n < DWC2_NUM_CHANNELS_MAX; n++) {
+		d->hc[n].dwc2 = d;
+		event_init(&d->hc[n].done, channel_done, &d->hc[n]);
+	}
 	reset_registers(d);
 	return d;
 }
 
 void dwc2_destroy(Dwc2 *d)
 {
+	halt_channels(d);
 	free(d);
+}
+
+void dwc2_attach(Dwc2 *d, UsbDevice *dev)
+{
+	d->port_dev = dev;
 }
 
 BusStatus dwc2_map(Dwc2 *d, Bus *bus, const char *name, uint64_t base)

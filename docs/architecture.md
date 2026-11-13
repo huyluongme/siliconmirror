@@ -33,7 +33,7 @@ src/
     intc/             Interrupt controllers (bcm2836_local, bcm2835_ic)
     timer/            Timers (bcm2835_systimer)
     sd/               SD host controllers and SD cards
-    usb/              USB host controllers (dwc2)
+    usb/              USB: host controllers (dwc2), devices, hubs
     misc/             Everything else (bcm2835_mbox)
   backend/            Host resources used by devices
     char/             Character streams: stdio, file, socket
