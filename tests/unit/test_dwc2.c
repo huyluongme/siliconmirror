@@ -30,6 +30,10 @@ enum {
 	GRXFSIZ = 0x024,
 	GNPTXFSIZ = 0x028,
 	GNPTXSTS = 0x02c,
+	GOTGINT = 0x004,
+	GI2CCTL = 0x030,
+	GPVNDCTL = 0x034,
+	GGPIO = 0x038,
 	GUID = 0x03c,
 	GSNPSID = 0x040,
 	GHWCFG1 = 0x044,
@@ -38,6 +42,8 @@ enum {
 	GHWCFG4 = 0x050,
 	HPTXFSIZ = 0x100,
 	HCFG = 0x400,
+	HFIR = 0x404,
+	HPTXSTS = 0x410,
 	HFNUM = 0x408,
 	HAINT = 0x414,
 	HAINTMSK = 0x418,
@@ -113,11 +119,13 @@ static void test_identity(void)
 	CHECK_EQ(rd(&s, GUID), 0x2708a000);
 	wr(&s, GUID, 0x1234);
 	CHECK_EQ(rd(&s, GUID), 0x1234);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	wr(&s, GSNPSID, 0); /* read-only: stops */
 	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
 	s.m->stop = MACHINE_STOP_NONE;
 	CHECK_EQ(rd(&s, GINTSTS), 1); /* CURMODE: host */
 	CHECK_EQ(rd(&s, GOTGCTL), 0); /* ID: an A-device */
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	wr(&s, GOTGCTL, 1u << 16);
 	CHECK_EQ(rd(&s, GOTGCTL), 0);
 	CHECK_EQ(rd(&s, GRSTCTL), 1u << 31); /* AHB idle */
@@ -200,6 +208,73 @@ static void test_channels(void)
 	wr(&s, HCCHAR0, 0x100);
 	wr(&s, GRSTCTL, 1);
 	CHECK_EQ(rd(&s, HCCHAR0), 0x100);
+	teardown(&s);
+}
+
+/* Each register keeps what the model keeps of it, and no other changes. */
+static void test_register_values(void)
+{
+	static const struct {
+		uint64_t offset;
+		uint32_t value, read;
+	} regs[] = {
+		{GOTGCTL, 0x00000003, 0x00000003},
+		{GOTGINT, 0xffffffff, 0},
+		{GAHBCFG, 0x00000021, 0x00000021},
+		{GUSBCFG, 0x00001407, 0x00001407},
+		{GRSTCTL, 0x1fu << 6, 0x1fu << 6 | 1u << 31},
+		{GINTSTS, 0xffffffff, 1},
+		{GINTMSK, 0x0f000000, 0x0f000000},
+		{GRXFSIZ, 0x12345678, 0x00005678},
+		{GNPTXFSIZ, 0x01000306, 0x01000306},
+		{GI2CCTL, 0x00000011, 0x00000011},
+		{GPVNDCTL, 0x00000022, 0x00000022},
+		{GGPIO, 0x00330000, 0x00330000},
+		{GUID, 0x00001234, 0x00001234},
+		{HPTXFSIZ, 0x02000400, 0x02000400},
+		{HCFG, 0x00000001, 0x00000001},
+		{HFIR, 0x0001ea60, 0x0000ea60},
+		{HAINTMSK, 0xffffffff, 0x000000ff},
+		{PCGCCTL, 0x00000001, 0x00000001},
+		{HCCHAR0 + 0xa0, 0x00d8a200, 0x00d8a200}, /* channel 5 */
+		{HCCHAR0 + 0xa4, 0x80000123, 0x80000123},
+		{HCINT0 + 0xa0, 0xffffffff, 0},
+		{HCINTMSK0 + 0xa0, 0x000007ff, 0x000007ff},
+		{HCCHAR0 + 0xb0, 0x80080040, 0x80080040},
+		{HCCHAR0 + 0xb4, 0x12345678, 0x12345678},
+	};
+	const size_t n = ARRAY_SIZE(regs);
+	uint32_t base[ARRAY_SIZE(regs)], reset[ARRAY_SIZE(regs)];
+	Setup s;
+
+	setup(&s);
+	for (size_t i = 0; i < n; i++)
+		reset[i] = rd(&s, regs[i].offset);
+	for (size_t i = 0; i < n; i++)
+		wr(&s, regs[i].offset, 0);
+	for (size_t i = 0; i < n; i++)
+		base[i] = rd(&s, regs[i].offset);
+	for (size_t i = 0; i < n; i++) {
+		wr(&s, regs[i].offset, regs[i].value);
+		for (size_t j = 0; j < n; j++)
+			CHECK_EQ(rd(&s, regs[j].offset), i == j ? regs[j].read : base[j]);
+		wr(&s, regs[i].offset, 0);
+	}
+	CHECK_EQ(rd(&s, HPTXSTS), 8u << 16); /* the queue: 8 spaces */
+	wr(&s, HPTXFSIZ, 0x02000400);
+	CHECK_EQ(rd(&s, HPTXSTS), 8u << 16 | 0x0200);
+	/* A board reset brings back every value of the reset. */
+	for (size_t i = 0; i < n; i++)
+		wr(&s, regs[i].offset, regs[i].value);
+	dwc2_reset(s.d);
+	for (size_t i = 0; i < n; i++)
+		CHECK_EQ(rd(&s, regs[i].offset), reset[i]);
+	/* A halt of an idle channel sets CHHLTD; HCINT clears what is written. */
+	wr(&s, HCCHAR0 + 0x20, CHENA | CHDIS);
+	CHECK_EQ(rd(&s, HCINT0 + 0x20), CHHLTD);
+	wr(&s, HCINT0 + 0x20, 1u << 4);
+	CHECK_EQ(rd(&s, HCINT0 + 0x20), CHHLTD);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
 }
 
@@ -435,13 +510,224 @@ static void test_transfers(void)
 	machine_destroy(s.m);
 }
 
+/* A device with two bulk endpoints: 1 IN, from fake_in; 2 OUT, to fake_out. */
+static uint8_t fake_in_data[700], fake_out_data[2048];
+static size_t fake_in_pos, fake_out_len;
+
+static UsbResult fake_in(UsbDevice *d, unsigned ep, uint8_t *buf, size_t max,
+                         size_t *len)
+{
+	size_t n = sizeof(fake_in_data) - fake_in_pos;
+
+	(void)d;
+	if (ep != 1)
+		return USB_STALL;
+	n = n < max ? n : max;
+	memcpy(buf, fake_in_data + fake_in_pos, n);
+	fake_in_pos += n;
+	*len = n;
+	return USB_ACK;
+}
+
+static UsbResult fake_out(UsbDevice *d, unsigned ep, const uint8_t *buf,
+                          size_t len)
+{
+	(void)d;
+	if (ep != 2 || fake_out_len + len > sizeof(fake_out_data))
+		return USB_STALL;
+	memcpy(fake_out_data + fake_out_len, buf, len);
+	fake_out_len += len;
+	return USB_ACK;
+}
+
+static const uint8_t fake_device[18] = {
+	18, 1, 0, 2, 0xff, 0, 0, 64, 0x34, 0x12, 0x78, 0x56, 0, 1, 0, 0, 0, 1};
+static const uint8_t fake_config[32] = {
+	9, 2, 32, 0, 1,    1, 0, 0x80, 50, 9, 4, 0,    0, 2, 0xff, 0,
+	0, 0, 7,  5, 0x81, 2, 0, 2,    0,  7, 5, 0x02, 2, 0, 2,    0,
+};
+static const UsbDeviceClass fake_class = {
+	.device = fake_device,
+	.config = fake_config,
+	.alternates = 1,
+	.in = fake_in,
+	.out = fake_out,
+};
+
+/* The root port powered, reset, and enabled; its change bits clear. */
+static void port_up(Setup *s)
+{
+	wr(s, HPRT0, 1u << 12);
+	wr(s, HPRT0, 1u << 12 | 1u << 8);
+	event_queue_run_until(&s->m->events, s->m->events.now + 50000000);
+	wr(s, HPRT0, 1u << 12);
+	wr(s, HPRT0, 1u << 12 | 0xa);
+	CHECK_EQ(rd(s, HPRT0), 1u << 12 | 5);
+}
+
+/* A transfer on channel n from dma; returns HCINT once it is done. */
+static uint32_t xfer(Setup *s, unsigned n, uint32_t hcchar, uint32_t hctsiz,
+                     uint32_t dma)
+{
+	uint64_t at = 0x20 * n;
+
+	wr(s, HCTSIZ0 + at, hctsiz);
+	wr(s, HCDMA0 + at, dma);
+	wr(s, HCINT0 + at, 0x3fff);
+	wr(s, HCCHAR0 + at, CHENA | hcchar);
+	for (int i = 0; i < 100000 && (rd(s, HCCHAR0 + at) & CHENA); i++)
+		event_queue_run_until(&s->m->events, s->m->events.now + 1);
+	return rd(s, HCINT0 + at);
+}
+
+/* Bulk transfers of several packets, both ways, at address 5. */
+static void test_bulk(void)
+{
+	const uint32_t done = XFERCOMPL | ACKED | CHHLTD;
+	Setup s;
+	UsbDevice dev;
+	uint8_t out[1100], in[1024];
+
+	setup(&s);
+	CHECK_EQ(bus_map_ram(s.m->bus, "ram", 0, 0x200000), BUS_OK);
+	usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+	dwc2_attach(s.d, &dev);
+	port_up(&s);
+	dev.address = 5; /* as SET_ADDRESS and SET_CONFIGURATION leave it */
+	dev.config = 1;
+	for (size_t i = 0; i < sizeof(out); i++)
+		out[i] = (uint8_t)(i * 7 + 1);
+	for (size_t i = 0; i < sizeof(fake_in_data); i++)
+		fake_in_data[i] = (uint8_t)(i * 3 + 2);
+	CHECK_EQ(bus_write_block(s.m->bus, RAM + 0xff, out, sizeof(out)), BUS_OK);
+
+	/* OUT: 512, 512 and 76 bytes; DOPNG and the alias bits stay. */
+	fake_out_len = 0;
+	CHECK_EQ(xfer(&s, 1, hcchar(5, 2, false, 2, 512),
+	              1u << 31 | 3u << 19 | 1100, ALIAS | (RAM + 0xff)),
+	         done);
+	CHECK(fake_out_len == 1100 && memcmp(fake_out_data, out, 1100) == 0);
+	CHECK_EQ(rd(&s, HCTSIZ0 + 0x20), 1u << 31 | PID_DATA1);
+	CHECK_EQ(rd(&s, HCDMA0 + 0x20), ALIAS | (RAM + 0xff + 1100));
+	/* IN: 512, then 188 short of 512; 324 bytes not used. */
+	fake_in_pos = 0;
+	CHECK_EQ(xfer(&s, 0, hcchar(5, 1, true, 2, 512), 2u << 19 | 1024, RAM),
+	         done);
+	CHECK_EQ(bus_read_block(s.m->bus, RAM, in, 700), BUS_OK);
+	CHECK(memcmp(in, fake_in_data, 700) == 0);
+	CHECK_EQ(rd(&s, HCTSIZ0), 324);
+	/* Packets of 1024 bytes, the most there are. */
+	fake_in_pos = 0;
+	CHECK_EQ(xfer(&s, 0, hcchar(5, 1, true, 2, 1024), 1u << 19 | 1024, RAM),
+	         done);
+	CHECK_EQ(rd(&s, HCTSIZ0), PID_DATA1 | 324);
+	/* A channel's interrupt reaches the line when the transfer ends. */
+	wr(&s, GAHBCFG, 1);
+	wr(&s, GINTMSK, 1u << 25);
+	wr(&s, HAINTMSK, 1);
+	wr(&s, HCINTMSK0, XFERCOMPL);
+	fake_in_pos = 0;
+	CHECK_EQ(xfer(&s, 0, hcchar(5, 1, true, 2, 512), 2u << 19 | 1024, RAM),
+	         done);
+	CHECK(irq_level(&s.irq));
+	CHECK_EQ(rd(&s, HAINT), 1);
+	/* A board reset drops it. */
+	dwc2_reset(s.d);
+	CHECK(!irq_level(&s.irq));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+
+	/* Packets of 0 or of 1025 bytes stop the machine. */
+	for (unsigned mps = 0; mps <= 1025; mps += 1025) {
+		setup(&s);
+		usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+		dwc2_attach(s.d, &dev);
+		port_up(&s);
+		wr(&s, HCTSIZ0, 1u << 19 | 8);
+		wr(&s, HCCHAR0, CHENA | hcchar(0, 1, true, 2, mps));
+		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+		teardown(&s);
+	}
+}
+
+/*
+ * A running transfer: a soft reset or a board reset halts it, and its
+ * end does not come after.
+ */
+static void test_halts(void)
+{
+	Setup s;
+	UsbDevice dev;
+
+	for (int board = 0; board < 2; board++) {
+		setup(&s);
+		CHECK_EQ(bus_map_ram(s.m->bus, "ram", 0, 0x200000), BUS_OK);
+		usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+		dwc2_attach(s.d, &dev);
+		port_up(&s);
+		dev.config = 1;
+		fake_in_pos = 0;
+		wr(&s, HCTSIZ0 + 0x20, 2u << 19 | 1024);
+		wr(&s, HCDMA0 + 0x20, RAM);
+		wr(&s, HCCHAR0 + 0x20, CHENA | hcchar(0, 1, true, 2, 512));
+		CHECK(rd(&s, HCCHAR0 + 0x20) & CHENA);
+		if (board)
+			dwc2_reset(s.d);
+		else
+			wr(&s, GRSTCTL, 1);
+		CHECK_EQ(rd(&s, HCCHAR0 + 0x20) & (CHENA | CHDIS), 0);
+		event_queue_run_until(&s.m->events, s.m->events.now + 1000000);
+		CHECK_EQ(rd(&s, HCINT0 + 0x20) & XFERCOMPL, 0);
+		CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+		teardown(&s);
+	}
+}
+
+/* The root port: power, connect, reset, and the microframes. */
+static void test_root_port(void)
+{
+	Setup s;
+	UsbDevice dev;
+
+	setup(&s);
+	usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+	dwc2_attach(s.d, &dev);
+	wr(&s, HPRT0, 0); /* without power, no connection to see */
+	CHECK_EQ(rd(&s, HPRT0), 0);
+	port_up(&s);
+	/* HFNUM: the frame number and the time left, from the enable. */
+	event_queue_run_until(&s.m->events, s.m->events.now + 100 * 125000);
+	CHECK_EQ(rd(&s, HFNUM), 7500u << 16 | 100);
+	/* A reset disables the port; its end resets the device. */
+	dev.address = 5;
+	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	CHECK_EQ(rd(&s, HPRT0) & 4, 0);
+	wr(&s, HPRT0, 1u << 12);
+	CHECK_EQ(dev.address, 0);
+	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 0xd);
+	/* ENCHNG alone raises PRTINT; writing it 1 clears it. */
+	CHECK_EQ(rd(&s, GINTSTS), 1u << 24 | 1);
+	wr(&s, HPRT0, 1u << 12 | 8);
+	CHECK_EQ(rd(&s, GINTSTS), 1);
+	/* A reset that ends without power does not enable the port. */
+	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	wr(&s, HPRT0, 0);
+	CHECK_EQ(rd(&s, HPRT0) & 4, 0);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
 int main(void)
 {
 	RUN_TEST(test_identity);
 	RUN_TEST(test_resets);
 	RUN_TEST(test_port);
 	RUN_TEST(test_channels);
+	RUN_TEST(test_register_values);
 	RUN_TEST(test_stops);
 	RUN_TEST(test_transfers);
+	RUN_TEST(test_bulk);
+	RUN_TEST(test_halts);
+	RUN_TEST(test_root_port);
 	return test_summary();
 }
