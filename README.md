@@ -63,6 +63,10 @@ a few minutes, so only the `release` and `ci-release` builds run it
 smirror reads from an SD card: the MBR, FAT, `config.txt` and device
 trees, each for SECONDS (60 by default).
 
+`scripts/bench.sh` measures the speed of a `release` build: a loop of
+200 million instructions, and U-Boot from power on to its prompt (with
+the card above), each the best of 3 runs.
+
 ```sh
 make test                  # build and run the tests
 ./build/debug/smirror -version
