@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Huy Luong Duc
 #
 # Measure how fast smirror runs a guest: a loop of 200 million
-# instructions, and U-Boot from power on to its prompt.
+# instructions, and U-Boot from power on to its prompt, with each clock.
 #
 # Usage: scripts/bench.sh [BUILD]
 #
@@ -80,6 +80,9 @@ type \x20
 expect U-Boot>
 quit
 EOF
-t=$(best "$DRIVE" "$CARD" "$WORK/card.img" "$WORK/uboot.txt" "$SMIRROR" \
-	-M raspi3b -sd "$WORK/card.img")
-echo "$t" | awk '{ printf "u-boot: %7.3f s to the prompt\n", $1 }'
+for clock in virtual host; do
+	t=$(best "$DRIVE" "$CARD" "$WORK/card.img" "$WORK/uboot.txt" "$SMIRROR" \
+		-M raspi3b -clock $clock -sd "$WORK/card.img")
+	echo "$t $clock" |
+		awk '{ printf "u-boot: %7.3f s to the prompt, -clock %s\n", $1, $2 }'
+done
