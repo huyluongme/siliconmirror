@@ -4,7 +4,8 @@
 /*
  * Unit tests for src/cpu/arm64/exclusive.c and the exclusive monitors of
  * cpu.c: the Load-Exclusive and Store-Exclusive instructions, LDAR and
- * STLR, CLREX, the monitors of two PEs, and WFE woken by a write.
+ * STLR, CLREX, the monitors of two PEs, and WFE woken by a write; and
+ * for LDTR and STTR, in load_store.c.
  */
 
 #include <stdint.h>
@@ -91,9 +92,16 @@ static uint32_t stlr(unsigned size, unsigned rt, unsigned rn)
 #define ERET 0xd69f03e0u
 #define STR_X0_X1 0xf9000020u /* STR X0, [X1] */
 #define LDR_X0_X1 0xf9400020u /* LDR X0, [X1] */
+#define LDTR_X0_X1 0xf8400820u
+#define STTR_X0_X1 0xf8000820u
+#define LDTRSB_X0_X1 0x38800820u
 #define DC_ZVA_X1 0xd50b7421u
 #define STRH_W0_X1 0x79000020u
 #define STRB_W0_X1 0x39000020u
+#define LDUR_X0_X1 0xf8400020u
+#define LDR_POST 0xf8408420u /* LDR X0, [X1], #8 */
+#define LDR_PRE 0xf8408c20u  /* LDR X0, [X1, #8]! */
+#define LDR_REG 0xf8626820u  /* LDR X0, [X1, X2] */
 
 static void put(Machine *m, uint64_t pa, uint64_t value)
 {
@@ -481,6 +489,59 @@ static void test_undefined(void)
 	machine_destroy(m);
 }
 
+/* LDTR and STTR check EL0's permissions at EL1. */
+static void test_unprivileged(void)
+{
+	Arm64Cpu *a, *b;
+	Machine *m = two_pes(&a, &b);
+
+	mmu_on(m, a, 1);
+	put(m, EL1_ONLY, 0x80);
+	put(m, EL0_RW, 0x81);
+	a->x[1] = EL1_ONLY;
+	run(a, LDR_X0_X1);
+	CHECK_EQ(a->x[0], 0x80);
+	aborts(a, LDTR_X0_X1, 0x0f); /* permission fault, level 3 */
+	run(a, LDR_X0_X1);           /* EL1's page entry is still there */
+	run(a, LDUR_X0_X1);
+	a->x[2] = 0;
+	run(a, LDR_REG);
+	run(a, LDR_POST);
+	a->x[1] = EL1_ONLY;
+	run(a, LDR_PRE);
+	a->x[1] = EL1_ONLY;
+	a->x[1] = EL0_RW;
+	run(a, LDTR_X0_X1);
+	CHECK_EQ(a->x[0], 0x81);
+	run(a, LDTRSB_X0_X1);
+	CHECK_EQ(a->x[0], 0xffffffffffffff81);
+	put(m, EL0_RW + 8, 0x82);
+	run(a, 0xf8408820); /* LDTR X0, [X1, #8]: no writeback */
+	CHECK_EQ(a->x[0], 0x82);
+	CHECK_EQ(a->x[1], EL0_RW);
+	a->x[0] = 0x55;
+	run(a, STTR_X0_X1);
+	CHECK_EQ(get(m, EL0_RW), 0x55);
+	a->x[1] = ALL_RO;
+	run(a, LDTR_X0_X1);
+	aborts(a, STTR_X0_X1, 0x0f);
+
+	/* At EL0 and at EL3, they are LDR and STR. */
+	a->el = 0;
+	a->x[1] = EL0_RW;
+	run(a, LDTR_X0_X1);
+	CHECK_EQ(a->x[0], 0x55);
+	mmu_on(m, b, 3);
+	b->x[1] = EL1_ONLY;
+	run(b, LDTR_X0_X1);
+	CHECK_EQ(b->x[0], 0x80);
+
+	/* No prefetch and no SIMD&FP register in the class. */
+	CHECK_EQ(arm64_execute(a, 0xf8800820), ARM64_EXEC_UNDEFINED); /* opc 2 */
+	CHECK_EQ(arm64_execute(a, 0x3c400820), ARM64_EXEC_UNDEFINED); /* V */
+	machine_destroy(m);
+}
+
 /*
  * First, with no monitor marked before: the count of marked monitors
  * that spares the search must follow every mark and clear.
@@ -701,6 +762,7 @@ int main(void)
 	RUN_TEST(test_ordered);
 	RUN_TEST(test_memory_types);
 	RUN_TEST(test_undefined);
+	RUN_TEST(test_unprivileged);
 	RUN_TEST(test_write_paths);
 	RUN_TEST(test_attributes);
 	RUN_TEST(test_registers_and_errors);

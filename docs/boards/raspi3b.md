@@ -69,7 +69,8 @@ write of another core to the block clears it and wakes that core from
 they take no part in the cores' cache coherence. The A53 sends an
 exclusive access to memory that is not Normal Write-Back, or with the
 data cache off, to a monitor on its AXI bus; whether the BCM2837 has one
-is not known, so smirror stops there.
+is not known, so smirror stops there. `LDTR` and `STTR` at EL1 check
+EL0's permissions.
 
 The performance monitors (`cpu/arm64/pmu.c`) have the Cortex-A53's 6
 event counters and its cycle counter, with `PMCR_EL0` resetting to

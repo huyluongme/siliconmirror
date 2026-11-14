@@ -152,3 +152,15 @@ Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
 {
 	return data_access(c, address, size, true, &value, c->el);
 }
+
+Arm64Exec arm64_mem_read_as(Arm64Cpu *c, uint64_t address, unsigned size,
+                            unsigned el, uint64_t *value)
+{
+	return data_access(c, address, size, false, value, el);
+}
+
+Arm64Exec arm64_mem_write_as(Arm64Cpu *c, uint64_t address, unsigned size,
+                             unsigned el, uint64_t value)
+{
+	return data_access(c, address, size, true, &value, el);
+}

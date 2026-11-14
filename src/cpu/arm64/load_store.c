@@ -6,12 +6,17 @@
  * clear. Each one follows its description in C6.2.
  *
  * Implemented so far: the general-purpose register forms with an
- * immediate offset (unsigned offset, unscaled, pre-index and post-index)
- * or a register offset, the literal forms, the register pairs, the
- * prefetches, which are hints with no effect here, and the exclusive and
- * ordered class, which is in exclusive.c. The SIMD&FP forms and the
- * unprivileged forms are not implemented yet. Classes that only hold
- * instructions newer than Armv8.0 are UNDEFINED.
+ * immediate offset (unsigned offset, unscaled, unprivileged, pre-index
+ * and post-index) or a register offset, the literal forms, the register
+ * pairs, the prefetches, which are hints with no effect here, and the
+ * exclusive and ordered class, which is in exclusive.c. The SIMD&FP forms
+ * are not implemented yet. Classes that only hold instructions newer than
+ * Armv8.0 are UNDEFINED.
+ *
+ * The unprivileged forms, LDTR and STTR and their byte, halfword and
+ * signed variants (C6.2.245 to C6.2.252, C6.2.435 to C6.2.437), check
+ * the permissions of EL0 when they run at EL1, as AArch64.CheckPermission()
+ * does for an unprivileged access; elsewhere they are LDUR and STUR.
  *
  * Where the manual leaves a choice of CONSTRAINED UNPREDICTABLE
  * behaviors, this model makes these:
@@ -84,7 +89,7 @@ static uint64_t loaded_value(const RegisterAccess *access, uint64_t data)
  */
 static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
                                      uint64_t offset, bool wback,
-                                     bool postindex)
+                                     bool postindex, bool unprivileged)
 {
 	RegisterAccess access;
 	unsigned n = field32(insn, 9, 5);
@@ -98,7 +103,7 @@ static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
 		return ARM64_EXEC_UNDEFINED;
 	if (access.prefetch) {
 		/* Only the unsigned offset and unscaled classes have them. */
-		if (wback)
+		if (wback || unprivileged)
 			return ARM64_EXEC_UNDEFINED;
 		return ARM64_EXEC_OK; /* a hint: no access, no fault */
 	}
@@ -108,18 +113,19 @@ static Arm64Exec load_store_register(Arm64Cpu *c, uint32_t insn,
 		return result;
 
 	uint64_t address = get_xsp(c, n);
+	unsigned el = unprivileged && c->el == 1 ? 0 : c->el;
 
 	if (!postindex)
 		address += offset;
 
 	if (access.store) {
-		result = arm64_mem_write(c, address, access.size, get_x(c, t));
+		result = arm64_mem_write_as(c, address, access.size, el, get_x(c, t));
 		if (result != ARM64_EXEC_OK)
 			return result;
 	} else {
 		uint64_t data;
 
-		result = arm64_mem_read(c, address, access.size, &data);
+		result = arm64_mem_read_as(c, address, access.size, el, &data);
 		if (result != ARM64_EXEC_OK)
 			return result;
 		set_x(c, t, loaded_value(&access, data));
@@ -285,7 +291,8 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 		unsigned scale = field32(insn, 31, 30);
 		uint64_t imm12 = field32(insn, 21, 10);
 
-		return load_store_register(c, insn, imm12 << scale, false, false);
+		return load_store_register(c, insn, imm12 << scale, false, false,
+		                           false);
 	}
 	if (bit32(insn, 21)) {
 		switch (field32(insn, 11, 10)) {
@@ -301,7 +308,7 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 			return load_store_register(
 				c, insn,
 				extend_reg(c, field32(insn, 20, 16), option, shift, 64), false,
-				false);
+				false, false);
 		}
 		default: /* LDRAA and LDRAB: FEAT_PAuth */
 			return ARM64_EXEC_UNDEFINED;
@@ -309,12 +316,14 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 	}
 	switch (field32(insn, 11, 10)) {
 	case 0: /* unscaled immediate */
-		return load_store_register(c, insn, imm9, false, false);
+		return load_store_register(c, insn, imm9, false, false, false);
 	case 1: /* immediate post-indexed */
-		return load_store_register(c, insn, imm9, true, true);
-	case 2: /* unprivileged */
-		return ARM64_EXEC_UNIMPLEMENTED;
+		return load_store_register(c, insn, imm9, true, true, false);
+	case 2: /* unprivileged: no SIMD&FP forms */
+		if (bit32(insn, 26))
+			return ARM64_EXEC_UNDEFINED;
+		return load_store_register(c, insn, imm9, false, false, true);
 	default: /* immediate pre-indexed */
-		return load_store_register(c, insn, imm9, true, false);
+		return load_store_register(c, insn, imm9, true, false, false);
 	}
 }

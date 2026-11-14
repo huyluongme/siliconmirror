@@ -469,6 +469,15 @@ Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
                           uint64_t value);
 
 /*
+ * The same, with the permissions of el in the current translation
+ * regime: EL0's for LDTR and STTR at EL1.
+ */
+Arm64Exec arm64_mem_read_as(Arm64Cpu *c, uint64_t address, unsigned size,
+                            unsigned el, uint64_t *value);
+Arm64Exec arm64_mem_write_as(Arm64Cpu *c, uint64_t address, unsigned size,
+                             unsigned el, uint64_t value);
+
+/*
  * The exclusive monitors. arm64_exec_exclusive(), from exclusive.c,
  * executes the Load/store exclusive class of C4.1. From cpu.c:
  * arm64_monitor_mark() puts the PE's monitor in the Exclusive Access

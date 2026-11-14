@@ -469,7 +469,6 @@ static void test_unallocated(void)
 static void test_not_implemented_yet(void)
 {
 	static const uint32_t insns[] = {
-		0xf8400820, /* LDTR X0, [X1] */
 		0x3dc00020, /* LDR Q0, [X1] */
 		0x4c407020, /* LD1 {V0.16B}, [X1] */
 		0x5c000040, /* LDR D0, . + 8 */
