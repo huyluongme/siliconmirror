@@ -150,7 +150,7 @@ static void test_partition(void)
 	CHECK_EQ(bcm2835_pm_partition(s.pm), 0);
 	wr(&s, RSTS, PW | 0x555);
 	CHECK_EQ(bcm2835_pm_partition(s.pm), BCM2835_PM_HALT_PARTITION);
-	wr(&s, RSTS, PW | 0x2aa); /* the odd bits are not part of it */
+	wr(&s, RSTS, PW | 0x12aa); /* the odd bits and bit 12 are not part */
 	CHECK_EQ(bcm2835_pm_partition(s.pm), 0);
 	wr(&s, RSTS, PW | 0x001);
 	CHECK_EQ(bcm2835_pm_partition(s.pm), 1);
@@ -168,6 +168,49 @@ static void test_partition(void)
 	advance(&s, 10000000);
 	CHECK(!s.m->reset_pending);
 	teardown(&s);
+}
+
+/* A write changes its register only; WDOG keeps 20 bits. */
+static void test_registers_apart(void)
+{
+	Setup s;
+
+	setup(&s);
+	wr(&s, WDOG, PW | 0xffffff);
+	CHECK_EQ(rd(&s, WDOG), 0xfffff);
+	wr(&s, RSTS, PW | 0x123456);
+	wr(&s, RSTC, PW | 0x000101);
+	CHECK_EQ(rd(&s, RSTS), 0x123456);
+	CHECK_EQ(rd(&s, RSTC), 0x101);
+	CHECK_EQ(rd(&s, WDOG), 0xfffff);
+	wr(&s, RSTS, PW | 0x000555);
+	CHECK_EQ(rd(&s, RSTC), 0x101);
+	CHECK_EQ(rd(&s, WDOG), 0xfffff);
+	/*
+	 * Linux keeps RSTC's other bits when it starts the watchdog: they
+	 * do not make it a reset other than full.
+	 */
+	wr(&s, WDOG, PW | 10);
+	wr(&s, RSTC, PW | 0x121);
+	CHECK_EQ(rd(&s, RSTC), 0x121);
+	advance(&s, 1000000);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	CHECK(s.m->reset_pending);
+	teardown(&s);
+}
+
+/* Destroyed while it runs, it leaves the event queue. */
+static void test_destroy_running(void)
+{
+	Setup s;
+
+	setup(&s);
+	wr(&s, WDOG, PW | 10);
+	wr(&s, RSTC, PW | 0x20);
+	bcm2835_pm_destroy(s.pm);
+	advance(&s, 1000000);
+	CHECK(!s.m->reset_pending);
+	machine_destroy(s.m);
 }
 
 /* What stops the machine. */
@@ -211,6 +254,8 @@ int main(void)
 	RUN_TEST(test_watchdog_resets);
 	RUN_TEST(test_stop_and_ping);
 	RUN_TEST(test_partition);
+	RUN_TEST(test_registers_apart);
+	RUN_TEST(test_destroy_running);
 	RUN_TEST(test_unmodelled);
 	return test_summary();
 }
