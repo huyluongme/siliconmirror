@@ -21,9 +21,10 @@ Arm64Cpu *arm64_cpu_of(Cpu *cpu)
 
 /*
  * Reset into AArch64 state, after AArch64_TakeReset() in J1.2.2.30. The
- * general-purpose registers, NZCV, the stack pointers and the Event
- * Register (D1.7.1.1) are UNKNOWN after reset; this model clears them so
- * that every run is the same.
+ * general-purpose and SIMD&FP registers, NZCV, the stack pointers and the
+ * Event Register (D1.7.1.1) are UNKNOWN after reset; this model clears
+ * them so that every run is the same. FPCR and FPSR reset to 0, as the
+ * Cortex-A53 does (DDI 0502G, 2.2).
  */
 static void arm64_reset(Cpu *base)
 {
@@ -31,6 +32,9 @@ static void arm64_reset(Cpu *base)
 
 	memset(c->x, 0, sizeof(c->x));
 	memset(c->sp_el, 0, sizeof(c->sp_el));
+	memset(c->v, 0, sizeof(c->v));
+	c->fpcr = 0;
+	c->fpsr = 0;
 	c->nzcv = 0;
 	c->el = c->config.highest_el;
 	c->sp_sel = true; /* PSTATE.SP = '1' */

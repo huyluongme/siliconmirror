@@ -18,6 +18,8 @@
 /* Special-purpose registers, C5.2. */
 #define ARM64_NZCV ARM64_SYSREG(3, 3, 4, 2, 0)
 #define ARM64_DAIF ARM64_SYSREG(3, 3, 4, 2, 1)
+#define ARM64_FPCR ARM64_SYSREG(3, 3, 4, 4, 0)
+#define ARM64_FPSR ARM64_SYSREG(3, 3, 4, 4, 1)
 #define ARM64_CURRENTEL ARM64_SYSREG(3, 0, 4, 2, 2)
 #define ARM64_SPSEL ARM64_SYSREG(3, 0, 4, 2, 0)
 #define ARM64_SP_EL0 ARM64_SYSREG(3, 0, 4, 1, 0)

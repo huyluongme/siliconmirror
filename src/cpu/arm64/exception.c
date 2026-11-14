@@ -371,6 +371,49 @@ Arm64Exec arm64_check_wfx_trap(Arm64Cpu *c, bool wfe)
 }
 
 /*
+ * AArch64_CheckFPEnabled() and AArch64_CheckFPAdvSIMDTrap(), J1.2.2: the
+ * first of CPACR_EL1.FPEN at EL0 and EL1, CPTR_EL2.TFP below EL3 with EL2
+ * enabled, and CPTR_EL3.TFP that disables the SIMD&FP registers. The
+ * Armv8.0 model has neither FEAT_VHE, which would give CPTR_EL2 an FPEN
+ * field, nor the EL3 UNDEFINED priority of FEAT_Debugv8p8 (EL3SDDUndef).
+ */
+unsigned arm64_fp_trap_target(const Arm64Cpu *c)
+{
+	unsigned fpen = (c->sys.cpacr_el1 >> ARM64_CPACR_FPEN_SHIFT) & 3;
+
+	/* FPEN: x0 traps EL0 and EL1, 01 EL0 only, 11 nothing. */
+	if (c->el <= 1 && (!(fpen & 1) || (fpen == 1 && c->el == 0)))
+		return 1;
+	if (c->el <= 2 && arm64_el2_enabled(c) &&
+	    (c->sys.cptr_el2 & ARM64_CPTR_TFP))
+		return 2;
+	if (c->config.highest_el == 3 && (c->sys.cptr_el3 & ARM64_CPTR_TFP))
+		return 3;
+	return 0;
+}
+
+/*
+ * AArch64_AdvSIMDFPAccessTrap(), J1.2.2, for an instruction, and
+ * AArch64_SystemAccessTrap() with EC 0x07 for MRS and MSR of FPCR and
+ * FPSR: EC 0x07 with ConditionSyndrome(), CV = 1 and COND = 1110. But a
+ * trap to EL1 goes to EL2 as an Unknown reason exception when HCR_EL2.TGE
+ * is set, from EL0 for both and from EL1 too for an instruction.
+ */
+Arm64Exec arm64_fp_trap(Arm64Cpu *c, unsigned target, bool instruction)
+{
+	if (target == 1 && route(c, instruction) == 2)
+		return arm64_raise(c, 2, ARM64_EC_UNKNOWN, 0);
+	return arm64_raise(c, target, ARM64_EC_FP_ACCESS, UINT32_C(0x1e) << 20);
+}
+
+Arm64Exec arm64_check_fp_enabled(Arm64Cpu *c)
+{
+	unsigned target = arm64_fp_trap_target(c);
+
+	return target == 0 ? ARM64_EXEC_OK : arm64_fp_trap(c, target, true);
+}
+
+/*
  * CheckSPAlignment(), J1.2.3.113, for a load or store whose base is SP:
  * SCTLR_ELx.SA, or SCTLR_EL1.SA0 at EL0, asks for 16-byte alignment.
  * AArch64_SPAlignmentFault(), J1.2.2.11.

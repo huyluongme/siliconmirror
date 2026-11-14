@@ -13,10 +13,17 @@
  * IMPLEMENTATION DEFINED registers. The Generic Timer registers have
  * their own access rules and values, in timer.c.
  *
- * A core has registers that this model does not implement yet: debug,
- * performance monitors, floating-point, and the System registers of
- * AArch32. The CPU model lists them, and using one stops
- * the machine as "not implemented yet". Other encodings are UNDEFINED.
+ * A core has registers that this model does not implement yet: some
+ * debug registers and the System registers of AArch32. The CPU model
+ * lists them, and using one stops the machine as "not implemented yet".
+ * Other encodings are UNDEFINED.
+ *
+ * FPCR and FPSR hold the bits that the Cortex-A53 implements (Cortex-A53
+ * Advanced SIMD and Floating-point Extension TRM, DDI 0502G, 2.3.1 and
+ * 2.3.2): AHP, DN, FZ and RMode of FPCR; N, Z, C, V, QC, IDC, IXC, UFC,
+ * OFC, DZC and IOC of FPSR. The others read as 0: the A53 has no Len and
+ * Stride, and no floating-point exception traps, so that their enable
+ * bits are RAZ/WI (C5.2.8).
  *
  * Writing SCTLR_ELx to turn on big-endian data for the current Exception
  * level also stops the machine: it is not implemented yet. Writes of the
@@ -52,6 +59,8 @@ typedef enum Kind {
 	KIND_RVBAR,  /* the reset address */
 	KIND_ZERO,   /* reads as 0 */
 	KIND_TIMER,  /* a Generic Timer register, timer.c */
+	KIND_FPCR,   /* FPCR, of which the core has some bits */
+	KIND_FPSR,
 } Kind;
 
 /* Access rules. */
@@ -70,7 +79,11 @@ enum {
 	TRAP_MDCR_EL2 = 1 << 11, /* EL2 traps to EL3 on MDCR_EL3.TDA */
 	RMR = 1 << 12,           /* check the bits that are not implemented */
 	TLB = 1 << 13,           /* writes empty the TLB */
+	TRAP_FP = 1 << 14,       /* the traps of SIMD&FP, arm64_fp_trap_target() */
 };
+
+#define FPCR_BITS UINT32_C(0x07c00000) /* AHP, DN, FZ and RMode */
+#define FPSR_BITS UINT32_C(0xf800009f) /* NZCV, QC and the cumulative bits */
 
 typedef struct SysReg {
 	uint16_t encoding;
@@ -160,6 +173,8 @@ static const SysReg sysregs[] = {
 	SPECIAL(ARM64_DCZID_EL0, "DCZID_EL0", 0, RO, KIND_DCZID),
 	SPECIAL(ARM64_NZCV, "NZCV", 0, 0, KIND_NZCV),
 	SPECIAL(ARM64_DAIF, "DAIF", 0, EL0_UMA, KIND_DAIF),
+	SPECIAL(ARM64_FPCR, "FPCR", 0, TRAP_FP, KIND_FPCR),
+	SPECIAL(ARM64_FPSR, "FPSR", 0, TRAP_FP, KIND_FPSR),
 	FIELD(ARM64_TPIDR_EL0, "TPIDR_EL0", 0, 0, sys.tpidr[0]),
 	FIELD(ARM64_TPIDRRO_EL0, "TPIDRRO_EL0", 0, EL0_RO, sys.tpidrro_el0),
 	TIMER(ARM64_CNTFRQ_EL0, "CNTFRQ_EL0", 0, 0),
@@ -419,6 +434,12 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 		return true;
 	case KIND_TIMER:
 		return arm64_timer_read(c, r->encoding, value);
+	case KIND_FPCR:
+		*value = c->fpcr;
+		return true;
+	case KIND_FPSR:
+		*value = c->fpsr;
+		return true;
 	}
 	return false;
 }
@@ -465,6 +486,12 @@ static Arm64Exec write_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t value)
 	case KIND_TIMER:
 		arm64_timer_write(c, r->encoding, value);
 		return ARM64_EXEC_OK;
+	case KIND_FPCR:
+		c->fpcr = (uint32_t)value & FPCR_BITS;
+		return ARM64_EXEC_OK;
+	case KIND_FPSR:
+		c->fpsr = (uint32_t)value & FPSR_BITS;
+		return ARM64_EXEC_OK;
 	default: /* the read-only kinds never get here */
 		return ARM64_EXEC_UNDEFINED;
 	}
@@ -500,6 +527,11 @@ static Arm64Exec access_sysreg(Arm64Cpu *c, const SysReg *r, uint32_t insn)
 
 	unsigned target;
 
+	if (r->flags & TRAP_FP) {
+		target = arm64_fp_trap_target(c);
+		if (target != 0)
+			return arm64_fp_trap(c, target, false);
+	}
 	if (r->kind == KIND_TIMER) {
 		int timer_target = arm64_timer_trap(c, r->encoding, read);
 

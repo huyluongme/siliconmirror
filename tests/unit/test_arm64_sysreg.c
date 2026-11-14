@@ -529,10 +529,11 @@ static void test_unimplemented_bits_stop(void)
 	CHECK_EQ(arm64_test_step(m, c, msr(ARM64_RMR_EL3, 1)), MACHINE_STOP_LIMIT);
 
 	/* A register of the core that is not implemented yet is named. */
-	CHECK_EQ(arm64_test_step(m, c, mrs(ARM64_SYSREG(3, 3, 4, 4, 0), 0)),
+	CHECK_EQ(arm64_test_step(m, c, mrs(ARM64_SYSREG(3, 4, 5, 3, 0), 0)),
 	         MACHINE_STOP_ERROR);
 	CHECK(strstr(m->stop_message,
-	             "is not implemented yet (System register FPCR)") != NULL);
+	             "is not implemented yet (System register FPEXC32_EL2)") !=
+	      NULL);
 
 	/* The detail of one instruction does not stay for the next one. */
 	CHECK_EQ(arm64_test_step(m, c, 0x1e622820), /* FADD D0, D1, D2 */

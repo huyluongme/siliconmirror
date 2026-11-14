@@ -76,6 +76,57 @@ static inline uint64_t datasize_mask(unsigned datasize)
 	return datasize == 64 ? UINT64_MAX : UINT32_MAX;
 }
 
+/* All ones in the low size bytes; size is 1, 2, 4 or 8. */
+static inline uint64_t bytes_mask(unsigned size)
+{
+	return size == 8 ? UINT64_MAX : (UINT64_C(1) << (8 * size)) - 1;
+}
+
+/*
+ * SIMD&FP registers, the V and Vpart accessors in J1.2.3: a write of
+ * fewer than 128 bits, V{datasize}(n) = value, clears the bits above.
+ * set_v() writes the 128 bits, as two halves.
+ */
+static inline uint64_t get_d(const Arm64Cpu *c, unsigned n)
+{
+	return c->v[n].d[0];
+}
+
+static inline void set_v(Arm64Cpu *c, unsigned n, uint64_t lo, uint64_t hi)
+{
+	c->v[n].d[0] = lo;
+	c->v[n].d[1] = hi;
+}
+
+/* V{8 * size}(n) = value, for size 1, 2, 4 or 8 bytes. */
+static inline void set_scalar(Arm64Cpu *c, unsigned n, unsigned size,
+                              uint64_t value)
+{
+	set_v(c, n, value & bytes_mask(size), 0);
+}
+
+/*
+ * Element index of size bytes (1, 2, 4 or 8) of the 128 bits of Vn, the
+ * Elem accessor of J1.2.3. The index must lie within the register.
+ */
+static inline uint64_t get_elem(const Arm64Cpu *c, unsigned n, unsigned index,
+                                unsigned size)
+{
+	unsigned bit = index * size * 8;
+
+	return (c->v[n].d[bit / 64] >> (bit % 64)) & bytes_mask(size);
+}
+
+static inline void set_elem(Arm64Cpu *c, unsigned n, unsigned index,
+                            unsigned size, uint64_t value)
+{
+	unsigned bit = index * size * 8;
+	uint64_t mask = bytes_mask(size) << (bit % 64);
+	uint64_t *d = &c->v[n].d[bit / 64];
+
+	*d = (*d & ~mask) | ((value << (bit % 64)) & mask);
+}
+
 /*
  * ExtendReg() from J1.2.3.42: the low 8, 16, 32 or 64 bits of register
  * m, zero- or sign-extended, then shifted left by 0 to 4. option is
@@ -206,6 +257,7 @@ typedef enum Arm64Exec {
 /* Exception classes for ESR_ELx.EC, D24.2.44. */
 #define ARM64_EC_UNKNOWN 0x00
 #define ARM64_EC_WFX 0x01
+#define ARM64_EC_FP_ACCESS 0x07
 #define ARM64_EC_ILLEGAL_STATE 0x0e
 #define ARM64_EC_SVC 0x15
 #define ARM64_EC_HVC 0x16
@@ -257,6 +309,17 @@ Arm64Exec arm64_exec_exception_gen(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_eret(Arm64Cpu *c);
 Arm64Exec arm64_check_wfx_trap(Arm64Cpu *c, bool wfe);
 Arm64Exec arm64_check_sp_alignment(Arm64Cpu *c);
+
+/*
+ * The traps of the SIMD&FP registers and instructions, CPACR_EL1.FPEN,
+ * CPTR_EL2.TFP and CPTR_EL3.TFP. arm64_fp_trap_target() is the Exception
+ * level that a use traps to, or 0. arm64_check_fp_enabled() raises the
+ * trap of an instruction, AArch64_CheckFPEnabled(); arm64_fp_trap() that
+ * of an instruction, or of an access to FPCR or FPSR, to target.
+ */
+unsigned arm64_fp_trap_target(const Arm64Cpu *c);
+Arm64Exec arm64_fp_trap(Arm64Cpu *c, unsigned target, bool instruction);
+Arm64Exec arm64_check_fp_enabled(Arm64Cpu *c);
 Arm64Exec arm64_alignment_fault(Arm64Cpu *c, uint64_t address, bool write);
 Arm64Exec arm64_abort(Arm64Cpu *c, bool instruction, uint32_t iss,
                       uint64_t far);

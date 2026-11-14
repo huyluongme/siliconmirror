@@ -106,9 +106,9 @@ static const Arm64ImpDefReg bcm2837_impdef[] = {
 /*
  * Registers of the core that the emulator does not implement yet: the
  * debug registers of section 11.3 that need an external debugger or the
- * SoC's debug configuration,
- * FPCR and FPSR, and the registers that hold AArch32 state. Their
- * encodings come from the GNU assembler. The list is sorted by encoding.
+ * SoC's debug configuration, and the registers that hold AArch32 state.
+ * Their encodings come from the GNU assembler. The list is sorted by
+ * encoding.
  */
 static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 0, 0, 0, 2), "OSDTRRX_EL1"},
@@ -124,8 +124,6 @@ static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 3, 0, 4, 0), "DBGDTR_EL0"},
 	{ARM64_SYSREG(2, 3, 0, 5, 0), "DBGDTRRX_EL0/DBGDTRTX_EL0"},
 	{ARM64_SYSREG(2, 4, 0, 7, 0), "DBGVCR32_EL2"},
-	{ARM64_SYSREG(3, 3, 4, 4, 0), "FPCR"},
-	{ARM64_SYSREG(3, 3, 4, 4, 1), "FPSR"},
 	{ARM64_SYSREG(3, 4, 3, 0, 0), "DACR32_EL2"},
 	{ARM64_SYSREG(3, 4, 4, 3, 0), "SPSR_irq"},
 	{ARM64_SYSREG(3, 4, 4, 3, 1), "SPSR_abt"},

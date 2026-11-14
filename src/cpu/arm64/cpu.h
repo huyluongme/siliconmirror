@@ -14,7 +14,8 @@
  * counts from the system counter that the board connects, and the
  * interrupt inputs of a Cortex-A53, which the board connects to an
  * interrupt controller. Its MMU does stage 1 translation, with a TLB;
- * stage 2 is not implemented yet.
+ * stage 2 is not implemented yet. It has the SIMD&FP registers, but not
+ * yet the instructions that use them.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.
@@ -92,6 +93,8 @@
 #define ARM64_SCTLR_E0E (1u << 24)           /* EL0 big-endian */
 #define ARM64_SCTLR_EE (1u << 25)            /* big-endian */
 #define ARM64_SCTLR_UCI (1u << 26)           /* EL0 cache maintenance */
+#define ARM64_CPACR_FPEN_SHIFT 20            /* CPACR_EL1.FPEN, 2 bits */
+#define ARM64_CPTR_TFP (1u << 10)            /* CPTR_EL2, CPTR_EL3: SIMD&FP */
 #define ARM64_CPTR_TCPAC (UINT32_C(1) << 31) /* CPTR_EL2, CPTR_EL3: CPACR */
 #define ARM64_MDCR_TDE (1u << 8)             /* MDCR_EL2: debug to EL2 */
 #define ARM64_MDCR_TDA (1u << 9)             /* MDCR_EL3: debug registers */
@@ -375,6 +378,11 @@ typedef struct Arm64Monitor {
 	unsigned regs;
 } Arm64Monitor;
 
+/* A SIMD&FP register: 128 bits, the least significant 64 in d[0]. */
+typedef struct Arm64Vreg {
+	uint64_t d[2];
+} Arm64Vreg;
+
 typedef struct Arm64Cpu {
 	Cpu cpu;
 	Arm64Config config;
@@ -382,6 +390,10 @@ typedef struct Arm64Cpu {
 	uint64_t x[31];    /* R0-R30; number 31 is the zero register or SP */
 	uint64_t sp_el[4]; /* SP_EL0 to SP_EL3 */
 	uint64_t pc;
+
+	Arm64Vreg v[32]; /* V0-V31, the SIMD&FP registers */
+	uint32_t fpcr;   /* the bits that the core implements, see sysreg.c */
+	uint32_t fpsr;
 
 	/* PSTATE fields, see the PSTATE pseudocode in J1. */
 	uint32_t nzcv; /* N, Z, C and V in bits 31:28, as in NZCV */

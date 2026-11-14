@@ -83,10 +83,18 @@ yet: turning one on stops the machine. The self-hosted debug registers
 halting are not emulated yet, so making one possible, such as software
 step or an enabled breakpoint with `MDSCR_EL1.MDE`, stops the machine.
 
+Each core has the 32 SIMD and floating-point registers `V0` to `V31`,
+128 bits each, `FPCR` and `FPSR`. `FPCR` and `FPSR` keep only the bits
+that the Cortex-A53 has, from its Advanced SIMD and Floating-point
+Extension TRM: it has no floating-point exception traps, so their enable
+bits read as 0. `CPACR_EL1.FPEN`, `CPTR_EL2.TFP` and `CPTR_EL3.TFP` trap
+their use as the architecture says. The SIMD and floating-point
+instructions are not implemented yet: one stops the machine.
+
 A System register that the Cortex-A53 has but smirror does not
-implement yet, such as `FPCR` or the debug communications channel's
-`DBGDTR_EL0`, stops the machine with the register's name. Encodings that
-the core does not have are UNDEFINED.
+implement yet, such as the debug communications channel's `DBGDTR_EL0`,
+stops the machine with the register's name. Encodings that the core does
+not have are UNDEFINED.
 
 ## Memory map
 
