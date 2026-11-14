@@ -286,6 +286,7 @@ static void link_up(Setup *s)
 
 static const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static const uint8_t own[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+static const uint8_t almost[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xfe};
 
 /* Descriptors (5.3.1.6), from the LAN9514's defaults; remote wakeup. */
 static void test_descriptors(void)
@@ -843,12 +844,210 @@ static void test_rx(void)
 	teardown(&s);
 }
 
+/* A frame to dst of len bytes; under 18 bytes, without its FCS. */
+static size_t any_frame(uint8_t *f, const uint8_t *dst, uint16_t type,
+                        size_t len)
+{
+	if (len >= 18)
+		return make_frame(f, dst, type, len);
+	memset(f, 0, 18);
+	memcpy(f, dst, 6);
+	f[12] = (uint8_t)(type >> 8);
+	f[13] = (uint8_t)type;
+	return len;
+}
+
+/* Receive a frame and read it back: its status word, frame in buf. */
+static uint32_t rx_one(Setup *s, const uint8_t *frame, size_t len, uint8_t *buf)
+{
+	size_t got;
+
+	CHECK(lan95xx_receive(s->e, frame, len));
+	CHECK_EQ(bulk_read(s, buf, &got), USB_ACK);
+	CHECK(got >= 4);
+	return load_le32(buf);
+}
+
+/* The receive counters (Table 5-14), read and so cleared. */
+static void rx_counters(Setup *s, uint32_t *c)
+{
+	uint8_t b[32];
+	size_t got;
+
+	CHECK_EQ(control(s->d, 0xc0, 0xa2, 0, 0, 32, b, &got), USB_ACK);
+	CHECK_EQ(got, 32);
+	for (int i = 0; i < 8; i++)
+		c[i] = load_le32(b + 4 * i);
+}
+
+/* The RX status word (Table 5-40), the counters, and pad stripping. */
+static void test_rx_status(void)
+{
+	static const uint8_t multi[6] = {0x01, 0x00, 0x5e, 0x00, 0x00, 0x01};
+	static const struct {
+		const uint8_t *dst;
+		uint16_t type;
+		size_t len;
+		uint32_t status; /* but the length */
+	} frames[] = {
+		{own, 0x0800, 64, 1u << 5},
+		{multi, 0x0800, 64, 1u << 10 | 1u << 5},
+		{almost, 0x0800, 64, 1u << 10 | 1u << 5},
+		/* A length field: up to 46 bytes of data are padded. */
+		{own, 82, 100, 0},
+		{own, 83, 100, 1u << 12},
+		{own, 81, 100, 1u << 12},
+		{own, 20, 64, 0},
+		{own, 46, 64, 0},
+		{own, 47, 64, 1u << 12},
+		{own, 46, 65, 1u << 12},
+		{own, 1500, 1518, 0},
+		{own, 1500, 1517, 1u << 12},
+		{own, 1501, 1518, 1u << 5},
+		/* Runts, which PASSBAD lets through. */
+		{own, 0x0800, 63, 1u << 15 | 1u << 11 | 1u << 5},
+		{own, 1, 18, 1u << 15 | 1u << 12 | 1u << 11},
+		{own, 1, 17, 1u << 15 | 1u << 11},
+		{own, 0x0800, 14, 1u << 15 | 1u << 11 | 1u << 5},
+		{own, 0x0800, 13, 1u << 15 | 1u << 11},
+		{own, 0x0800, 6, 1u << 15 | 1u << 11},
+		/* Too long: over 1518 bytes, 1522 with a VLAN tag. */
+		{own, 0x0800, 1518, 1u << 5},
+		{own, 0x0800, 1519, 1u << 15 | 1u << 7 | 1u << 5},
+		{own, 0x8101, 1522, 1u << 5},
+		{own, 0x9101, 1522, 1u << 5},
+		{own, 0x9101, 1523, 1u << 15 | 1u << 7 | 1u << 5},
+		{own, 0x0800, 2048, 1u << 15 | 1u << 7 | 1u << 5},
+	};
+	static const struct {
+		uint16_t type;
+		size_t len, stripped;
+	} pads[] = {
+		{45, 64, 59},
+		{46, 65, 65},
+		{42, 60, 60},
+		{1, 17, 17},
+	};
+	Setup s = setup(true);
+	uint8_t frame[2100], buf[2100];
+	uint32_t c[8], st;
+	size_t got;
+
+	link_up(&s);
+	wr(&s, VLAN1, 0x8101);
+	wr(&s, VLAN2, 0x9101);
+	wr(&s, MAC_CR, 1u << 18 | 1u << 16 | 0xc); /* PRMS, PASSBAD */
+	for (size_t i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+		size_t len =
+			any_frame(frame, frames[i].dst, frames[i].type, frames[i].len);
+
+		st = rx_one(&s, frame, len, buf);
+		CHECK_EQ(st, (uint32_t)len << 16 | frames[i].status);
+		CHECK(memcmp(buf + 4, frame, len) == 0);
+	}
+	/* Under 6 bytes, no address: nothing comes. */
+	CHECK(!lan95xx_receive(s.e, frame, 5));
+	/* The receive watchdog cuts a frame at 2048 bytes. */
+	make_frame(frame, own, 0x0800, 2049);
+	st = rx_one(&s, frame, 2049, buf);
+	CHECK_EQ(st & (0x3fffu << 16 | 1u << 4), 2048u << 16 | 1u << 4);
+
+	/* The counters: good, CRC error, runt, too long; with DRP. */
+	rx_counters(&s, c);
+	wr(&s, HW_CFG, 1u << 6);
+	CHECK(
+		lan95xx_receive(s.e, (make_frame(frame, own, 0x0800, 64), frame), 64));
+	frame[20] ^= 1;
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	CHECK(
+		!lan95xx_receive(s.e, (any_frame(frame, own, 0x0800, 63), frame), 63));
+	CHECK(!lan95xx_receive(s.e, (make_frame(frame, own, 0x0800, 1519), frame),
+	                       1519));
+	rx_counters(&s, c);
+	CHECK_EQ(c[0], 1); /* good */
+	CHECK_EQ(c[1], 1); /* CRC errors */
+	CHECK_EQ(c[2], 1); /* runts */
+	CHECK_EQ(c[4], 1); /* too long */
+	CHECK_EQ(c[6], 3); /* bad */
+	CHECK_EQ(c[7], 0); /* dropped: the FIFO had room */
+	rx_counters(&s, c);
+	CHECK_EQ(c[0] | c[1] | c[2] | c[4] | c[6], 0);
+	CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+	CHECK_EQ(got, 68);
+
+	/* Pad stripping only below 46 bytes of data. */
+	wr(&s, HW_CFG, 0);
+	wr(&s, MAC_CR, 1u << 18 | 1u << 16 | 1u << 8 | 0xc);
+	for (size_t i = 0; i < sizeof(pads) / sizeof(pads[0]); i++) {
+		size_t len = any_frame(frame, own, pads[i].type, pads[i].len);
+
+		st = rx_one(&s, frame, len, buf);
+		CHECK_EQ(st >> 16 & 0x3fff, pads[i].stripped);
+	}
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* The RX FIFO: around its end, RXDOFF's zeros, flushes, its 20 KB. */
+static void test_rx_fifo(void)
+{
+	Setup s = setup(true);
+	uint8_t frame[2100], buf[2100];
+	size_t got, n;
+
+	link_up(&s);
+	/* RXDOFF's bytes are zeros, over what the FIFO held there. */
+	make_frame(frame, own, 0x0800, 100);
+	CHECK(lan95xx_receive(s.e, frame, 100));
+	wr(&s, RX_CFG, 1); /* the next frame goes where this one was */
+	wr(&s, HW_CFG, 3u << 9);
+	CHECK(lan95xx_receive(s.e, frame, 100));
+	CHECK(lan95xx_receive(s.e, frame, 100));
+	for (int i = 0; i < 2; i++) {
+		CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+		CHECK_EQ(got, 107);
+		CHECK(buf[4] == 0 && buf[5] == 0 && buf[6] == 0);
+		CHECK(memcmp(buf + 7, frame, 100) == 0);
+	}
+	/* Frames of other sizes, each read before the next: around the end. */
+	wr(&s, HW_CFG, 0);
+	for (size_t i = 0; i < 15; i++) {
+		make_frame(frame, own, (uint16_t)(0x0800 + i), 1514 - i);
+		CHECK_EQ(rx_one(&s, frame, 1514 - i, buf) >> 16 & 0x3fff, 1514 - i);
+		CHECK(memcmp(buf + 4, frame, 1514 - i) == 0);
+	}
+	/* A flush ends a burst half sent; with BIR, a NAK follows. */
+	wr(&s, HW_CFG, 1u << 12);
+	make_frame(frame, own, 0x0800, 1514);
+	CHECK(lan95xx_receive(s.e, frame, 1514));
+	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_ACK);
+	CHECK_EQ(n, 512);
+	wr(&s, RX_CFG, 1);
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 0);
+	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_NAK);
+	/* And the ZLP due after a full last packet. */
+	make_frame(frame, own, 0x0800, 508);
+	CHECK(lan95xx_receive(s.e, frame, 508));
+	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_ACK);
+	CHECK_EQ(n, 512);
+	wr(&s, RX_CFG, 1);
+	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_NAK);
+	/* Ten frames of 2044 bytes fill the 20 KB exactly. */
+	make_frame(frame, own, 0x0800, 2044);
+	for (int i = 0; i < 10; i++)
+		CHECK(lan95xx_receive(s.e, frame, 2044));
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 20480);
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
 /* Address filtering (Table 5-45). */
 static void test_filter(void)
 {
 	Setup s = setup(true);
 	uint8_t frame[64], other[6] = {0x02, 0, 0, 0, 0, 1};
-	uint8_t multi[6] = {0x01, 0x00, 0x5e, 0x00, 0x00, 0x01};
+	uint8_t multi[6] = {0x01, 0x00, 0x5e, 0x00, 0x00, 0x01}, near[6];
 	uint8_t buf[512];
 	size_t got;
 
@@ -886,6 +1085,43 @@ static void test_filter(void)
 	CHECK(!lan95xx_receive(s.e, frame, 64));
 	wr(&s, HASHL, 1u << 31);
 	CHECK(lan95xx_receive(s.e, frame, 64));
+	/* Other hash bits: 01:00:5e:00:00:02 hashes to 8, :04 to 35. */
+	wr(&s, HASHH, 0);
+	wr(&s, HASHL, 1u << 8);
+	multi[5] = 2;
+	CHECK(
+		lan95xx_receive(s.e, (make_frame(frame, multi, 0x800, 64), frame), 64));
+	multi[5] = 4;
+	CHECK(!lan95xx_receive(s.e, (make_frame(frame, multi, 0x800, 64), frame),
+	                       64));
+	wr(&s, HASHH, 1u << 3);
+	CHECK(lan95xx_receive(s.e, frame, 64));
+	/* Without HPFILT a multicast frame goes by the address. */
+	wr(&s, MAC_CR, 0xc);
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	/* Unicast goes by the hash with HO and HPFILT; other hashes to 32. */
+	wr(&s, HASHH, 1u << 0);
+	make_frame(frame, other, 0x800, 64);
+	wr(&s, MAC_CR, 0xc | 1u << 13);
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	wr(&s, MAC_CR, 0xc | 1u << 15);
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	wr(&s, MAC_CR, 0xc | 1u << 15 | 1u << 13);
+	CHECK(lan95xx_receive(s.e, frame, 64));
+	/* The address filter compares all six bytes. */
+	wr(&s, MAC_CR, 0xc);
+	memcpy(near, own, 6);
+	near[5] ^= 1;
+	CHECK(
+		!lan95xx_receive(s.e, (make_frame(frame, near, 0x800, 64), frame), 64));
+	/* ff:ff:ff:ff:ff:fe is multicast: BCAST does not drop it. */
+	wr(&s, MAC_CR, 0xc | 1u << 19 | 1u << 11);
+	CHECK(lan95xx_receive(s.e, (make_frame(frame, almost, 0x800, 64), frame),
+	                      64));
+	/* Promiscuous: everything comes. */
+	wr(&s, MAC_CR, 0xc | 1u << 18);
+	CHECK(
+		lan95xx_receive(s.e, (make_frame(frame, other, 0x800, 64), frame), 64));
 	/* RXALL: filtered frames come, marked Filtering Fail. */
 	wr(&s, RX_CFG, 1);
 	wr(&s, MAC_CR, 0xc | 1u << 31);
@@ -955,6 +1191,8 @@ int main(void)
 	RUN_TEST(test_phy);
 	RUN_TEST(test_tx);
 	RUN_TEST(test_rx);
+	RUN_TEST(test_rx_status);
+	RUN_TEST(test_rx_fifo);
 	RUN_TEST(test_filter);
 	RUN_TEST(test_interrupts_and_loopback);
 	return test_summary();
