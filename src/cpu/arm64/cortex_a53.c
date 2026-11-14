@@ -50,6 +50,10 @@ static const Arm64RegValue bcm2837_values[] = {
 	{ARM64_SCTLR_EL3, 0x00c50838},
 	{ARM64_HCR_EL2, 0x00000002},
 	{ARM64_MDCR_EL2, 0x00000006},
+	/* The PMU, section 12: 6 counters; the events, with the L2 cache. */
+	{ARM64_PMCR_EL0, 0x41033000},
+	{ARM64_PMCEID0_EL0, 0x67ffbfff},
+	{ARM64_PMCEID1_EL0, 0x00000000},
 	{ARM64_CPTR_EL2, 0x000033ff},
 	{ARM64_RMR_EL3, 0x00000001},
 };
@@ -101,7 +105,7 @@ static const Arm64ImpDefReg bcm2837_impdef[] = {
 
 /*
  * Registers of the core that the emulator does not implement yet: the
- * debug (section 11.3) and performance monitor (section 12.4) registers,
+ * debug registers (section 11.3),
  * FPCR and FPSR, and the registers that hold AArch32 state. Their
  * encodings come from the GNU assembler. The list is sorted by encoding.
  */
@@ -143,36 +147,8 @@ static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 3, 0, 4, 0), "DBGDTR_EL0"},
 	{ARM64_SYSREG(2, 3, 0, 5, 0), "DBGDTRRX_EL0/DBGDTRTX_EL0"},
 	{ARM64_SYSREG(2, 4, 0, 7, 0), "DBGVCR32_EL2"},
-	{ARM64_SYSREG(3, 0, 9, 14, 1), "PMINTENSET_EL1"},
-	{ARM64_SYSREG(3, 0, 9, 14, 2), "PMINTENCLR_EL1"},
 	{ARM64_SYSREG(3, 3, 4, 4, 0), "FPCR"},
 	{ARM64_SYSREG(3, 3, 4, 4, 1), "FPSR"},
-	{ARM64_SYSREG(3, 3, 9, 12, 0), "PMCR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 1), "PMCNTENSET_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 2), "PMCNTENCLR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 3), "PMOVSCLR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 4), "PMSWINC_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 5), "PMSELR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 6), "PMCEID0_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 12, 7), "PMCEID1_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 13, 0), "PMCCNTR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 13, 1), "PMXEVTYPER_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 13, 2), "PMXEVCNTR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 14, 0), "PMUSERENR_EL0"},
-	{ARM64_SYSREG(3, 3, 9, 14, 3), "PMOVSSET_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 0), "PMEVCNTR0_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 1), "PMEVCNTR1_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 2), "PMEVCNTR2_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 3), "PMEVCNTR3_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 4), "PMEVCNTR4_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 8, 5), "PMEVCNTR5_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 0), "PMEVTYPER0_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 1), "PMEVTYPER1_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 2), "PMEVTYPER2_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 3), "PMEVTYPER3_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 4), "PMEVTYPER4_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 12, 5), "PMEVTYPER5_EL0"},
-	{ARM64_SYSREG(3, 3, 14, 15, 7), "PMCCFILTR_EL0"},
 	{ARM64_SYSREG(3, 4, 3, 0, 0), "DACR32_EL2"},
 	{ARM64_SYSREG(3, 4, 4, 3, 0), "SPSR_irq"},
 	{ARM64_SYSREG(3, 4, 4, 3, 1), "SPSR_abt"},

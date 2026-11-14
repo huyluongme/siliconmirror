@@ -60,10 +60,17 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   `L2ECTLR_EL1`; for the other two, which control and report on the
   same L2, smirror assumes it.
 
+The performance monitors (`cpu/arm64/pmu.c`) have the Cortex-A53's 6
+event counters and its cycle counter, with `PMCR_EL0` resetting to
+`0x41033000` and `PMCEID0_EL0` reading `0x67ffbfff`, as the BCM2837 has
+an L2 cache. Their registers hold what software writes and follow the
+architecture's access rules and traps, but the counters do not count
+yet: turning one on stops the machine.
+
 A System register that the Cortex-A53 has but smirror does not
-implement yet, such as `PMCR_EL0` of the performance monitors, stops the
-machine with the register's name. Encodings that the core does not have
-are UNDEFINED.
+implement yet, such as `MDSCR_EL1` of the debug registers or `FPCR`,
+stops the machine with the register's name. Encodings that the core
+does not have are UNDEFINED.
 
 ## Memory map
 
@@ -844,7 +851,7 @@ to quit.
 - Of the interrupt controller's sources, only the mini UART, the GPIO,
   UART0, the mailboxes, SDHOST, the EMMC controller and USB are
   modelled yet.
-- The cores have no performance monitors, so their interrupt never
+- The performance monitors do not count yet, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
   next instruction. The cores take turns through the same 1 µs of

@@ -263,6 +263,26 @@ typedef struct Arm64Timer {
 	IrqLine *irq;  /* the interrupt output, NULL when not connected */
 } Arm64Timer;
 
+/*
+ * The Performance Monitors of an Armv8.0 PE, FEAT_PMUv3: up to
+ * ARM64_PMU_COUNTERS event counters and a cycle counter. Bit 31 of the
+ * enable, overflow and interrupt masks is the cycle counter's.
+ */
+#define ARM64_PMU_COUNTERS 31
+
+typedef struct Arm64Pmu {
+	uint32_t pmcr;    /* E, D, X, DP and LC: the bits that hold a value */
+	uint32_t cnten;   /* PMCNTENSET_EL0 and PMCNTENCLR_EL0 */
+	uint32_t ovs;     /* PMOVSSET_EL0 and PMOVSCLR_EL0 */
+	uint32_t inten;   /* PMINTENSET_EL1 and PMINTENCLR_EL1 */
+	uint32_t selr;    /* PMSELR_EL0.SEL */
+	uint32_t userenr; /* PMUSERENR_EL0 */
+	uint32_t ccfiltr; /* PMCCFILTR_EL0 */
+	uint64_t ccntr;   /* PMCCNTR_EL0 */
+	uint32_t evcntr[ARM64_PMU_COUNTERS];
+	uint32_t evtyper[ARM64_PMU_COUNTERS];
+} Arm64Pmu;
+
 /* The Generic Timer registers of a PE, and its state. */
 typedef struct Arm64GenericTimer {
 	uint64_t cntfrq_el0, cntkctl_el1, cnthctl_el2, cntvoff_el2;
@@ -381,6 +401,7 @@ typedef struct Arm64Cpu {
 
 	Arm64SysRegs sys;
 	Arm64GenericTimer timer;
+	Arm64Pmu pmu;
 	IrqLine inputs[ARM64_NUM_INPUTS];
 	uint32_t asserted; /* bit n set while inputs[n] is high */
 	/*

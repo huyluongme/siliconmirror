@@ -308,11 +308,30 @@ bool arm64_timer_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
 bool arm64_timer_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
 
 /*
+ * The Performance Monitors, from pmu.c. arm64_pmu_owns() tells whether an
+ * encoding is one of their registers, and arm64_pmu_access() executes MRS
+ * or MSR of one. arm64_pmu_read() and arm64_pmu_write() access one as a
+ * debugger does, without the access checks; they return false for one
+ * that does not exist, and for a write that is not allowed.
+ * arm64_pmu_mdcr_el2_written() checks MDCR_EL2 after MSR wrote it: it
+ * returns ARM64_EXEC_UNIMPLEMENTED with c->detail for what is not
+ * emulated.
+ */
+bool arm64_pmu_owns(uint16_t encoding);
+const char *arm64_pmu_name(uint16_t encoding);
+Arm64Exec arm64_pmu_access(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_pmu_mdcr_el2_written(Arm64Cpu *c);
+bool arm64_pmu_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
+bool arm64_pmu_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
+void arm64_pmu_reset(Arm64Cpu *c);
+
+/*
  * System registers, from sysreg.c: MRS and MSR (register), MSR
  * (immediate), and the reset values. arm64_sysreg_name() returns NULL
  * for an encoding that the model does not implement.
  */
 Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn);
+uint64_t arm64_model_value(const Arm64Cpu *c, uint16_t encoding);
 Arm64Exec arm64_exec_msr_imm(Arm64Cpu *c, uint32_t insn);
 void arm64_sysreg_reset(Arm64Cpu *c);
 

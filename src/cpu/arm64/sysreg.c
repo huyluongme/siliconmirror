@@ -267,7 +267,7 @@ static uint64_t *impdef_value(Arm64Cpu *c, int index)
 }
 
 /* The value the CPU model gives for a register, or 0. */
-static uint64_t model_value(const Arm64Cpu *c, uint16_t encoding)
+uint64_t arm64_model_value(const Arm64Cpu *c, uint16_t encoding)
 {
 	const Arm64CpuModel *model = c->config.model;
 
@@ -361,7 +361,7 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 		*value = *field_of(c, r);
 		return true;
 	case KIND_ID:
-		*value = model_value(c, r->encoding);
+		*value = arm64_model_value(c, r->encoding);
 		return true;
 	case KIND_NZCV:
 		*value = c->nzcv;
@@ -385,7 +385,8 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 		*value = c->sp_el[2];
 		return true;
 	case KIND_MIDR:
-		*value = virtual_id ? c->sys.vpidr_el2 : model_value(c, ARM64_MIDR_EL1);
+		*value = virtual_id ? c->sys.vpidr_el2
+		                    : arm64_model_value(c, ARM64_MIDR_EL1);
 		return true;
 	case KIND_MPIDR:
 		*value = virtual_id ? c->sys.vmpidr_el2 : c->config.mpidr;
@@ -404,7 +405,7 @@ static bool read_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t *value)
 		return true;
 	case KIND_DCZID:
 		/* DZP: DC ZVA would trap, see sysinsn.c. */
-		*value = model_value(c, r->encoding) & 0xf;
+		*value = arm64_model_value(c, r->encoding) & 0xf;
 		if ((c->el == 0 && !(c->sys.sctlr[1] & ARM64_SCTLR_DZE)) ||
 		    (c->el <= 1 && arm64_el2_enabled(c) &&
 		     (c->sys.hcr_el2 & ARM64_HCR_TDZ)))
@@ -482,6 +483,8 @@ static Arm64Exec write_sysreg(Arm64Cpu *c, const SysReg *r, uint64_t value)
 	*field_of(c, r) = value;
 	if (r->flags & TLB)
 		arm64_tlb_flush(c);
+	if (r->encoding == ARM64_MDCR_EL2)
+		return arm64_pmu_mdcr_el2_written(c);
 	return ARM64_EXEC_OK;
 }
 
@@ -566,6 +569,8 @@ Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn)
 	/* Priority 19 of D1.4.5.6: ahead of UNDEFINED and the other traps. */
 	if (arm64_tidcp_traps(c, insn))
 		return arm64_sys_trap(c, 2, insn);
+	if (arm64_pmu_owns(encoding))
+		return arm64_pmu_access(c, insn);
 	if (r != NULL)
 		return access_sysreg(c, r, insn);
 	index = find_impdef(c, encoding);
@@ -632,7 +637,8 @@ void arm64_sysreg_reset(Arm64Cpu *c)
 	memset(&c->sys, 0, sizeof(c->sys));
 	for (size_t i = 0; i < sizeof(sysregs) / sizeof(sysregs[0]); i++)
 		if (sysregs[i].kind == KIND_FIELD)
-			*field_of(c, &sysregs[i]) = model_value(c, sysregs[i].encoding);
+			*field_of(c, &sysregs[i]) =
+				arm64_model_value(c, sysregs[i].encoding);
 	c->sys.vmpidr_el2 = c->config.mpidr;
 	for (unsigned i = 0; model != NULL && i < model->num_impdef; i++)
 		c->sys.impdef[i] = model->impdef[i].reset;
@@ -671,6 +677,8 @@ bool arm64_cpu_read_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t *value)
 	const SysReg *r = find_sysreg(encoding);
 	int index;
 
+	if (arm64_pmu_owns(encoding))
+		return arm64_pmu_read(c, encoding, value);
 	if (r != NULL) {
 		/* SP_EL0 can be read even while it is the current SP. */
 		if (r->kind == KIND_SP_EL0) {
@@ -691,6 +699,8 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value)
 	const SysReg *r = find_sysreg(encoding);
 	int index;
 
+	if (arm64_pmu_owns(encoding))
+		return arm64_pmu_write(c, encoding, value);
 	if (r != NULL) {
 		switch (r->kind) {
 		case KIND_FIELD:
@@ -732,6 +742,8 @@ const char *arm64_sysreg_name(const Arm64Cpu *c, uint16_t encoding)
 
 	if (r != NULL)
 		return r->name;
+	if (arm64_pmu_owns(encoding))
+		return arm64_pmu_name(encoding);
 	index = find_impdef(c, encoding);
 	return index >= 0 ? c->config.model->impdef[index].name : NULL;
 }
