@@ -55,14 +55,12 @@ enum { HCCHAR, HCSPLT = 4, HCINT = 8, HCINTMSK = 12, HCTSIZ = 16, HCDMA = 20 };
 
 #define GUSBCFG_FORCEDEVMODE (1u << 30)
 
-#define GRSTCTL_SELF_CLEARING 0x37u /* resets and FIFO flushes */
 #define GRSTCTL_TXFNUM (0x1fu << 6)
 #define GRSTCTL_AHBIDLE (1u << 31)
 
 #define GINTSTS_CURMODE_HOST (1u << 0)
 #define GINTSTS_PRTINT (1u << 24)
 #define GINTSTS_HCHINT (1u << 25)
-#define GINTSTS_W1C 0xf030fc0au /* the bits that writing 1 clears */
 
 #define HPRT0_CONNSTS (1u << 0)
 #define HPRT0_CONNDET (1u << 1)
@@ -104,7 +102,7 @@ struct Dwc2 {
 	IrqLine *irq;
 	unsigned num_channels;
 
-	uint32_t gotgctl, gahbcfg, gusbcfg, grstctl, gintsts, gintmsk;
+	uint32_t gotgctl, gahbcfg, gusbcfg, grstctl, gintmsk;
 	uint32_t grxfsiz, gnptxfsiz, hptxfsiz, gi2cctl, gpvndctl, ggpio, guid;
 	uint32_t hcfg, hfir, haintmsk, pcgcctl;
 	uint32_t hprt0;      /* the RW bits and the change bits */
@@ -139,9 +137,13 @@ static uint32_t haint(const Dwc2 *d)
 	return bits;
 }
 
+/*
+ * The core's own events, such as SOF, are not raised; the port's and
+ * the channels' come from their registers.
+ */
 static uint32_t gintsts(const Dwc2 *d)
 {
-	uint32_t v = d->gintsts;
+	uint32_t v = 0;
 
 	if (!(d->gusbcfg & GUSBCFG_FORCEDEVMODE))
 		v |= GINTSTS_CURMODE_HOST;
@@ -303,7 +305,6 @@ static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
 	c->hcdma = (c->hcdma & ~d->config.dma_mask) | (uint32_t)dma;
 	c->pending = result;
 	c->busy = true;
-	c->hcchar = ch;
 	event_schedule(&d->machine->events, &c->done, machine_now(d->machine) + ns);
 }
 
@@ -410,7 +411,7 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 	case GUSBCFG:
 		return d->gusbcfg;
 	case GRSTCTL:
-		return (d->grstctl & GRSTCTL_TXFNUM) | GRSTCTL_AHBIDLE;
+		return d->grstctl | GRSTCTL_AHBIDLE;
 	case GINTSTS:
 		return gintsts(d);
 	case GINTMSK:
@@ -471,7 +472,6 @@ static void reset_registers(Dwc2 *d)
 	d->gahbcfg = 0;
 	d->gusbcfg = 0;
 	d->grstctl = 0;
-	d->gintsts = 0;
 	d->gintmsk = 0;
 	/* The FIFO sizes at reset are the largest that GHWCFG3 allows. */
 	d->grxfsiz = d->config.hwcfg3 >> 16;
@@ -528,15 +528,12 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 		break;
 	case GRSTCTL:
 		/* The resets and the flushes end at once. */
-		if (v & 1) { /* CSFTRST: the core's state, not its settings */
+		if (v & 1) /* CSFTRST: the core's state, not its settings */
 			halt_channels(d);
-			d->gintsts = 0;
-		}
-		d->grstctl = v & ~GRSTCTL_SELF_CLEARING;
+		d->grstctl = v & GRSTCTL_TXFNUM;
 		break;
 	case GINTSTS:
-		d->gintsts &= ~(v & GINTSTS_W1C);
-		break;
+		break; /* no event of its own to clear */
 	case GINTMSK:
 		d->gintmsk = v;
 		break;
