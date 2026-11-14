@@ -734,9 +734,15 @@ static void test_erase(void)
 
 	setup(&s, 1 * MIB);
 	rca = identify(&s);
+	CHECK_EQ(r1(&s, 13, (uint32_t)rca << 16), STATE(TRAN) | READY_FOR_DATA);
 	r1(&s, 32, 1100);
 	r1(&s, 33, 2047);
-	CHECK_EQ(cmd(&s, 38, 0).type, SD_R1B);
+	{
+		SdResponse r = cmd(&s, 38, 0);
+
+		CHECK_EQ(r.type, SD_R1B);
+		CHECK_EQ(r.words[0], STATE(TRAN) | READY_FOR_DATA);
+	}
 	for (unsigned b = 1; b <= 4; b++) {
 		storage_read(&s.storage.dev, 512 * b, buf, 512);
 		if (b == 1 || b == 4) {
@@ -755,7 +761,15 @@ static void test_erase(void)
 	r1(&s, 32, 4096);
 	r1(&s, 33, 512);
 	CHECK_EQ(r1(&s, 38, 0) & ERASE_PARAM, ERASE_PARAM);
-	CHECK_EQ(r1(&s, 32, 1 * MIB) & OUT_OF_RANGE, OUT_OF_RANGE);
+	CHECK_EQ(r1(&s, 32, 1 * MIB), OUT_OF_RANGE | STATE(TRAN) | READY_FOR_DATA);
+	/* A new start forgets the end; a failed erase forgets the start. */
+	r1(&s, 32, 0);
+	r1(&s, 33, 512);
+	r1(&s, 32, 1024);
+	CHECK_EQ(r1(&s, 38, 0) & ERASE_SEQ_ERROR, ERASE_SEQ_ERROR);
+	r1(&s, 32, 0);
+	CHECK_EQ(r1(&s, 38, 0) & ERASE_SEQ_ERROR, ERASE_SEQ_ERROR);
+	CHECK_EQ(r1(&s, 33, 512) & ERASE_SEQ_ERROR, ERASE_SEQ_ERROR);
 	r1(&s, 32, 0);
 	CHECK_EQ(r1(&s, 33, 1 * MIB) & OUT_OF_RANGE, OUT_OF_RANGE);
 	CHECK_EQ(r1(&s, 38, 0) & ERASE_SEQ_ERROR, ERASE_SEQ_ERROR);
@@ -771,6 +785,31 @@ static void test_erase(void)
 	r1(&s, 33, 0);
 	r1(&s, 38, 0);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	teardown(&s);
+}
+
+/*
+ * CMD0 clears the errors still to report; a register read stopped by
+ * CMD12 leaves nothing for the next block read.
+ */
+static void test_errors_and_aborts(void)
+{
+	Setup s;
+	uint16_t rca;
+	uint8_t buf[512];
+
+	setup(&s, 1 * MIB);
+	rca = identify(&s);
+	CHECK_EQ(cmd(&s, 2, 0).type, SD_NO_RESPONSE); /* illegal in tran */
+	cmd(&s, 0, 0);
+	cmd(&s, 8, 0x1aa);
+	CHECK_EQ(r1(&s, 55, 0) & ILLEGAL_COMMAND, 0);
+	rca = identify(&s);
+	acmd(&s, rca, 51, 0); /* the SCR, never read */
+	r1(&s, 12, 0);
+	CHECK_EQ(r1(&s, 17, 0), STATE(TRAN) | READY_FOR_DATA);
+	CHECK_EQ(sd_card_read(s.card, buf), 512);
+	CHECK(same_as_storage(&s, buf, 0, 512));
 	teardown(&s);
 }
 
@@ -1498,6 +1537,7 @@ int main(void)
 	RUN_TEST(test_read);
 	RUN_TEST(test_write);
 	RUN_TEST(test_erase);
+	RUN_TEST(test_errors_and_aborts);
 	RUN_TEST(test_switch);
 	RUN_TEST(test_app_commands);
 	RUN_TEST(test_stops);
