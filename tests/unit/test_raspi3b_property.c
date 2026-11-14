@@ -319,10 +319,14 @@ static void test_clock_rates(void)
 		send_stops(&s, buf, ARRAY_SIZE(buf), message);
 	}
 	for (uint32_t tag = 0x00030004; tag <= 0x00030007; tag += 3) {
-		uint32_t buf[] = {sizeof(uint32_t[8]), 0, tag, 8, 0, 2, 0, 0};
+		for (unsigned clock = 1; clock <= 2; clock++) { /* EMMC, UART */
+			uint32_t buf[] = {sizeof(uint32_t[8]), 0, tag, 8, 0, clock, 0, 0};
+			char message[64];
 
-		send_stops(&s, buf, ARRAY_SIZE(buf),
-		           "the range of clock 2 is not documented");
+			snprintf(message, sizeof(message),
+			         "the range of clock %u is not documented", clock);
+			send_stops(&s, buf, ARRAY_SIZE(buf), message);
+		}
 	}
 
 	/* enable_uart=1: the core clock stays at 250 MHz. */
