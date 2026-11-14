@@ -710,6 +710,27 @@ static void test_cluster_limits(void)
 	free(data);
 	block_mem_free(&fs.m);
 
+	/* A file in the last cluster alone; a chain that runs past it. */
+	format(&fs, 12, 2048, 1);
+	root = root_dir(&fs);
+	fs.next = fs.clusters + 1;
+	add_file(&fs, &root, "END        ", NULL, "end", 3);
+	fs.next = 2;
+	data = pattern(1024);
+	a = add_file(&fs, &root, "PAST       ", NULL, data, 1024);
+	free(data);
+	set_fat(&fs, a, fs.clusters + 2);
+	v = open_fs(&fs);
+	CHECK_EQ(find(v, "end", &f), 1);
+	CHECK_EQ(f.cluster, fs.clusters + 1);
+	CHECK(fat_read(v, &f, 0, buf, 3, error, sizeof(error)));
+	CHECK(memcmp(buf, "end", 3) == 0);
+	CHECK_EQ(find(v, "past", &f), 1);
+	CHECK(!fat_read(v, &f, 0, buf, 1024, error, sizeof(error)));
+	CHECK(strstr(error, "is not a cluster") != NULL);
+	fat_close(v);
+	block_mem_free(&fs.m);
+
 	/* A file in every cluster: a chain that long is no loop. */
 	format(&fs, 12, 2048, 1);
 	root = root_dir(&fs);
@@ -904,6 +925,10 @@ static void test_long_name_limits(void)
 	lfn(new_entry(&fs, &root), 0x05, d, 2, "STRAY~1    ");
 	lfn(new_entry(&fs, &root), 0x01, a13, 13, "STRAY~1    ");
 	short_entry(new_entry(&fs, &root), "STRAY~1    ", 0x20, 0, 0, 16);
+	/* A second part whose checksum is another name's: no long name. */
+	lfn(new_entry(&fs, &root), 0x42, b, 2, "CHK~1      ");
+	lfn(new_entry(&fs, &root), 0x01, a13, 13, "OTHER~1    ");
+	short_entry(new_entry(&fs, &root), "CHK~1      ", 0x20, 0, 0, 16);
 	/* A volume label between a long name and its entry. */
 	lfn(new_entry(&fs, &root), 0x41, c, 2, "LABEL~1    ");
 	short_entry(new_entry(&fs, &root), "VOLUME     ", 0x08, 0, 0, 16);
@@ -930,6 +955,7 @@ static void test_long_name_limits(void)
 	CHECK_EQ(find(v, "aaaaaaaaaaaaabb", &f), 0);
 	CHECK_EQ(find(v, "twice~1", &f), 1);
 	CHECK_EQ(find(v, "stray~1", &f), 1);
+	CHECK_EQ(find(v, "chk~1", &f), 1);
 	CHECK_EQ(find(v, "cc", &f), 0);
 	CHECK_EQ(find(v, "label~1", &f), 1);
 	fat_close(v);
