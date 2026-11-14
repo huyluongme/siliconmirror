@@ -4,7 +4,9 @@
 # Helpers that need nothing else of smirror: mostly headers, and the
 # devicetree code.
 add_library(util STATIC
-	fdt.c)
+	crc32.c
+	fdt.c
+	inflate.c)
 
 # Anything that links util, directly or through another module, can
 # include headers by their path from src/, for example "core/bus.h".

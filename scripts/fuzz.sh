@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Huy Luong Duc
 #
-# Fuzz what smirror reads from an SD card: the MBR, FAT, config.txt and
-# devicetree blobs (tests/fuzz). Each fuzzer is built with clang's
+# Fuzz what smirror reads from an SD card: the MBR, FAT, config.txt,
+# devicetree blobs and gzip kernels (tests/fuzz). Each fuzzer is built with clang's
 # libFuzzer, AddressSanitizer and UBSan, starts from seeds that real
 # tools make, and runs for SECONDS (60 by default). A crash stops it and
 # leaves the input that made it in build/fuzz/.
 #
 # Usage: scripts/fuzz.sh [SECONDS [FUZZER...]]
-#   FUZZER: mbr, fat, config, fdt; all of them by default.
+#   FUZZER: mbr, fat, config, fdt, inflate; all of them by default.
 #
 # Needs clang, sfdisk, mkfs.fat and mtools; the fdt fuzzer starts from
 # ~/.cache/siliconmirror-uboot's firmware devicetree when it is there
@@ -20,7 +20,7 @@ set -eu
 cd "$(dirname "$0")/.."
 SECONDS_EACH=${1:-60}
 [ $# -gt 0 ] && shift
-FUZZERS=${*:-mbr fat config fdt}
+FUZZERS=${*:-mbr fat config fdt inflate}
 OUT=build/fuzz
 FLAGS="-std=c11 -g -O1 -fsanitize=fuzzer,address,undefined
 	-fno-sanitize-recover=undefined -Isrc -Itests/fuzz"
@@ -30,6 +30,7 @@ sources() {
 	mbr) echo src/boot/mbr.c ;;
 	fat | config) echo src/boot/fat.c src/boot/rpi_config.c ;;
 	fdt) echo src/util/fdt.c ;;
+	inflate) echo src/util/inflate.c src/util/crc32.c ;;
 	esac
 }
 
@@ -72,6 +73,11 @@ seeds() {
 		else
 			printf '\320\015\376\355' > "$dir/magic"
 		fi
+		;;
+	inflate)
+		printf 'hello hello hello\n' | gzip -9 -n > "$dir/fixed.gz"
+		gzip -9 -n < README.md > "$dir/dynamic.gz"
+		gzip -1 -n < docs/architecture.md > "$dir/fast.gz"
 		;;
 	esac
 }

@@ -21,6 +21,26 @@ add_executable(test_muldiv test_muldiv.c)
 target_link_libraries(test_muldiv PRIVATE util)
 add_test(NAME unit.muldiv COMMAND test_muldiv)
 
+# A file compressed by the host's gzip, at its best and fastest levels,
+# for test_inflate to decompress.
+set(inflate_input ${CMAKE_CURRENT_SOURCE_DIR}/test_raspi3b_firmware.c)
+add_custom_command(OUTPUT inflate-9.gz inflate-1.gz
+	COMMAND ${CMAKE_COMMAND} -E copy ${inflate_input} inflate-9
+	COMMAND ${CMAKE_COMMAND} -E copy ${inflate_input} inflate-1
+	COMMAND gzip -9 -n -f inflate-9
+	COMMAND gzip -1 -n -f inflate-1
+	DEPENDS ${inflate_input}
+	VERBATIM
+	COMMENT "Compressing the input of test_inflate")
+add_custom_target(inflate_files ALL DEPENDS inflate-9.gz inflate-1.gz)
+add_executable(test_inflate test_inflate.c)
+target_link_libraries(test_inflate PRIVATE util)
+add_dependencies(test_inflate inflate_files)
+add_test(NAME unit.inflate
+	COMMAND test_inflate ${inflate_input}
+		${CMAKE_CURRENT_BINARY_DIR}/inflate-9.gz
+		${CMAKE_CURRENT_BINARY_DIR}/inflate-1.gz)
+
 add_executable(test_fdt test_fdt.c)
 target_link_libraries(test_fdt PRIVATE util)
 add_test(NAME unit.fdt COMMAND test_fdt)
