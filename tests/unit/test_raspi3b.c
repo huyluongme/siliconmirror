@@ -793,6 +793,130 @@ static void test_reset_runs_the_stub_again(void)
 	remove(KERNEL);
 }
 
+/* USB on the board: DMA transfers on channel 0, as U-Boot makes them. */
+#define USB_BUF 0x200001 /* odd: all of HCDMA's address bits count */
+
+static uint32_t usb_rd(Machine *m, uint64_t offset)
+{
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_read(m->bus, RASPI3B_USB_BASE + offset, 4, &v), BUS_OK);
+	return (uint32_t)v;
+}
+
+static void usb_wr(Machine *m, uint64_t offset, uint32_t v)
+{
+	CHECK_EQ(bus_write(m->bus, RASPI3B_USB_BASE + offset, 4, v), BUS_OK);
+}
+
+/* A transfer of size bytes at USB_BUF, through the uncached alias. */
+static void usb_xfer(Machine *m, unsigned addr, bool in, uint32_t size,
+                     uint32_t pid)
+{
+	uint32_t packets = size == 0 ? 1 : (size + 63) / 64;
+
+	usb_wr(m, 0x510, pid << 29 | packets << 19 | size);
+	usb_wr(m, 0x514, 0xc0000000u | USB_BUF);
+	usb_wr(m, 0x508, 0x3fff);
+	usb_wr(m, 0x500, 1u << 31 | addr << 22 | (in ? 1u << 15 : 0) | 64);
+	for (int i = 0; i < 100000 && (usb_rd(m, 0x500) & 1u << 31); i++)
+		event_queue_run_until(&m->events, m->events.now + 1);
+	CHECK_EQ(usb_rd(m, 0x508) & 1, 1); /* XFERCOMPL */
+}
+
+/* A control transfer: SETUP, len bytes of data in or out, the status. */
+static void usb_control(Machine *m, unsigned addr, const uint8_t setup[8],
+                        uint8_t *data, uint32_t len)
+{
+	bool in = setup[0] & 0x80;
+
+	CHECK_EQ(bus_write_block(m->bus, USB_BUF, setup, 8), BUS_OK);
+	usb_xfer(m, addr, false, 8, 3);
+	if (len != 0 && !in)
+		CHECK_EQ(bus_write_block(m->bus, USB_BUF, data, len), BUS_OK);
+	if (len != 0)
+		usb_xfer(m, addr, in, len, 2);
+	if (len != 0 && in)
+		CHECK_EQ(bus_read_block(m->bus, USB_BUF, data, len), BUS_OK);
+	usb_xfer(m, addr, len == 0 || !in, 0, 2);
+}
+
+/*
+ * The DWC2's identity; the LAN9514's hub on the root port and its
+ * Ethernet controller on hub port 1, with their descriptors; and what a
+ * reset of the board resets.
+ */
+static void test_usb(void)
+{
+	FILE *out;
+	Machine *m = boot(hello, ARRAY_SIZE(hello), &out);
+	uint8_t d[64];
+	uint64_t v;
+
+	CHECK_EQ(usb_rd(m, 0x040), 0x4f54280a); /* GSNPSID */
+	CHECK_EQ(usb_rd(m, 0x044), 0);          /* GHWCFG1 */
+	CHECK_EQ(usb_rd(m, 0x048), 0x228ddd50);
+	CHECK_EQ(usb_rd(m, 0x04c), 0x0ff000e8);
+	CHECK_EQ(usb_rd(m, 0x050), 0x1ff00020);
+	CHECK_EQ(usb_rd(m, 0x03c), 0x2708a000); /* GUID */
+	usb_wr(m, 0x440, 1u << 12);
+	usb_wr(m, 0x440, 1u << 12 | 1u << 8);
+	event_queue_run_until(&m->events, m->events.now + 50000000);
+	usb_wr(m, 0x440, 1u << 12);
+	CHECK(usb_rd(m, 0x440) & 4);
+
+	/* The hub: 5 ports, several TTs, self powered. */
+	usb_control(m, 0, (const uint8_t[8]){0x80, 6, 0, 1, 0, 0, 18, 0}, d, 18);
+	CHECK_EQ(d[6], 2);
+	CHECK(memcmp(d + 8, "\x24\x04\x14\x95\x00\x02", 6) == 0);
+	usb_control(m, 0, (const uint8_t[8]){0x80, 6, 0, 2, 0, 0, 41, 0}, d, 41);
+	CHECK(d[2] == 41 && d[7] == 0xc0 && d[8] == 1);
+	usb_control(m, 0, (const uint8_t[8]){0, 5, 1, 0, 0, 0, 0, 0}, NULL, 0);
+	usb_control(m, 1, (const uint8_t[8]){0, 9, 1, 0, 0, 0, 0, 0}, NULL, 0);
+	usb_control(m, 1, (const uint8_t[8]){0xa0, 6, 0, 0x29, 0, 0, 9, 0}, d, 9);
+	CHECK(memcmp(d, "\x09\x29\x05\x0d\x00\x32\x02\x02\xff", 9) == 0);
+	usb_control(m, 1, (const uint8_t[8]){0x23, 3, 8, 0, 1, 0, 0, 0}, NULL, 0);
+	usb_control(m, 1, (const uint8_t[8]){0x23, 3, 4, 0, 1, 0, 0, 0}, NULL, 0);
+	event_queue_run_until(&m->events, m->events.now + 10000000);
+	usb_control(m, 1, (const uint8_t[8]){0xa3, 0, 0, 0, 1, 0, 4, 0}, d, 4);
+	CHECK(d[0] == 0x03 && d[1] == 0x05); /* connected, enabled; power, HS */
+
+	/* The Ethernet controller on port 1. */
+	usb_control(m, 0, (const uint8_t[8]){0x80, 6, 0, 1, 0, 0, 18, 0}, d, 18);
+	CHECK_EQ(d[6], 1);
+	CHECK(memcmp(d + 8, "\x24\x04\x00\xec\x00\x02", 6) == 0);
+	usb_control(m, 0, (const uint8_t[8]){0x80, 6, 0, 2, 0, 0, 39, 0}, d, 39);
+	CHECK(d[7] == 0xe0 && d[8] == 1 && d[38] == 4);
+	usb_control(m, 0, (const uint8_t[8]){0, 5, 2, 0, 0, 0, 0, 0}, NULL, 0);
+	usb_control(m, 2, (const uint8_t[8]){0, 9, 1, 0, 0, 0, 0, 0}, NULL, 0);
+	usb_control(m, 2, (const uint8_t[8]){0xc0, 0xa1, 0, 0, 0, 0, 4, 0}, d, 4);
+	CHECK(memcmp(d, "\x00\x00\x00\xec", 4) == 0); /* ID_REV */
+	for (unsigned reg = 2; reg <= 3; reg++) {
+		uint8_t access[4] = {(uint8_t)(reg << 6 | 1), 1 << 3, 0, 0};
+
+		usb_control(m, 2, (const uint8_t[8]){0x40, 0xa0, 0, 0, 0x14, 1, 4, 0},
+		            access, 4);
+		usb_control(m, 2, (const uint8_t[8]){0xc0, 0xa1, 0, 0, 0x18, 1, 4, 0},
+		            d, 4);
+		CHECK_EQ(d[0] | d[1] << 8, reg == 2 ? 0x0007 : 0xc0c3);
+	}
+
+	/* A reset: the root port, the EMMC and the watchdog. */
+	CHECK_EQ(bus_write(m->bus, RASPI3B_EMMC_BASE + 0x28, 4, 0x0f02), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x24, 4, 0x5a0fffff), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x1c, 4, 0x5a000020), BUS_OK);
+	machine_reset(m);
+	CHECK_EQ(usb_rd(m, 0x440), 0);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_EMMC_BASE + 0x28, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_PM_BASE + 0x1c, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 int main(void)
 {
 	RUN_TEST(test_board_list);
@@ -810,5 +934,6 @@ int main(void)
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);
 	RUN_TEST(test_reset_runs_the_stub_again);
+	RUN_TEST(test_usb);
 	return test_summary();
 }
