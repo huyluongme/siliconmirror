@@ -742,6 +742,173 @@ static void test_firmware_build(void)
 }
 
 /*
+ * One tag of the expander, with a value buffer of size bytes that starts
+ * with args: what it answers in *out, out_n words. The firmware's hash
+ * comes first, so that a word the tag does not answer is not 0.
+ */
+static void exp_tag(Setup *s, uint32_t tag, uint32_t size, const uint32_t *args,
+                    size_t n, uint32_t *out, size_t out_n)
+{
+	uint32_t buf[24] = {0};
+
+	buf[0] = sizeof(buf);
+	buf[2] = 0x00000003; /* the hash, 20 bytes */
+	buf[3] = 20;
+	buf[10] = tag;
+	buf[11] = size;
+	memcpy(buf + 13, args, n * sizeof(*args));
+	send(s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(s, BUF + 4), OK);
+	CHECK_EQ(word(s, BUF + 48), RESPONSE(out_n * 4));
+	for (size_t i = 0; i < out_n && 4 * i < size; i++)
+		out[i] = word(s, BUF + 52 + 4 * (uint32_t)i);
+}
+
+static void exp_config(Setup *s, uint32_t gpio, uint32_t out[5])
+{
+	exp_tag(s, 0x00030043, 20, &gpio, 1, out, 5);
+}
+
+static uint32_t exp_get(Setup *s, uint32_t gpio)
+{
+	uint32_t out[2];
+
+	exp_tag(s, 0x00030041, 8, &gpio, 1, out, 2);
+	CHECK_EQ(out[0], 0);
+	return out[1];
+}
+
+static void exp_set_config(Setup *s, uint32_t gpio, uint32_t direction,
+                           uint32_t state)
+{
+	uint32_t args[6] = {gpio, direction, 0, 0, 0, state}, out;
+
+	exp_tag(s, 0x00038043, 24, args, 6, &out, 1);
+	CHECK_EQ(out, 0);
+}
+
+static void exp_set(Setup *s, uint32_t gpio, uint32_t state)
+{
+	uint32_t args[2] = {gpio, state}, out;
+
+	exp_tag(s, 0x00038041, 8, args, 2, &out, 1);
+	CHECK_EQ(out, 0);
+}
+
+/*
+ * The GPIO expander, as Linux's gpio-raspberrypi-exp.c drives it: how
+ * its lines start, after a reset too; changing them; what is not
+ * emulated.
+ */
+static void test_gpio_expander(void)
+{
+	static const uint32_t output[8] = {1, 1, 1, 1, 0, 1, 1, 0};
+	static const uint32_t state[8] = {0, 1, 0, 1, 1, 0, 0, 1};
+	static const struct {
+		uint32_t words[12];
+		const char *message;
+	} stops[] = {
+		{{sizeof(uint32_t[12]), 0, 0x00030043, 20, 0, 127},
+	     "tag 0x00030043: GPIO 127 is not emulated: smirror has the "
+	     "expander's, 128 to 135"},
+		{{sizeof(uint32_t[12]), 0, 0x00030041, 8, 0, 136},
+	     "tag 0x00030041: GPIO 136 is not emulated"},
+		{{sizeof(uint32_t[12]), 0, 0x00030043, 3, 0, 128},
+	     "tag 0x00030043: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00038043, 20, 0, 128, 1},
+	     "tag 0x00038043: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00038041, 4, 0, 128},
+	     "tag 0x00038041: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00038041, 7, 0, 128},
+	     "tag 0x00038041: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00038043, 23, 0, 128, 1},
+	     "tag 0x00038043: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00030041, 3, 0, 128},
+	     "tag 0x00030041: a value buffer too short"},
+		{{sizeof(uint32_t[12]), 0, 0x00038041, 8, 0, 132, 1},
+	     "GPIO 132: setting an input is not emulated"},
+		{{sizeof(uint32_t[12]), 0, 0x00038043, 24, 0, 128, 2},
+	     "GPIO 128: direction 2, polarity 0 or termination 0 is not "
+	     "emulated"},
+		{{sizeof(uint32_t[12]), 0, 0x00038043, 24, 0, 128, 1, 1},
+	     "GPIO 128: direction 1, polarity 1 or termination 0 is not "
+	     "emulated"},
+		{{sizeof(uint32_t[12]), 0, 0x00038043, 24, 0, 128, 0, 0, 1},
+	     "GPIO 128: direction 0, polarity 0 or termination 1 is not "
+	     "emulated"},
+	};
+	uint32_t config[5];
+	Setup s;
+
+	setup(&s);
+	for (uint32_t i = 0; i < 8; i++) {
+		exp_config(&s, 128 + i, config);
+		CHECK_EQ(config[0], 0); /* success */
+		CHECK_EQ(config[1], output[i]);
+		CHECK_EQ(config[2], 0);
+		CHECK_EQ(config[3], 0);
+		CHECK_EQ(config[4], 0);
+		CHECK_EQ(exp_get(&s, 128 + i), state[i]);
+	}
+
+	/* PWR_LOW_N driven low, then an input again: the power is good. */
+	exp_set_config(&s, 135, 1, 0);
+	exp_config(&s, 135, config);
+	CHECK_EQ(config[1], 1);
+	CHECK_EQ(exp_get(&s, 135), 0);
+	exp_set(&s, 135, 7);
+	CHECK_EQ(exp_get(&s, 135), 1);
+	exp_set_config(&s, 135, 0, 0);
+	CHECK_EQ(exp_get(&s, 135), 1);
+	/* BT_ON on; CAM_GPIO1 an output already, with state 5 (high). */
+	exp_set(&s, 128, 1);
+	CHECK_EQ(exp_get(&s, 128), 1);
+	exp_set(&s, 128, 0);
+	CHECK_EQ(exp_get(&s, 128), 0);
+	exp_set_config(&s, 134, 1, 5);
+	CHECK_EQ(exp_get(&s, 134), 1);
+	/* An output turned input reads the line outside: low. */
+	exp_set_config(&s, 134, 0, 1);
+	CHECK_EQ(exp_get(&s, 134), 0);
+	exp_config(&s, 134, config);
+	CHECK_EQ(config[1], 0);
+
+	/* Each output, turned into an input, reads the line outside: low. */
+	for (uint32_t i = 0; i < 8; i++) {
+		if (output[i]) {
+			exp_set_config(&s, 128 + i, 0, 0);
+			CHECK_EQ(exp_get(&s, 128 + i), 0);
+		}
+	}
+	/* A value buffer of the GPIO alone is enough to ask. */
+	{
+		uint32_t gpio = 128, out[5] = {1, 1, 1, 1, 1};
+
+		exp_tag(&s, 0x00030043, 4, &gpio, 1, out, 5);
+		CHECK_EQ(out[0], 0);
+		out[0] = 1;
+		exp_tag(&s, 0x00030041, 4, &gpio, 1, out, 2);
+		CHECK_EQ(out[0], 0);
+	}
+
+	/* A reset of the board: as they started. */
+	raspi3b_property_reset(s.p);
+	for (uint32_t i = 0; i < 8; i++) {
+		exp_config(&s, 128 + i, config);
+		CHECK_EQ(config[1], output[i]);
+		CHECK_EQ(exp_get(&s, 128 + i), state[i]);
+	}
+	teardown(&s);
+
+	for (size_t i = 0; i < ARRAY_SIZE(stops); i++) {
+		setup(&s);
+		send_stops(&s, stops[i].words, ARRAY_SIZE(stops[i].words),
+		           stops[i].message);
+		teardown(&s);
+	}
+}
+
+/*
  * Every tag of the wiki and of Linux's raspberrypi-firmware.h. Those that
  * smirror does not answer stop the machine; tags next to them that
  * neither names are unknown, and ignored.
@@ -768,10 +935,11 @@ static void test_known_tags(void)
 		0x00048020, 0x00050001, 0x00060001,
 	};
 	static const uint32_t answered[] = {
-		0x00000001, 0x00000002, 0x00000003, 0x00030046, 0x00048020, 0x00010002,
-		0x00010003, 0x00010004, 0x00010005, 0x00010006, 0x00020001, 0x00020002,
-		0x00028001, 0x00030002, 0x00030004, 0x00030007, 0x00030009, 0x00038002,
-		0x00038009, 0x00038042, 0x00040003, 0x00050001,
+		0x00000001, 0x00000002, 0x00000003, 0x00030046, 0x00048020, 0x00030041,
+		0x00038041, 0x00030043, 0x00038043, 0x00010002, 0x00010003, 0x00010004,
+		0x00010005, 0x00010006, 0x00020001, 0x00020002, 0x00028001, 0x00030002,
+		0x00030004, 0x00030007, 0x00030009, 0x00038002, 0x00038009, 0x00038042,
+		0x00040003, 0x00050001,
 	};
 	Setup s;
 
@@ -994,6 +1162,7 @@ int main(void)
 {
 	RUN_TEST(test_identity);
 	RUN_TEST(test_firmware_build);
+	RUN_TEST(test_gpio_expander);
 	RUN_TEST(test_memory);
 	RUN_TEST(test_cmdline);
 	RUN_TEST(test_power);

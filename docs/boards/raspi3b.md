@@ -418,6 +418,20 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00040003` | Display size: 0 by 0, as no display is connected                   |
 | `0x00030046` | Throttled: 0, as the power supply is good and the board never hot  |
 | `0x00048020` | The virtual GPIOs' buffer: 0, success; nothing reads it            |
+| `0x00030043` | The GPIO expander: a line's direction; `0x00038043` sets it        |
+| `0x00030041` | The GPIO expander: a line's state; `0x00038041` sets an output's   |
+
+The GPIO expander has 8 lines that only the firmware drives, 128 to 135
+in its tags: BT_ON, WL_ON, STATUS_LED, LAN_RUN, HDMI_HPD_N, CAM_GPIO0,
+CAM_GPIO1 and PWR_LOW_N, as the board's device tree names them. Only
+Linux's `gpio-raspberrypi-exp.c` describes the tags; the firmware
+answers 0 in the GPIO's place for success. The lines start as `gpioinfo`
+shows them on a Pi 3B+ and a Pi 3A+, whose expanders share five of
+them: outputs, but for HDMI_HPD_N and PWR_LOW_N, inputs. Their levels
+are smirror's choice, after what each line does: Bluetooth off, WiFi
+and the LAN9514 powered, the activity LED and the camera off, no
+display, a good power supply. A reset brings them back. Other GPIOs, a
+polarity or termination, and setting an input stop the machine.
 
 The firmware smirror plays is the `start.elf` of raspberrypi/firmware
 commit 896fc67: its revision, variant and hash are those its strings

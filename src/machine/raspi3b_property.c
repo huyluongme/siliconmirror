@@ -100,6 +100,46 @@ typedef struct Value {
 	uint32_t answer_len;
 } Value;
 
+/*
+ * The GPIO expander of the Pi 3 Model B: 8 lines that only the firmware
+ * drives, which it numbers 128 to 135. Their names, from the board's
+ * device tree: BT_ON, WL_ON, STATUS_LED, LAN_RUN, HDMI_HPD_N, CAM_GPIO0,
+ * CAM_GPIO1, PWR_LOW_N. Neither the wiki nor Raspberry Pi's documentation
+ * describes the tags; Linux's gpio-raspberrypi-exp.c gives their values,
+ * and that the firmware answers 0 in the GPIO's place for success.
+ */
+#define EXP_BASE 128
+#define EXP_LINES 8
+
+typedef struct ExpLine {
+	bool output;
+	bool state; /* driven if an output */
+	bool level; /* outside, as an input reads it */
+} ExpLine;
+
+/*
+ * How the lines start. gpioinfo on a Pi 3B+ and a Pi 3A+, whose expanders
+ * have BT_ON, WL_ON, LAN_RUN and CAM_GPIO0 and 1 at the same places
+ * (Raspberry Pi forums, topic 330552; seamusdemora's PiFormulae, "Testing
+ * libgpiod ver 2.1"), shows them as outputs, LAN_RUN on the 3B+ that has
+ * a LAN chip, and their unused lines as inputs. STATUS_LED, the activity
+ * LED, is an output too; HDMI_HPD_N and PWR_LOW_N, a hot-plug detect and
+ * a power monitor, are inputs. The levels are smirror's choice, after
+ * what each line does: Bluetooth off until Linux turns it on, WiFi and
+ * the LAN9514 powered, the LED and the camera off, no display on HDMI,
+ * a good power supply.
+ */
+static const ExpLine exp_boot[EXP_LINES] = {
+	{true, false, false}, /* BT_ON */
+	{true, true, false},  /* WL_ON */
+	{true, false, false}, /* STATUS_LED */
+	{true, true, false},  /* LAN_RUN */
+	{false, false, true}, /* HDMI_HPD_N: no display */
+	{true, false, false}, /* CAM_GPIO0 */
+	{true, false, false}, /* CAM_GPIO1 */
+	{false, false, true}, /* PWR_LOW_N: the power is good */
+};
+
 struct Raspi3bProperty {
 	Machine *machine;
 	uint32_t ram_size;
@@ -107,6 +147,7 @@ struct Raspi3bProperty {
 	char *cmdline;
 	uint32_t turbo;
 	bool power_known[NUM_DEVICES]; /* set by the Arm since boot */
+	ExpLine exp[EXP_LINES];
 	bool power_on[NUM_DEVICES];
 	Value value;              /* the tag being answered */
 	Clock clocks[NUM_CLOCKS]; /* last: a read past them leaves the object */
@@ -195,6 +236,7 @@ void raspi3b_property_reset(Raspi3bProperty *p)
 	p->turbo = 0;
 	memset(p->power_known, 0, sizeof(p->power_known));
 	memset(p->power_on, 0, sizeof(p->power_on));
+	memcpy(p->exp, exp_boot, sizeof(p->exp));
 }
 
 Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
@@ -328,6 +370,103 @@ static bool set_gpiovirtbuf(Raspi3bProperty *p, Value *v)
 {
 	if (!needs(p, v, 4))
 		return false;
+	answer(v, 0, 0);
+	return true;
+}
+
+/* The expander's line of the request, or NULL when it stopped. */
+static ExpLine *exp_line(Raspi3bProperty *p, const Value *v, uint32_t len)
+{
+	uint32_t gpio;
+
+	if (!needs(p, v, len))
+		return NULL;
+	gpio = arg(v, 0);
+	if (gpio - EXP_BASE >= EXP_LINES) {
+		stop(p,
+		     "tag 0x%08" PRIx32 ": GPIO %" PRIu32 " is not emulated: smirror "
+		     "has the expander's, 128 to 135",
+		     v->tag, gpio);
+		return NULL;
+	}
+	return &p->exp[gpio - EXP_BASE];
+}
+
+static bool exp_state(const ExpLine *line)
+{
+	return line->output ? line->state : line->level;
+}
+
+/* {gpio, direction, polarity, term_en, term_pull_up}: 1 is an output. */
+static bool get_gpio_config(Raspi3bProperty *p, Value *v)
+{
+	const ExpLine *line = exp_line(p, v, 4);
+
+	if (line == NULL)
+		return false;
+	answer(v, 0, 0);
+	answer(v, 1, line->output);
+	answer(v, 2, 0); /* polarity */
+	answer(v, 3, 0); /* no termination */
+	answer(v, 4, 0);
+	return true;
+}
+
+/*
+ * {gpio, direction, polarity, term_en, term_pull_up, state}: Linux keeps
+ * the polarity it reads, 0, and turns termination off, when term_pull_up
+ * does not count. Anything else is not emulated.
+ */
+static bool set_gpio_config(Raspi3bProperty *p, Value *v)
+{
+	ExpLine *line = exp_line(p, v, 24);
+	uint32_t direction, polarity, term_en, state;
+
+	if (line == NULL)
+		return false;
+	direction = arg(v, 1);
+	polarity = arg(v, 2);
+	term_en = arg(v, 3);
+	state = arg(v, 5);
+	if (direction > 1 || polarity != 0 || term_en != 0) {
+		stop(p,
+		     "GPIO %" PRIu32 ": direction %" PRIu32 ", polarity %" PRIu32
+		     " or termination %" PRIu32 " is not emulated",
+		     arg(v, 0), direction, polarity, term_en);
+		return false;
+	}
+	line->output = direction == 1;
+	if (line->output)
+		line->state = state != 0;
+	answer(v, 0, 0);
+	return true;
+}
+
+/* {gpio, state}. */
+static bool get_gpio_state(Raspi3bProperty *p, Value *v)
+{
+	const ExpLine *line = exp_line(p, v, 4);
+
+	if (line == NULL)
+		return false;
+	answer(v, 0, 0);
+	answer(v, 1, exp_state(line));
+	return true;
+}
+
+/* {gpio, state}, of an output: what setting an input does is not known. */
+static bool set_gpio_state(Raspi3bProperty *p, Value *v)
+{
+	ExpLine *line = exp_line(p, v, 8);
+
+	if (line == NULL)
+		return false;
+	if (!line->output) {
+		stop(p, "GPIO %" PRIu32 ": setting an input is not emulated",
+		     arg(v, 0));
+		return false;
+	}
+	line->state = arg(v, 1) != 0;
 	answer(v, 0, 0);
 	return true;
 }
@@ -619,6 +758,10 @@ static const Handler handlers[] = {
 	{0x00000003, get_firmware_hash},
 	{0x00030046, get_throttled},
 	{0x00048020, set_gpiovirtbuf},
+	{0x00030041, get_gpio_state},
+	{0x00038041, set_gpio_state},
+	{0x00030043, get_gpio_config},
+	{0x00038043, set_gpio_config},
 	{0x00010002, get_board_revision},
 	{0x00010003, get_mac_address},
 	{0x00010004, get_board_serial},
