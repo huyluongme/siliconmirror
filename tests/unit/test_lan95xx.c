@@ -873,6 +873,9 @@ static void test_phy_link(void)
 	CHECK(mdio_read(&s, 1) & 0x0004);
 	mdio_write(&s, 0, 0x2200);
 	CHECK(mdio_read(&s, 1) & 0x0004);
+	/* Negotiation turned on, without ANRESTART: it starts. */
+	mdio_write(&s, 0, 0x3000);
+	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
 	/* No ability in common: no link. */
 	mdio_write(&s, 4, 0x0001);
 	mdio_write(&s, 0, 0x1200);
