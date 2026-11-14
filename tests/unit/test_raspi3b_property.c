@@ -147,7 +147,7 @@ static void test_identity(void)
 	CHECK_EQ(word(&s, BUF + 8), 0x00000001);
 	CHECK_EQ(word(&s, BUF + 12), 4);
 	CHECK_EQ(word(&s, BUF + 16), RESPONSE(4));
-	CHECK_EQ(word(&s, BUF + 20), 0x6af5d384);
+	CHECK_EQ(word(&s, BUF + 20), 0x6ae89328); /* 2026-11-02 13:42:00 */
 	CHECK_EQ(word(&s, BUF + 32), RESPONSE(4));
 	CHECK_EQ(word(&s, BUF + 36), RASPI3B_BOARD_REVISION);
 	CHECK_EQ(RASPI3B_BOARD_REVISION, 0xa02082);
@@ -678,6 +678,70 @@ static void test_mac(void)
 }
 
 /*
+ * The firmware's build, as Linux asks for it: its variant and Git hash;
+ * whether the board was throttled; the virtual GPIOs' buffer.
+ */
+static void test_firmware_build(void)
+{
+	uint32_t buf[] = {
+		sizeof(uint32_t[28]),
+		0,
+		0x00000002,
+		4,
+		0,
+		0xffffffff, /* variant */
+		0x00000003,
+		20,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0, /* hash */
+		0x00030046,
+		4,
+		0,
+		0xffff, /* throttled, as Linux asks */
+		0x00048020,
+		4,
+		0,
+		0x3a001000, /* the virtual GPIOs' buffer */
+		0,          /* end */
+		0,
+		0,
+		0,
+		0,
+		0,
+	};
+	uint32_t shortbuf[] = {sizeof(uint32_t[6]), 0, 0x00048020, 0, 0, 0};
+	Setup s;
+
+	setup(&s);
+	send(&s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(&s, BUF + 4), OK);
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(4));
+	CHECK_EQ(word(&s, BUF + 20), 1); /* start */
+	CHECK_EQ(word(&s, BUF + 32), RESPONSE(20));
+	CHECK_EQ(word(&s, BUF + 36), 0x13c4219f);
+	CHECK_EQ(word(&s, BUF + 40), 0x16dbe58c);
+	CHECK_EQ(word(&s, BUF + 44), 0x5b994608);
+	CHECK_EQ(word(&s, BUF + 48), 0x6b474baf);
+	CHECK_EQ(word(&s, BUF + 52), 0x572512bb);
+	CHECK_EQ(word(&s, BUF + 64), RESPONSE(4));
+	CHECK_EQ(word(&s, BUF + 68), 0);
+	CHECK_EQ(word(&s, BUF + 80), RESPONSE(4));
+	CHECK_EQ(word(&s, BUF + 84), 0); /* success */
+	send_stops(&s, shortbuf, ARRAY_SIZE(shortbuf),
+	           "tag 0x00048020: a value buffer too short for the request is "
+	           "not emulated");
+	shortbuf[3] = 3; /* a word less one byte */
+	send_stops(&s, shortbuf, ARRAY_SIZE(shortbuf),
+	           "tag 0x00048020: a value buffer too short for the request is "
+	           "not emulated");
+	teardown(&s);
+}
+
+/*
  * Every tag of the wiki and of Linux's raspberrypi-firmware.h. Those that
  * smirror does not answer stop the machine; tags next to them that
  * neither names are unknown, and ignored.
@@ -685,28 +749,29 @@ static void test_mac(void)
 static void test_known_tags(void)
 {
 	static const uint32_t known[] = {
-		0x00000001, 0x00008010, 0x00008011, 0x00008012, 0x00010001, 0x00010002,
-		0x00010003, 0x00010004, 0x00010005, 0x00010006, 0x00010007, 0x00020001,
-		0x00020002, 0x00028001, 0x00030001, 0x00030002, 0x00030003, 0x00030004,
-		0x00030005, 0x00030006, 0x00030007, 0x00030008, 0x00030009, 0x0003000a,
-		0x0003000b, 0x0003000c, 0x0003000d, 0x0003000e, 0x0003000f, 0x00030010,
-		0x00030011, 0x00030012, 0x00030014, 0x00030020, 0x00030021, 0x00030030,
-		0x00030041, 0x00030043, 0x00030045, 0x00030046, 0x00030047, 0x00030048,
-		0x00030049, 0x00030050, 0x00030058, 0x00030066, 0x00030087, 0x00034041,
-		0x00038001, 0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030,
-		0x00038041, 0x00038042, 0x00038043, 0x00038045, 0x00038087, 0x00040001,
-		0x00040002, 0x00040003, 0x00040004, 0x00040005, 0x00040006, 0x00040007,
-		0x00040008, 0x00040009, 0x0004000a, 0x0004000b, 0x0004000f, 0x00040010,
-		0x00044003, 0x00044004, 0x00044005, 0x00044006, 0x00044007, 0x00044009,
-		0x0004400a, 0x0004400b, 0x0004400e, 0x00048001, 0x00048003, 0x00048004,
-		0x00048005, 0x00048006, 0x00048007, 0x00048009, 0x0004800a, 0x0004800b,
-		0x0004800e, 0x0004800f, 0x00048010, 0x0004801f, 0x00048020, 0x00050001,
-		0x00060001,
+		0x00000001, 0x00000002, 0x00000003, 0x00008010, 0x00008011, 0x00008012,
+		0x00010001, 0x00010002, 0x00010003, 0x00010004, 0x00010005, 0x00010006,
+		0x00010007, 0x00020001, 0x00020002, 0x00028001, 0x00030001, 0x00030002,
+		0x00030003, 0x00030004, 0x00030005, 0x00030006, 0x00030007, 0x00030008,
+		0x00030009, 0x0003000a, 0x0003000b, 0x0003000c, 0x0003000d, 0x0003000e,
+		0x0003000f, 0x00030010, 0x00030011, 0x00030012, 0x00030014, 0x00030020,
+		0x00030021, 0x00030030, 0x00030041, 0x00030043, 0x00030045, 0x00030046,
+		0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058, 0x00030066,
+		0x00030087, 0x00034041, 0x00038001, 0x00038002, 0x00038003, 0x00038009,
+		0x00038021, 0x00038030, 0x00038041, 0x00038042, 0x00038043, 0x00038045,
+		0x00038087, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
+		0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a, 0x0004000b,
+		0x0004000f, 0x00040010, 0x00044003, 0x00044004, 0x00044005, 0x00044006,
+		0x00044007, 0x00044009, 0x0004400a, 0x0004400b, 0x0004400e, 0x00048001,
+		0x00048003, 0x00048004, 0x00048005, 0x00048006, 0x00048007, 0x00048009,
+		0x0004800a, 0x0004800b, 0x0004800e, 0x0004800f, 0x00048010, 0x0004801f,
+		0x00048020, 0x00050001, 0x00060001,
 	};
 	static const uint32_t answered[] = {
-		0x00000001, 0x00010002, 0x00010003, 0x00010004, 0x00010005, 0x00010006,
-		0x00020001, 0x00020002, 0x00028001, 0x00030002, 0x00030004, 0x00030007,
-		0x00030009, 0x00038002, 0x00038009, 0x00038042, 0x00040003, 0x00050001,
+		0x00000001, 0x00000002, 0x00000003, 0x00030046, 0x00048020, 0x00010002,
+		0x00010003, 0x00010004, 0x00010005, 0x00010006, 0x00020001, 0x00020002,
+		0x00028001, 0x00030002, 0x00030004, 0x00030007, 0x00030009, 0x00038002,
+		0x00038009, 0x00038042, 0x00040003, 0x00050001,
 	};
 	Setup s;
 
@@ -928,6 +993,7 @@ static void test_cmdline_limit(void)
 int main(void)
 {
 	RUN_TEST(test_identity);
+	RUN_TEST(test_firmware_build);
 	RUN_TEST(test_memory);
 	RUN_TEST(test_cmdline);
 	RUN_TEST(test_power);

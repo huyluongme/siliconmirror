@@ -400,7 +400,9 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 
 | Tag          | Answer on smirror's board                                          |
 |--------------|--------------------------------------------------------------------|
-| `0x00000001` | Firmware revision `0x6af5d384`, the time of a firmware release     |
+| `0x00000001` | Firmware revision `0x6ae89328`, when the firmware was built        |
+| `0x00000002` | Firmware variant 1: `start`, as `start.elf` is                     |
+| `0x00000003` | The firmware's Git hash, `13c4219f...572512bb`, in five words      |
 | `0x00010002` | Board revision `0xa02082`: 3 Model B 1.2, 1 GB, Sony UK            |
 | `0x00010003` | MAC address `b8:27:eb:ff:ee:03`                                    |
 | `0x00010004` | Serial number `0x00000000c0ffee03`                                 |
@@ -414,6 +416,12 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00030009` | Turbo, 0 at boot; `0x00038009` sets it                             |
 | `0x00038042` | Set SDHOST's clock: the fastest not above the one asked            |
 | `0x00040003` | Display size: 0 by 0, as no display is connected                   |
+| `0x00030046` | Throttled: 0, as the power supply is good and the board never hot  |
+| `0x00048020` | The virtual GPIOs' buffer: 0, success; nothing reads it            |
+
+The firmware smirror plays is the `start.elf` of raspberrypi/firmware
+commit 896fc67: its revision, variant and hash are those its strings
+give (`VC_BUILD_ID_TIME`, `VC_BUILD_ID_VARIANT`, `VC_BUILD_ID_VERSION`).
 
 The rates are the defaults of `config.txt` on a Raspberry Pi 3: the
 Arm runs at 600 to 1200 MHz, the core at 250 to 400 MHz (250 MHz with

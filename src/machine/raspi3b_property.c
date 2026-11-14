@@ -20,11 +20,21 @@
 #define MIB (1024u * 1024u)
 
 /*
- * The firmware revision is the time it was built, in seconds since 1970
- * (Linux prints it as a date: drivers/firmware/raspberrypi.c). Ours is the
- * time of raspberrypi/firmware commit 896fc67, of 12 November 2026.
+ * The firmware is the start.elf of raspberrypi/firmware commit 896fc67,
+ * of 12 November 2026. Its strings say how it was built:
+ * "VC_BUILD_ID_TIME: Nov  2 2026", "VC_BUILD_ID_TIME: 13:42:00",
+ * "VC_BUILD_ID_VARIANT: start" and its Git hash, "VC_BUILD_ID_VERSION:
+ * 13c4219f16dbe58c5b9946086b474baf572512bb (clean)".
+ *
+ * Its revision is the time it was built, in seconds since 1970, which
+ * Linux prints as a date (drivers/firmware/raspberrypi.c). Its variant
+ * is 1, start, in Linux's list: unknown, start, start_x, start_db,
+ * start_cd. Linux prints the hash as five words in hexadecimal.
  */
-#define FIRMWARE_REVISION 0x6af5d384u
+#define FIRMWARE_REVISION 0x6ae89328u /* 2026-11-02 13:42:00 UTC */
+#define FIRMWARE_VARIANT 1
+static const uint32_t firmware_hash[5] = {0x13c4219f, 0x16dbe58c, 0x5b994608,
+                                          0x6b474baf, 0x572512bb};
 
 /* The bus address of a buffer: the alias in bits 31:30 is dropped. */
 #define BUS_ALIAS_MASK 0x3fffffffu
@@ -107,23 +117,23 @@ struct Raspi3bProperty {
  * Linux's raspberrypi-firmware.h. Sorted.
  */
 static const uint32_t known_tags[] = {
-	0x00000001, 0x00008010, 0x00008011, 0x00008012, 0x00010001, 0x00010002,
-	0x00010003, 0x00010004, 0x00010005, 0x00010006, 0x00010007, 0x00020001,
-	0x00020002, 0x00028001, 0x00030001, 0x00030002, 0x00030003, 0x00030004,
-	0x00030005, 0x00030006, 0x00030007, 0x00030008, 0x00030009, 0x0003000a,
-	0x0003000b, 0x0003000c, 0x0003000d, 0x0003000e, 0x0003000f, 0x00030010,
-	0x00030011, 0x00030012, 0x00030014, 0x00030020, 0x00030021, 0x00030030,
-	0x00030041, 0x00030043, 0x00030045, 0x00030046, 0x00030047, 0x00030048,
-	0x00030049, 0x00030050, 0x00030058, 0x00030066, 0x00030087, 0x00034041,
-	0x00038001, 0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030,
-	0x00038041, 0x00038042, 0x00038043, 0x00038045, 0x00038087, 0x00040001,
-	0x00040002, 0x00040003, 0x00040004, 0x00040005, 0x00040006, 0x00040007,
-	0x00040008, 0x00040009, 0x0004000a, 0x0004000b, 0x0004000f, 0x00040010,
-	0x00044003, 0x00044004, 0x00044005, 0x00044006, 0x00044007, 0x00044009,
-	0x0004400a, 0x0004400b, 0x0004400e, 0x00048001, 0x00048003, 0x00048004,
-	0x00048005, 0x00048006, 0x00048007, 0x00048009, 0x0004800a, 0x0004800b,
-	0x0004800e, 0x0004800f, 0x00048010, 0x0004801f, 0x00048020, 0x00050001,
-	0x00060001,
+	0x00000001, 0x00000002, 0x00000003, 0x00008010, 0x00008011, 0x00008012,
+	0x00010001, 0x00010002, 0x00010003, 0x00010004, 0x00010005, 0x00010006,
+	0x00010007, 0x00020001, 0x00020002, 0x00028001, 0x00030001, 0x00030002,
+	0x00030003, 0x00030004, 0x00030005, 0x00030006, 0x00030007, 0x00030008,
+	0x00030009, 0x0003000a, 0x0003000b, 0x0003000c, 0x0003000d, 0x0003000e,
+	0x0003000f, 0x00030010, 0x00030011, 0x00030012, 0x00030014, 0x00030020,
+	0x00030021, 0x00030030, 0x00030041, 0x00030043, 0x00030045, 0x00030046,
+	0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058, 0x00030066,
+	0x00030087, 0x00034041, 0x00038001, 0x00038002, 0x00038003, 0x00038009,
+	0x00038021, 0x00038030, 0x00038041, 0x00038042, 0x00038043, 0x00038045,
+	0x00038087, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
+	0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a, 0x0004000b,
+	0x0004000f, 0x00040010, 0x00044003, 0x00044004, 0x00044005, 0x00044006,
+	0x00044007, 0x00044009, 0x0004400a, 0x0004400b, 0x0004400e, 0x00048001,
+	0x00048003, 0x00048004, 0x00048005, 0x00048006, 0x00048007, 0x00048009,
+	0x0004800a, 0x0004800b, 0x0004800e, 0x0004800f, 0x00048010, 0x0004801f,
+	0x00048020, 0x00050001, 0x00060001,
 };
 
 static bool known(uint32_t tag)
@@ -276,6 +286,49 @@ static bool get_firmware_revision(Raspi3bProperty *p, Value *v)
 {
 	(void)p;
 	answer(v, 0, FIRMWARE_REVISION);
+	return true;
+}
+
+static bool get_firmware_variant(Raspi3bProperty *p, Value *v)
+{
+	(void)p;
+	answer(v, 0, FIRMWARE_VARIANT);
+	return true;
+}
+
+static bool get_firmware_hash(Raspi3bProperty *p, Value *v)
+{
+	(void)p;
+	for (unsigned i = 0; i < ARRAY_SIZE(firmware_hash); i++)
+		answer(v, i, firmware_hash[i]);
+	return true;
+}
+
+/*
+ * Whether the board was short of power or too hot, and slowed down: bits
+ * 0 to 3 now, 16 to 19 since boot (Raspberry Pi documentation, vcgencmd
+ * get_throttled). The board emulated has a good power supply and never
+ * gets hot: 0. Linux asks with 0xffff in the value; its meaning is not
+ * documented, and nothing that it could clear is ever set here.
+ */
+static bool get_throttled(Raspi3bProperty *p, Value *v)
+{
+	(void)p;
+	answer(v, 0, 0);
+	return true;
+}
+
+/*
+ * Where the Arm keeps the virtual GPIOs, a page of its memory that the
+ * firmware reads: on the Pi 3 Model B, the activity LED (Linux's
+ * gpio-bcm-virt.c). The answer is 0 for success. smirror has no LED to
+ * light, so it reads nothing there.
+ */
+static bool set_gpiovirtbuf(Raspi3bProperty *p, Value *v)
+{
+	if (!needs(p, v, 4))
+		return false;
+	answer(v, 0, 0);
 	return true;
 }
 
@@ -562,6 +615,10 @@ typedef struct Handler {
 
 static const Handler handlers[] = {
 	{0x00000001, get_firmware_revision},
+	{0x00000002, get_firmware_variant},
+	{0x00000003, get_firmware_hash},
+	{0x00030046, get_throttled},
+	{0x00048020, set_gpiovirtbuf},
 	{0x00010002, get_board_revision},
 	{0x00010003, get_mac_address},
 	{0x00010004, get_board_serial},
