@@ -190,12 +190,12 @@ static void test_unimplemented_instruction_stops(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	CHECK_EQ(arm64_test_step(m, c, 0x1e260000),
-	         MACHINE_STOP_ERROR); /* FMOV W0, S0 */
+	CHECK_EQ(arm64_test_step(m, c, 0x1e622820),
+	         MACHINE_STOP_ERROR); /* FADD D0, D1, D2 */
 	CHECK(strcmp(m->stop_message,
-	             "cpu0: instruction 0x1e260000 at 0x0000000000080000 is not "
-	             "implemented yet (Data Processing -- Scalar Floating-Point "
-	             "and Advanced SIMD)") == 0);
+	             "cpu0: instruction 0x1e622820 at 0x0000000000080000 is not "
+	             "implemented yet (Floating-point data-processing (2 "
+	             "source))") == 0);
 	CHECK_EQ(m->insns, 0);
 	machine_destroy(m);
 }

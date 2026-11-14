@@ -79,7 +79,7 @@ Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn)
 	case ARM64_GROUP_DP_REG:
 		return arm64_exec_dp_reg(c, insn);
 	case ARM64_GROUP_SIMD_FP:
-		break;
+		return arm64_exec_simd_fp(c, insn);
 	}
 	return ARM64_EXEC_UNIMPLEMENTED;
 }

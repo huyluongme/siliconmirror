@@ -84,15 +84,20 @@ halting are not emulated yet, so making one possible, such as software
 step or an enabled breakpoint with `MDSCR_EL1.MDE`, stops the machine.
 
 Each core has the 32 SIMD and floating-point registers `V0` to `V31`,
-128 bits each, `FPCR` and `FPSR` (`cpu/arm64/simd_ldst.c`). `FPCR` and
-`FPSR` keep only the bits that the Cortex-A53 has, from its Advanced SIMD
-and Floating-point Extension TRM: it has no floating-point exception
-traps, so their enable bits read as 0. `CPACR_EL1.FPEN`, `CPTR_EL2.TFP`
-and `CPTR_EL3.TFP` trap their use as the architecture says. All the SIMD
-and FP loads and stores work, including `LD1` to `LD4` and `ST1` to
-`ST4`, with the alignment rules of the architecture's pseudocode. The
-other SIMD and floating-point instructions are not implemented yet: one
-stops the machine.
+128 bits each, `FPCR` and `FPSR` (`cpu/arm64/simd.c`,
+`cpu/arm64/simd_ldst.c`). `FPCR` and `FPSR` keep only the bits that the
+Cortex-A53 has, from its Advanced SIMD and Floating-point Extension TRM:
+it has no floating-point exception traps, so their enable bits read as 0.
+`CPACR_EL1.FPEN`, `CPTR_EL2.TFP` and `CPTR_EL3.TFP` trap their use as the
+architecture says. All the SIMD and FP loads and stores work, including
+`LD1` to `LD4` and `ST1` to `ST4`, with the alignment rules of the
+architecture's pseudocode; so do the instructions that move data without
+computing: `DUP`, `INS`, `UMOV`, `SMOV`, `MOVI`, `MVNI`, `ORR` and `BIC`
+with an immediate, and `FMOV`. The other Advanced SIMD and
+floating-point instructions are not implemented yet: one stops the
+machine and names its class. Those that the core lacks, the
+Cryptographic Extension and the half-precision arithmetic of Armv8.2, are
+UNDEFINED.
 
 A System register that the Cortex-A53 has but smirror does not
 implement yet, such as the debug communications channel's `DBGDTR_EL0`,

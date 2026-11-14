@@ -3,8 +3,8 @@
 
 /*
  * Unit tests for the SIMD&FP registers of the AArch64 model: FPCR and
- * FPSR, the traps of CPACR_EL1, CPTR_EL2 and CPTR_EL3, and the SIMD&FP
- * loads and stores (load_store.c, simd_ldst.c, mem.c).
+ * FPSR, the traps of CPACR_EL1, CPTR_EL2 and CPTR_EL3, the SIMD&FP loads
+ * and stores (load_store.c, simd_ldst.c, mem.c) and the moves of simd.c.
  * Every encoding was produced by the GNU assembler, unless a comment says
  * otherwise; binutils disassembles those built by hand as undefined.
  * Section numbers refer to the Arm Architecture Reference Manual, ARM DDI
@@ -30,6 +30,7 @@
 /* Instructions used by several tests. */
 #define LDR_Q0_X1 0x3dc00020u   /* LDR Q0, [X1] */
 #define LDR_Q0_SP 0x3dc003e0u   /* LDR Q0, [SP] */
+#define FMOV_D0_X1 0x9e670020u  /* FMOV D0, X1 */
 #define MRS_X0_FPCR 0xd53b4400u /* MRS X0, FPCR */
 #define MSR_FPCR_X0 0xd51b4400u /* MSR FPCR, X0 */
 #define MRS_X0_FPSR 0xd53b4420u /* MRS X0, FPSR */
@@ -228,7 +229,7 @@ static void check_trap(uint32_t insn, unsigned el, unsigned fpen, bool cptr2,
 
 static void test_traps(void)
 {
-	static const uint32_t users[] = {LDR_Q0_X1, MRS_X0_FPCR};
+	static const uint32_t users[] = {LDR_Q0_X1, FMOV_D0_X1, MRS_X0_FPCR};
 
 	for (unsigned i = 0; i < ARRAY_SIZE(users); i++) {
 		uint32_t insn = users[i];
@@ -282,6 +283,19 @@ static void test_traps(void)
 		0x4c407020, /* LD1 {V0.16B}, [X1] */
 		0x0d409020, /* LD1 {V0.S}[1], [X1] */
 		0x0d40c020, /* LD1R {V0.8B}, [X1] */
+		0x4e1f0420, /* DUP V0.16B, V1.B[15] */
+		0x4e080c20, /* DUP V0.2D, X1 */
+		0x4e071c20, /* INS V0.B[3], W1 */
+		0x6e162420, /* INS V0.H[5], V1.H[2] */
+		0x0e133c20, /* UMOV W0, V1.B[9] */
+		0x4e032c20, /* SMOV X0, V1.B[1] */
+		0x5e0b0420, /* DUP B0, V1.B[5] */
+		0x4f02e740, /* MOVI V0.16B, #0x5a */
+		0x6f00f400, /* FMOV V0.2D, #2.0 */
+		0x1e260020, /* FMOV W0, S1 */
+		0x9eaf0020, /* FMOV V0.D[1], X1 */
+		0x1e204020, /* FMOV S0, S1 */
+		0x1e2e1000, /* FMOV S0, #1.0 */
 		MSR_FPSR_X0, MRS_X0_FPSR, MSR_FPCR_X0,
 	};
 
@@ -293,6 +307,7 @@ static void test_traps(void)
 	 * first. 0x7dc00020: LDR with size = 01 and opc = 11.
 	 */
 	check_trap(0x7dc00020, 1, 0, false, false, false, false, 1, ESR_UNKNOWN);
+	check_trap(0x0e080420, 1, 0, false, false, false, false, 1, ESR_UNKNOWN);
 
 	/* The trap comes before the SP alignment check, and changes nothing. */
 	Arm64Cpu *c;
@@ -797,6 +812,14 @@ static void test_structure_unallocated(void)
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
+/* Run insn with Vd = V0 garbage, V1 = the pattern's first 16 bytes. */
+static void move(Machine *m, Arm64Cpu *c, uint32_t insn)
+{
+	garbage(c);
+	set_v(c, 1, pattern_value(0, 8), pattern_value(8, 8));
+	arm64_test_exec(m, c, insn);
+}
+
 /* Registers other than V0, V1 and X1, each field with high and low bits. */
 static void test_register_numbers(void)
 {
@@ -848,6 +871,69 @@ static void test_register_numbers(void)
 	CHECK_EQ(c->x[22], DATA + 0x118);
 	CHECK_EQ(peek(m, DATA + 0x110, 8), 0x5555555566666666);
 
+	/* Moves */
+	set_v(c, 22, 0x7766554433221100, 0xffeeddccbbaa9988);
+	c->x[27] = 0x0123456789abcdef;
+	arm64_test_exec(m, c, 0x4e0c06d1); /* DUP V17.4S, V22.S[1] */
+	CHECK_V(c, 17, 0x7766554477665544, 0x7766554477665544);
+	arm64_test_exec(m, c, 0x4e080f7d); /* DUP V29.2D, X27 */
+	CHECK_V(c, 29, 0x0123456789abcdef, 0x0123456789abcdef);
+	arm64_test_exec(m, c, 0x4e141f71); /* INS V17.S[2], W27 */
+	CHECK_V(c, 17, 0x7766554477665544, 0x7766554489abcdef);
+	arm64_test_exec(m, c, 0x6e0666d1); /* INS V17.H[1], V22.H[6] */
+	CHECK_V(c, 17, 0x77665544ddcc5544, 0x7766554489abcdef);
+	arm64_test_exec(m, c, 0x0e1c3edb); /* UMOV W27, V22.S[3] */
+	CHECK_EQ(c->x[27], 0xffeeddcc);
+	arm64_test_exec(m, c, 0x4e062edb); /* SMOV X27, V22.H[1] */
+	CHECK_EQ(c->x[27], 0x3322);
+	arm64_test_exec(m, c, 0x5e1306d1); /* MOV B17, V22.B[9] */
+	CHECK_V(c, 17, 0x99, 0);
+	c->x[27] = 0x0123456789abcdef;
+	arm64_test_exec(m, c, 0x1e270371); /* FMOV S17, W27 */
+	CHECK_V(c, 17, 0x89abcdef, 0);
+	arm64_test_exec(m, c, 0x9eaf0371); /* FMOV V17.D[1], X27 */
+	CHECK_V(c, 17, 0x89abcdef, 0x0123456789abcdef);
+	arm64_test_exec(m, c, 0x9e6602db); /* FMOV X27, D22 */
+	CHECK_EQ(c->x[27], 0x7766554433221100);
+	arm64_test_exec(m, c, 0x9eae02db); /* FMOV X27, V22.D[1] */
+	CHECK_EQ(c->x[27], 0xffeeddccbbaa9988);
+	arm64_test_exec(m, c, 0x1e2042d1); /* FMOV S17, S22 */
+	CHECK_V(c, 17, 0x33221100, 0);
+	arm64_test_exec(m, c, 0x1e6e101d); /* FMOV D29, #1.0 */
+	CHECK_V(c, 29, 0x3ff0000000000000, 0);
+	arm64_test_exec(m, c, 0x6f00e431); /* MOVI V17.2D, #0xff */
+	CHECK_V(c, 17, 0xff, 0xff);
+	arm64_test_exec(m, c, 0x6f01d69d); /* MVNI V29.4S, #0x34, MSL #16 */
+	CHECK_V(c, 29, 0xffcb0000ffcb0000, 0xffcb0000ffcb0000);
+	arm64_test_exec(m, c, 0x4f013451); /* ORR V17.4S, #0x22, LSL #8 */
+	CHECK_V(c, 17, 0x00002200000022ff, 0x00002200000022ff);
+	machine_destroy(m);
+}
+
+/* More immediates: VFPExpandImm() with b = 0 and b = 1, h = 1. */
+static void test_fp_immediates(void)
+{
+	static const struct {
+		uint32_t insn;
+		uint64_t lo, hi;
+	} cases[] = {
+		{0x1e201000, 0x40000000, 0},         /* FMOV S0, #2.0 */
+		{0x1e2e3000, 0x3f880000, 0},         /* FMOV S0, #1.0625 */
+		{0x1e311000, 0xc0400000, 0},         /* FMOV S0, #-3.0 */
+		{0x1e6e1000, 0x3ff0000000000000, 0}, /* FMOV D0, #1.0 */
+		{0x1e691000, 0x3fc8000000000000, 0}, /* FMOV D0, #0.1875 */
+		{0x4f00f400, 0x4000000040000000, 0x4000000040000000},
+		/* FMOV V0.4S, #2.0 */
+		{0x6f07f620, 0xbff1000000000000, 0xbff1000000000000},
+		/* FMOV V0.2D, #-1.0625 */
+	};
+	Arm64Cpu *c;
+	Machine *m = machine(&c);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+		move(m, c, cases[i].insn);
+		CHECK_V(c, 0, cases[i].lo, cases[i].hi);
+	}
 	machine_destroy(m);
 }
 
@@ -918,6 +1004,350 @@ static void test_faults(void)
 	machine_destroy(m);
 }
 
+static void test_copy(void)
+{
+	Arm64Cpu *c;
+	Machine *m = machine(&c);
+	uint64_t ones = UINT64_C(0x0101010101010101);
+
+	move(m, c, 0x4e1f0420); /* DUP V0.16B, V1.B[15] */
+	CHECK_V(c, 0, pattern(15) * ones, pattern(15) * ones);
+	move(m, c, 0x0e1e0420); /* DUP V0.4H, V1.H[7] */
+	CHECK_V(c, 0, pattern_value(14, 2) * UINT64_C(0x0001000100010001), 0);
+	move(m, c, 0x0e1c0420); /* DUP V0.2S, V1.S[3] */
+	CHECK_V(c, 0, pattern_value(12, 4) * UINT64_C(0x100000001), 0);
+	move(m, c, 0x4e180420); /* DUP V0.2D, V1.D[1] */
+	CHECK_V(c, 0, pattern_value(8, 8), pattern_value(8, 8));
+
+	c->x[1] = 0x123456789abcdef0;
+	move(m, c, 0x0e010c20); /* DUP V0.8B, W1 */
+	CHECK_V(c, 0, 0xf0 * ones, 0);
+	move(m, c, 0x4e020c20); /* DUP V0.8H, W1 */
+	CHECK_V(c, 0, 0xdef0def0def0def0, 0xdef0def0def0def0);
+	move(m, c, 0x4e040c20); /* DUP V0.4S, W1 */
+	CHECK_V(c, 0, 0x9abcdef09abcdef0, 0x9abcdef09abcdef0);
+	move(m, c, 0x4e080c20); /* DUP V0.2D, X1 */
+	CHECK_V(c, 0, 0x123456789abcdef0, 0x123456789abcdef0);
+
+	/* INS writes one element and keeps the others. */
+	move(m, c, 0x4e071c20); /* INS V0.B[3], W1 */
+	CHECK_V(c, 0, 0xeeeeeeeef0eeee00, 0xdddddddddddddd00);
+	move(m, c, 0x4e181c20); /* INS V0.D[1], X1 */
+	CHECK_V(c, 0, 0xeeeeeeeeeeeeee00, 0x123456789abcdef0);
+	move(m, c, 0x6e162420); /* INS V0.H[5], V1.H[2] */
+	CHECK_V(c, 0, 0xeeeeeeeeeeeeee00,
+	        0xdddddddd0000dd00 | pattern_value(4, 2) << 16);
+	move(m, c, 0x6e046420); /* INS V0.S[0], V1.S[3] */
+	CHECK_V(c, 0, 0xeeeeeeee00000000 | pattern_value(12, 4),
+	        0xdddddddddddddd00);
+	move(m, c, 0x6e084420); /* INS V0.D[0], V1.D[1] */
+	CHECK_V(c, 0, pattern_value(8, 8), 0xdddddddddddddd00);
+
+	/* UMOV and SMOV to W clear the upper half of X. */
+	set_v(c, 1, 0x8899aabbccddeeff, 0x8070605040302010);
+	c->x[0] = UINT64_MAX;
+	arm64_test_exec(m, c, 0x0e133c20); /* UMOV W0, V1.B[9] */
+	CHECK_EQ(c->x[0], 0x20);
+	arm64_test_exec(m, c, 0x0e0e3c20); /* UMOV W0, V1.H[3] */
+	CHECK_EQ(c->x[0], 0x8899);
+	arm64_test_exec(m, c, 0x0e143c20); /* UMOV W0, V1.S[2] */
+	CHECK_EQ(c->x[0], 0x40302010);
+	arm64_test_exec(m, c, 0x4e183c20); /* UMOV X0, V1.D[1] */
+	CHECK_EQ(c->x[0], 0x8070605040302010);
+	arm64_test_exec(m, c, 0x0e032c20); /* SMOV W0, V1.B[1] */
+	CHECK_EQ(c->x[0], 0xffffffee);
+	arm64_test_exec(m, c, 0x4e032c20); /* SMOV X0, V1.B[1] */
+	CHECK_EQ(c->x[0], 0xffffffffffffffee);
+	arm64_test_exec(m, c, 0x4e122c20); /* SMOV X0, V1.H[4] */
+	CHECK_EQ(c->x[0], 0x2010);
+	arm64_test_exec(m, c, 0x4e1c2c20); /* SMOV X0, V1.S[3] */
+	CHECK_EQ(c->x[0], 0xffffffff80706050);
+	arm64_test_exec(m, c, 0x0e022c20); /* SMOV W0, V1.H[0] */
+	CHECK_EQ(c->x[0], 0xffffeeff);
+
+	/* DUP (element), scalar: MOV Bd, Vn.B[i] and the others. */
+	move(m, c, 0x5e0b0420); /* MOV B0, V1.B[5] */
+	CHECK_V(c, 0, pattern(5), 0);
+	move(m, c, 0x5e0e0420); /* MOV H0, V1.H[3] */
+	CHECK_V(c, 0, pattern_value(6, 2), 0);
+	move(m, c, 0x5e0c0420); /* MOV S0, V1.S[1] */
+	CHECK_V(c, 0, pattern_value(4, 4), 0);
+	move(m, c, 0x5e180420); /* MOV D0, V1.D[1] */
+	CHECK_V(c, 0, pattern_value(8, 8), 0);
+	machine_destroy(m);
+}
+
+static void test_fmov(void)
+{
+	Arm64Cpu *c;
+	Machine *m = machine(&c);
+
+	/* FMOV (general): the bits move unchanged. */
+	c->x[1] = 0xffffffff12345678;
+	move(m, c, 0x1e270020); /* FMOV S0, W1 */
+	CHECK_V(c, 0, 0x12345678, 0);
+	move(m, c, 0x9e670020); /* FMOV D0, X1 */
+	CHECK_V(c, 0, 0xffffffff12345678, 0);
+	move(m, c, 0x9eaf0020); /* FMOV V0.D[1], X1 */
+	CHECK_V(c, 0, 0xeeeeeeeeeeeeee00, 0xffffffff12345678);
+	c->x[0] = UINT64_MAX;
+	set_v(c, 1, 0x8899aabbccddeeff, 0x0011223344556677);
+	arm64_test_exec(m, c, 0x1e260020); /* FMOV W0, S1 */
+	CHECK_EQ(c->x[0], 0xccddeeff);
+	arm64_test_exec(m, c, 0x9e660020); /* FMOV X0, D1 */
+	CHECK_EQ(c->x[0], 0x8899aabbccddeeff);
+	arm64_test_exec(m, c, 0x9eae0020); /* FMOV X0, V1.D[1] */
+	CHECK_EQ(c->x[0], 0x0011223344556677);
+
+	/* FMOV (register) */
+	move(m, c, 0x1e204020); /* FMOV S0, S1 */
+	CHECK_V(c, 0, pattern_value(0, 4), 0);
+	move(m, c, 0x1e604020); /* FMOV D0, D1 */
+	CHECK_V(c, 0, pattern_value(0, 8), 0);
+
+	/* FMOV (scalar, immediate): VFPExpandImm(). */
+	move(m, c, 0x1e2e1000); /* FMOV S0, #1.0 */
+	CHECK_V(c, 0, 0x3f800000, 0);
+	move(m, c, 0x1e701000); /* FMOV D0, #-2.0 */
+	CHECK_V(c, 0, 0xc000000000000000, 0);
+	move(m, c, 0x1e281000); /* FMOV S0, #0.125 */
+	CHECK_V(c, 0, 0x3e000000, 0);
+	move(m, c, 0x1e67f000); /* FMOV D0, #31.0 */
+	CHECK_V(c, 0, 0x403f000000000000, 0);
+	machine_destroy(m);
+}
+
+static void test_modified_immediate(void)
+{
+	Arm64Cpu *c;
+	Machine *m = machine(&c);
+
+	move(m, c, 0x4f056560); /* MOVI V0.4S, #0xab, LSL #24 */
+	CHECK_V(c, 0, 0xab000000ab000000, 0xab000000ab000000);
+	move(m, c, 0x0f050560); /* MOVI V0.2S, #0xab */
+	CHECK_V(c, 0, 0x000000ab000000ab, 0);
+	move(m, c, 0x4f06a5a0); /* MOVI V0.8H, #0xcd, LSL #8 */
+	CHECK_V(c, 0, 0xcd00cd00cd00cd00, 0xcd00cd00cd00cd00);
+	move(m, c, 0x0f0685a0); /* MOVI V0.4H, #0xcd */
+	CHECK_V(c, 0, 0x00cd00cd00cd00cd, 0);
+	move(m, c, 0x4f00c640); /* MOVI V0.4S, #0x12, MSL #8 */
+	CHECK_V(c, 0, 0x000012ff000012ff, 0x000012ff000012ff);
+	move(m, c, 0x0f00d640); /* MOVI V0.2S, #0x12, MSL #16 */
+	CHECK_V(c, 0, 0x0012ffff0012ffff, 0);
+	move(m, c, 0x4f02e740); /* MOVI V0.16B, #0x5a */
+	CHECK_V(c, 0, 0x5a5a5a5a5a5a5a5a, 0x5a5a5a5a5a5a5a5a);
+	move(m, c, 0x0f02e740); /* MOVI V0.8B, #0x5a */
+	CHECK_V(c, 0, 0x5a5a5a5a5a5a5a5a, 0);
+	move(m, c, 0x2f05e540); /* MOVI D0, #0xff00ff00ff00ff00 */
+	CHECK_V(c, 0, 0xff00ff00ff00ff00, 0);
+	move(m, c, 0x6f02e6a0); /* MOVI V0.2D, #0x00ff00ff00ff00ff */
+	CHECK_V(c, 0, 0x00ff00ff00ff00ff, 0x00ff00ff00ff00ff);
+
+	move(m, c, 0x6f054560); /* MVNI V0.4S, #0xab, LSL #16 */
+	CHECK_V(c, 0, 0xff54ffffff54ffff, 0xff54ffffff54ffff);
+	move(m, c, 0x6f008640); /* MVNI V0.8H, #0x12 */
+	CHECK_V(c, 0, 0xffedffedffedffed, 0xffedffedffedffed);
+	move(m, c, 0x2f01c680); /* MVNI V0.2S, #0x34, MSL #8 */
+	CHECK_V(c, 0, 0xffffcb00ffffcb00, 0);
+
+	/* ORR and BIC change Vd; the 64-bit forms clear its upper half. */
+	move(m, c, 0x4f003620); /* ORR V0.4S, #0x11, LSL #8 */
+	CHECK_V(c, 0, 0xeeeeffeeeeeeff00, 0xdddddddddddddd00);
+	move(m, c, 0x0f01b440); /* ORR V0.4H, #0x22, LSL #8 */
+	CHECK_V(c, 0, 0xeeeeeeeeeeeeee00, 0);
+	move(m, c, 0x6f0797e0); /* BIC V0.8H, #0xff */
+	CHECK_V(c, 0, 0xee00ee00ee00ee00, 0xdd00dd00dd00dd00);
+	move(m, c, 0x2f047400); /* BIC V0.2S, #0x80, LSL #24 */
+	CHECK_V(c, 0, 0x6eeeeeee6eeeee00, 0);
+
+	move(m, c, 0x4f03f600); /* FMOV V0.4S, #1.0 */
+	CHECK_V(c, 0, 0x3f8000003f800000, 0x3f8000003f800000);
+	move(m, c, 0x0f07f400); /* FMOV V0.2S, #-0.5 */
+	CHECK_V(c, 0, 0xbf000000bf000000, 0);
+	move(m, c, 0x6f00f400); /* FMOV V0.2D, #2.0 */
+	CHECK_V(c, 0, 0x4000000000000000, 0x4000000000000000);
+	machine_destroy(m);
+}
+
+static void test_move_unallocated(void)
+{
+	static const uint32_t insns[] = {
+		0x4e100420, /* DUP (element) with imm5 = 10000 */
+		0x0e080420, /* DUP V0.1D */
+		0x2e162420, /* INS (element) with Q = 0 */
+		0x4e013c20, /* UMOV X0 from a byte */
+		0x0e042c20, /* SMOV W0 from a word */
+		0x4e011420, /* copy, Q = 1, imm4 = 0010 */
+		0x4e014420, /* copy, imm4 = 1000 */
+		0x0e012420, /* copy, Q = 0, imm4 = 0100 */
+		0x7e010420, /* scalar copy with op = 1 */
+		0x5e010c20, /* scalar copy with imm4 = 0001 */
+		0x5e100420, /* scalar DUP with imm5 = 10000 */
+		0x4f000c00, /* modified immediate, o2 = 1 */
+		0x6f000c00, /* modified immediate, op = 1, o2 = 1 */
+		0x2f00f400, /* FMOV (vector, immediate) of D with Q = 0 */
+		0x9e260020, /* FMOV X0, S1 */
+		0x1e660020, /* FMOV W0, D1 */
+		0x9ea60020, /* FMOV (general) with ftype = 10, rmode = 00 */
+		0x1eae0020, /* FMOV W0, V1.D[1] */
+		0x3e260020, /* FMOV (general) with S = 1 */
+		0x1ea04020, /* FMOV (register) with ftype = 10 */
+		0x9e204020, /* FMOV (register) with M = 1 */
+		0x3e204020, /* FMOV (register) with S = 1 */
+		0x1e2e1020, /* FMOV (scalar, immediate) with imm5 != 0 */
+		0x1eae1000, /* FMOV (scalar, immediate) with ftype = 10 */
+		0x9e2e1000, /* FMOV (scalar, immediate) with M = 1 */
+		0xee000000, /* op0 = 1110 */
+		0x8e000000, /* op0 = 10x0 */
+		0xde000000, /* op0 = 11x1 */
+		0xde010420, /* op0 = 11x1, as a scalar copy would be */
+		0x4e000420, /* DUP (element) with imm5 = 00000 */
+		0x5e000420, /* scalar DUP with imm5 = 00000 */
+		0x6e000420, /* INS (element) with imm5 = 00000 */
+		0x0e071c20, /* INS (general) with Q = 0 */
+		0x4e101c20, /* INS (general) with imm5 = 10000 */
+		0x4e082c20, /* SMOV X0 from a doubleword */
+		0x0e083c20, /* UMOV W0 from a doubleword */
+		0x0e103c20, /* UMOV W0 with imm5 = 10000 */
+		0x1e360020, /* FMOV-like, rmode = 10 (FEAT_FPRCVT) */
+		0x9ebe0020, /* FMOV X0, V1.D[1] with rmode = 11 */
+		0x1ea20020, /* SCVTF with ftype = 10 */
+		0x3e02f420, /* SCVTF (fixed-point) with S = 1 */
+		0x1e82f420, /* SCVTF (fixed-point) with ftype = 10 */
+		0x9e622820, /* FADD with M = 1 */
+		0x3e622820, /* FADD with S = 1 */
+		0x1ea22820, /* FADD with ftype = 10 */
+		0x1e208020, /* scalar FP, op3 = 100000 */
+		0x1ea12000, /* FCMP with ftype = 10 */
+		0x1ea20c20, /* FCSEL with ftype = 10 */
+		0x1f820c20, /* FMADD with ftype = 10 */
+		0x1ea10400, /* FCCMP with ftype = 10 */
+		0x1ea0c020, /* FABS with ftype = 10 */
+		0x1ee34020, /* FP 1 source, half precision, opcode 000110 */
+		0x1e304020, /* FP 1 source, opcode 100000 */
+		0x5e410420, /* scalar, op2 = 1000, as a scalar copy would be */
+		0x5f800420, /* scalar, op1 = 11, op3[0] = 1 */
+		0x4f800420, /* vector, op1 = 11, op3[0] = 1 */
+		0x5ee2b820, /* scalar two-register, op3[7] = 1 */
+		0x4ea2b820, /* vector two-register, op3[7] = 1 */
+		0x5e380820, /* scalar, op2 = 0111 */
+		0x4e380820, /* vector, op2 = 0111 */
+		0x4e028020, /* vector, op2 = x0xx, op3 = xxx1xxxx0 */
+		0x5e828420, /* scalar three same extra with U = 0 */
+		0x4c607020, /* LD1 (multiple) without post-index, bit 21 set */
+		0x0d509020, /* LD1 (single) without post-index, bit 20 set */
+		0x1e2e1200, /* FMOV (scalar, immediate) with imm5 = 10000 */
+		0x4ea4b820, /* vector two-register, op3[8] = 1 */
+		0x5ee4b820, /* scalar two-register, op3[8] = 1 */
+	};
+
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
+}
+
+/* What this core lacks is UNDEFINED: crypto, FEAT_FP16 and newer. */
+static void test_features_undefined(void)
+{
+	static const uint32_t insns[] = {
+		0x4e284820, /* AESE V0.16B, V1.16B */
+		0x5e020020, /* SHA1C Q0, S1, V2.4S */
+		0x5e280820, /* SHA1H S0, S1 */
+		0x5e282820, /* SHA256SU0 V0.4S, V1.4S */
+		0x1ee22820, /* FADD H0, H1, H2 */
+		0x4e421420, /* FADD V0.8H, V1.8H, V2.8H */
+		0x4ef8f820, /* FABS V0.8H, V1.8H */
+		0x1ee70020, /* FMOV H0, W1 */
+		0x1eee1000, /* FMOV H0, #1.0 */
+		0x4f03fe00, /* FMOV V0.8H, #1.0 */
+		0x6e828420, /* SQRDMLAH V0.4S, V1.4S, V2.4S (FEAT_RDM) */
+		0x7e828420, /* SQRDMLAH S0, S1, S2 */
+		0x4e829420, /* SDOT V0.4S, V1.16B, V2.16B (FEAT_DotProd) */
+		0x1e7e0020, /* FJCVTZS W0, D1 (FEAT_JSCVT) */
+		0xce020c20, /* EOR3 V0.16B, V1.16B, V2.16B, V3.16B (FEAT_SHA3) */
+		0xce820c20, /* XAR V0.2D, V1.2D, V2.2D, #3 */
+		0xce628020, /* SHA512H Q0, Q1, V2.2D (FEAT_SHA512) */
+		0xce428020, /* SM3TT1A V0.4S, V1.4S, V2.S[0] (FEAT_SM3) */
+		0x1ee0c020, /* FABS H0, H1 */
+		0x4e420420, /* FMAXNM V0.8H, V1.8H, V2.8H */
+		0x4e481420, /* FADD V0.8H, V1.8H, V8.8H */
+		0x1ee20020, /* SCVTF H0, W1 */
+		0x1ec2f420, /* SCVTF H0, W1, #3 */
+		0x5e0a0020, /* SHA1C Q0, S1, V10.4S */
+		0x7ec81420, /* FABD H0, H1, H8 */
+		0x5e422420, /* FCMEQ H0, H1, H2 */
+		0x7ec21420, /* FABD H0, H1, H2 */
+	};
+
+	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
+}
+
+/* The classes not implemented yet stop the machine and are named. */
+static void test_not_implemented_yet(void)
+{
+	static const struct {
+		uint32_t insn;
+		const char *name;
+	} cases[] = {
+		{0x1e622820, "Floating-point data-processing (2 source)"},
+		{0x4ea28420, "Advanced SIMD three same"},
+		{0x4ea21c20, "Advanced SIMD three same"}, /* ORR, MOV (vector) */
+		{0x4e020020, "Advanced SIMD table lookup"},
+		{0x4e0a0020, "Advanced SIMD table lookup"}, /* with V10 */
+		{0x1e620020, "Conversion between floating-point and integer"},
+		/* SCVTF D0, W1 */
+		{0x4e823820, "Advanced SIMD permute"},
+		{0x6e021820, "Advanced SIMD extract"},
+		{0x4e31b820, "Advanced SIMD across lanes"},
+		{0x4ea0b820, "Advanced SIMD two-register miscellaneous"},
+		{0x4f235420, "Advanced SIMD shift by immediate"},
+		{0x4fa28020, "Advanced SIMD vector x indexed element"},
+		{0x0e620020, "Advanced SIMD three different"},
+		{0x5ee28420, "Advanced SIMD scalar three same"},
+		{0x5ef1b820, "Advanced SIMD scalar pairwise"},
+		{0x5ee0b820, "Advanced SIMD scalar two-register miscellaneous"},
+		{0x5f435420, "Advanced SIMD scalar shift by immediate"},
+		{0x5e62d020, "Advanced SIMD scalar three different"},
+		{0x5f52c020, "Advanced SIMD scalar x indexed element"},
+		{0x1e212000, "Floating-point compare"},
+		{0x1e210400, "Floating-point conditional compare"},
+		{0x1e220c20, "Floating-point conditional select"},
+		{0x1f020c20, "Floating-point data-processing (3 source)"},
+		{0x1e220020, "Conversion between floating-point and integer"},
+		{0x1e02f420, "Conversion between floating-point and fixed-point"},
+		{0x1e20c020, "Floating-point data-processing (1 source)"},
+		{0x1ee24020, "Floating-point data-processing (1 source)"},
+		/* FCVT S0, H1 */
+		{0x1ee2c020, "Floating-point data-processing (1 source)"},
+		/* FCVT D0, H1 */
+		{0x4f400420, "Advanced SIMD shift by immediate"},
+		/* SSHR V0.2D, V1.2D, #64 */
+		{0x1e218400, "Floating-point conditional compare"}, /* HI */
+		{0x1e214400, "Floating-point conditional compare"}, /* MI */
+		{0x1e211400, "Floating-point conditional compare"}, /* NE */
+		{0x1e212400, "Floating-point conditional compare"}, /* CS */
+		{0x1e227c20, "Floating-point conditional select"},  /* VC */
+		{0x1f024020, "Floating-point data-processing (3 source)"},
+		/* FMADD S0, S1, S2, S16 */
+		{0x1f021020, "Floating-point data-processing (3 source)"},
+		/* FMADD S0, S1, S2, S4 */
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+		Arm64Cpu *c;
+		Machine *m = machine(&c);
+		char expected[128];
+
+		snprintf(expected, sizeof(expected), "is not implemented yet (%s)",
+		         cases[i].name);
+		CHECK_EQ(arm64_test_step(m, c, cases[i].insn), MACHINE_STOP_ERROR);
+		if (strstr(m->stop_message, expected) == NULL) {
+			fprintf(stderr, "0x%08" PRIx32 ": %s\n", cases[i].insn,
+			        m->stop_message);
+			test_failures++;
+		}
+		machine_destroy(m);
+	}
+}
+
 int main(void)
 {
 	RUN_TEST(test_reset_and_registers);
@@ -929,7 +1359,14 @@ int main(void)
 	RUN_TEST(test_single_structure);
 	RUN_TEST(test_replicate);
 	RUN_TEST(test_structure_unallocated);
+	RUN_TEST(test_copy);
+	RUN_TEST(test_fmov);
+	RUN_TEST(test_modified_immediate);
+	RUN_TEST(test_move_unallocated);
+	RUN_TEST(test_features_undefined);
+	RUN_TEST(test_not_implemented_yet);
 	RUN_TEST(test_register_numbers);
+	RUN_TEST(test_fp_immediates);
 	RUN_TEST(test_faults);
 	return test_summary();
 }

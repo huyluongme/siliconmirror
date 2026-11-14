@@ -291,6 +291,7 @@ Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_dp_reg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_exec_simd_fp(Arm64Cpu *c, uint32_t insn);
 
 /*
  * The Advanced SIMD load/store structure classes, from simd_ldst.c:

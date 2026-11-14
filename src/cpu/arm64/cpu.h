@@ -15,8 +15,8 @@
  * interrupt inputs of a Cortex-A53, which the board connects to an
  * interrupt controller. Its MMU does stage 1 translation, with a TLB;
  * stage 2 is not implemented yet. It has the SIMD&FP registers and their
- * loads and stores; the other SIMD&FP instructions are not implemented
- * yet.
+ * loads, stores and moves; the data-processing instructions of Advanced
+ * SIMD and floating point are not implemented yet.
  *
  * The System registers whose reset value is UNKNOWN reset to 0, unless
  * the CPU model gives a value, so that every run is the same.

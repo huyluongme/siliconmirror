@@ -1711,7 +1711,7 @@ static void test_stops(void)
 	c->sys.hcr_el2 &= ~ARM64_HCR_DC;
 	CHECK_EQ(arm64_test_step(m, c, fadd), MACHINE_STOP_ERROR);
 	snprintf(expected, sizeof(expected), "is not implemented yet (%s)",
-	         arm64_group_name(arm64_group(fadd)));
+	         "Floating-point data-processing (2 source)");
 	CHECK(strstr(m->stop_message, expected) != NULL);
 	machine_destroy(m);
 
