@@ -288,7 +288,8 @@ static void test_register_values(void)
 		{TUNE_STEPS_DDR, 0xffffffff, 0x3f},
 		{SPI_INT_SPT, 0xffffffff, 0xff},
 		{INTERRUPT, 0xffffffff, 0},
-		{CMDTM, 0, 0}, /* read only here: a write is a command */
+		{CMDTM, 0, 0},    /* read only here: a write is a command */
+		{CONTROL1, 0, 0}, /* read only here: its writes reset */
 		{RESP0, 0, 0},
 		{RESP0 + 4, 0, 0},
 		{RESP0 + 8, 0, 0},
@@ -299,7 +300,8 @@ static void test_register_values(void)
 
 	setup(&s);
 	for (size_t i = 0; i < n; i++) {
-		if (regs[i].offset == CMDTM || (regs[i].offset & ~0xfu) == RESP0)
+		if (regs[i].offset == CMDTM || regs[i].offset == CONTROL1 ||
+		    (regs[i].offset & ~0xfu) == RESP0)
 			continue;
 		wr(&s, regs[i].offset, regs[i].value);
 		for (size_t j = 0; j < n; j++)
@@ -308,7 +310,8 @@ static void test_register_values(void)
 	}
 	/* The host controller's reset: all back, with the clock bits written. */
 	for (size_t i = 0; i < n; i++)
-		if (regs[i].offset != CMDTM && (regs[i].offset & ~0xfu) != RESP0)
+		if (regs[i].offset != CMDTM && regs[i].offset != CONTROL1 &&
+		    (regs[i].offset & ~0xfu) != RESP0)
 			wr(&s, regs[i].offset, regs[i].value);
 	wr(&s, CONTROL1, 1u << 24 | CLK_INTLEN | CLK_EN);
 	for (size_t i = 0; i < n; i++)
@@ -337,7 +340,16 @@ static void test_command_end(void)
 	run_until(&s, s.m->events.now + 1000000);
 	CHECK(irq_level(&s.irq));
 	CHECK_EQ(rd(&s, INTERRUPT), CMD_DONE);
+	wr(&s, CONTROL1, CLK_INTLEN | CLK_EN); /* the flags stay */
+	CHECK_EQ(rd(&s, INTERRUPT), CMD_DONE);
 	wr(&s, CONTROL1, 1u << 24);
+	CHECK(!irq_level(&s.irq));
+	/* FORCE_IRPT sets flags and nothing else; a board reset drops them. */
+	wr(&s, IRPT_EN, 0xffffffff);
+	wr(&s, FORCE_IRPT, CMD_DONE);
+	CHECK(irq_level(&s.irq));
+	CHECK_EQ(rd(&s, BOOT_TIMEOUT), 0);
+	bcm2835_emmc_reset(s.emmc);
 	CHECK(!irq_level(&s.irq));
 	/* Destroyed with a command on the line, which never ends. */
 	clock_on(&s, 0);

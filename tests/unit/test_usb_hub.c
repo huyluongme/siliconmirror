@@ -118,6 +118,7 @@ static void test_descriptors(void)
 	/* Class requests wait for the configuration. */
 	CHECK_EQ(control(d, 0xa0, 6, 0x2900, 0, 9, buf, &got), USB_STALL);
 	CHECK_EQ(control(d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0xa0, 0, 0, 0, 4, buf, &got), USB_ACK); /* zeros */
 	CHECK_EQ(control(d, 0xa0, 6, 0x2900, 0, 64, buf, &got), USB_ACK);
 	CHECK(got == 9 && memcmp(buf, hub, 9) == 0);
 	CHECK_EQ(control(d, 0xa0, 6, 0x2a00, 0, 64, buf, &got), USB_STALL);

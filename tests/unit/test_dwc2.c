@@ -224,8 +224,8 @@ static void test_register_values(void)
 		{GUSBCFG, 0x00001407, 0x00001407},
 		{GRSTCTL, 0x1fu << 6, 0x1fu << 6 | 1u << 31},
 		{GINTSTS, 0xffffffff, 1},
-		{GINTMSK, 0x0f000000, 0x0f000000},
-		{GRXFSIZ, 0x12345678, 0x00005678},
+		{GINTMSK, 0x0f000003, 0x0f000003},
+		{GRXFSIZ, 0x12345679, 0x00005679},
 		{GNPTXFSIZ, 0x01000306, 0x01000306},
 		{GI2CCTL, 0x00000011, 0x00000011},
 		{GPVNDCTL, 0x00000022, 0x00000022},
@@ -233,7 +233,7 @@ static void test_register_values(void)
 		{GUID, 0x00001234, 0x00001234},
 		{HPTXFSIZ, 0x02000400, 0x02000400},
 		{HCFG, 0x00000001, 0x00000001},
-		{HFIR, 0x0001ea60, 0x0000ea60},
+		{HFIR, 0x0001ea61, 0x0000ea61},
 		{HAINTMSK, 0xffffffff, 0x000000ff},
 		{PCGCCTL, 0x00000001, 0x00000001},
 		{HCCHAR0 + 0xa0, 0x00d8a200, 0x00d8a200}, /* channel 5 */
@@ -248,8 +248,19 @@ static void test_register_values(void)
 	Setup s;
 
 	setup(&s);
-	for (size_t i = 0; i < n; i++)
-		reset[i] = rd(&s, regs[i].offset);
+	for (size_t i = 0; i < n; i++) {
+		uint64_t o = regs[i].offset;
+
+		reset[i] = rd(&s, o);
+		/* All 0 at reset but these (GRXFSIZ from GHWCFG3). */
+		CHECK_EQ(reset[i], o == GRSTCTL     ? 1u << 31
+		                   : o == GINTSTS   ? 1
+		                   : o == GRXFSIZ   ? 0x0ff0
+		                   : o == GNPTXFSIZ ? 0x0ff00ff0
+		                   : o == GUID      ? 0x2708a000
+		                   : o == HPTXFSIZ  ? 0x0ff00ff0
+		                                    : 0);
+	}
 	for (size_t i = 0; i < n; i++)
 		wr(&s, regs[i].offset, 0);
 	for (size_t i = 0; i < n; i++)
@@ -273,6 +284,8 @@ static void test_register_values(void)
 	wr(&s, HCCHAR0 + 0x20, CHENA | CHDIS);
 	CHECK_EQ(rd(&s, HCINT0 + 0x20), CHHLTD);
 	wr(&s, HCINT0 + 0x20, 1u << 4);
+	CHECK_EQ(rd(&s, HCINT0 + 0x20), CHHLTD);
+	wr(&s, HCCHAR0 + 0x24, CHHLTD); /* HCSPLT, which leaves HCINT */
 	CHECK_EQ(rd(&s, HCINT0 + 0x20), CHHLTD);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
@@ -676,6 +689,7 @@ static void test_halts(void)
 		else
 			wr(&s, GRSTCTL, 1);
 		CHECK_EQ(rd(&s, HCCHAR0 + 0x20) & (CHENA | CHDIS), 0);
+		wr(&s, HCCHAR0 + 0x20, 0x200); /* not running: no stop */
 		event_queue_run_until(&s.m->events, s.m->events.now + 1000000);
 		CHECK_EQ(rd(&s, HCINT0 + 0x20) & XFERCOMPL, 0);
 		CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
@@ -711,6 +725,7 @@ static void test_root_port(void)
 	CHECK_EQ(rd(&s, GINTSTS), 1);
 	/* A reset that ends without power does not enable the port. */
 	wr(&s, HPRT0, 1u << 12 | 1u << 8);
+	CHECK_EQ(rd(&s, PCGCCTL), 0); /* HPRT0's writes reach no other */
 	wr(&s, HPRT0, 0);
 	CHECK_EQ(rd(&s, HPRT0) & 4, 0);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
