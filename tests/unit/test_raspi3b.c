@@ -793,20 +793,27 @@ static void test_reset_runs_the_stub_again(void)
 	remove(KERNEL);
 }
 
-/* USB on the board: DMA transfers on channel 0, as U-Boot makes them. */
+/*
+ * USB on the board: DMA transfers on channel 0, as U-Boot makes them.
+ * The addresses are the datasheet's, written out, not the header's.
+ */
 #define USB_BUF 0x200001 /* odd: all of HCDMA's address bits count */
+#define USB_AT 0x3f980000
+#define EMMC_AT 0x3f300000
+#define PM_AT 0x3f100000
+#define IC_AT 0x3f00b200
 
 static uint32_t usb_rd(Machine *m, uint64_t offset)
 {
 	uint64_t v = 0;
 
-	CHECK_EQ(bus_read(m->bus, RASPI3B_USB_BASE + offset, 4, &v), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, USB_AT + offset, 4, &v), BUS_OK);
 	return (uint32_t)v;
 }
 
 static void usb_wr(Machine *m, uint64_t offset, uint32_t v)
 {
-	CHECK_EQ(bus_write(m->bus, RASPI3B_USB_BASE + offset, 4, v), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, USB_AT + offset, 4, v), BUS_OK);
 }
 
 /* A transfer of size bytes at USB_BUF, through the uncached alias. */
@@ -901,15 +908,27 @@ static void test_usb(void)
 		CHECK_EQ(d[0] | d[1] << 8, reg == 2 ? 0x0007 : 0xc0c3);
 	}
 
+	/* The lines: the DWC2's is GPU interrupt 9, the EMMC's 62. */
+	CHECK_EQ(bus_write(m->bus, IC_AT + 0x10, 4, 1u << 9), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, IC_AT + 0x14, 4, 1u << 30), BUS_OK);
+	usb_wr(m, 0x018, 1u << 24); /* GINTMSK: the port */
+	usb_wr(m, 0x008, 1);        /* GAHBCFG: the line */
+	CHECK_EQ(bus_read(m->bus, IC_AT + 0x04, 4, &v), BUS_OK);
+	CHECK_EQ(v, 1u << 9);
+	CHECK_EQ(bus_write(m->bus, EMMC_AT + 0x38, 4, 1), BUS_OK); /* IRPT_EN */
+	CHECK_EQ(bus_write(m->bus, EMMC_AT + 0x50, 4, 1), BUS_OK); /* FORCE */
+	CHECK_EQ(bus_read(m->bus, IC_AT + 0x08, 4, &v), BUS_OK);
+	CHECK_EQ(v, 1u << 30);
+
 	/* A reset: the root port, the EMMC and the watchdog. */
-	CHECK_EQ(bus_write(m->bus, RASPI3B_EMMC_BASE + 0x28, 4, 0x0f02), BUS_OK);
-	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x24, 4, 0x5a0fffff), BUS_OK);
-	CHECK_EQ(bus_write(m->bus, RASPI3B_PM_BASE + 0x1c, 4, 0x5a000020), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, EMMC_AT + 0x28, 4, 0x0f02), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, PM_AT + 0x24, 4, 0x5a0fffff), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, PM_AT + 0x1c, 4, 0x5a000020), BUS_OK);
 	machine_reset(m);
 	CHECK_EQ(usb_rd(m, 0x440), 0);
-	CHECK_EQ(bus_read(m->bus, RASPI3B_EMMC_BASE + 0x28, 4, &v), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, EMMC_AT + 0x28, 4, &v), BUS_OK);
 	CHECK_EQ(v, 0);
-	CHECK_EQ(bus_read(m->bus, RASPI3B_PM_BASE + 0x1c, 4, &v), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, PM_AT + 0x1c, 4, &v), BUS_OK);
 	CHECK_EQ(v, 0);
 	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
 	machine_destroy(m);
