@@ -10,13 +10,14 @@
 # when a regular expression is given for them. The command reads its
 # standard input from the file INPUT, or from /dev/null.
 function(add_expect_test name)
-	cmake_parse_arguments(PARSE_ARGV 1 arg "" "STATUS;STDOUT;STDERR;INPUT"
+	cmake_parse_arguments(PARSE_ARGV 1 arg ""
+		"STATUS;STDOUT;STDERR;INPUT;MIN_SECONDS"
 		"COMMAND")
 	# The command is a list; escape its separators so that it stays one
 	# -D argument.
 	string(REPLACE ";" "\\;" command "${arg_COMMAND}")
 	set(defines "-DCOMMAND=${command}")
-	foreach(check STATUS STDOUT STDERR INPUT)
+	foreach(check STATUS STDOUT STDERR INPUT MIN_SECONDS)
 		if(DEFINED arg_${check})
 			list(APPEND defines "-D${check}=${arg_${check}}")
 		endif()
