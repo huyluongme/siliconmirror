@@ -516,6 +516,74 @@ static void test_write(void)
 	teardown(&s);
 }
 
+/*
+ * Registers that a write must leave alone; the line when a command
+ * ends; a command that the card answers but that asks for no response;
+ * SDHBCT 0 without data; SDHBLC 0 for one block; CMD12 while a read
+ * waits for a block that does not come.
+ */
+static void test_details(void)
+{
+	Setup s;
+	uint32_t words[128], rsp;
+
+	setup(&s);
+	identify(&s);
+	wr(&s, SDTOUT, 0x123456);
+	CHECK_EQ(rd(&s, SDCDIV), 3);
+	wr(&s, SDTOUT, 0xf00000);
+	wr(&s, SDHSTS, 0x7f8);
+	CHECK_EQ(rd(&s, SDVDD) & 1, 1);
+
+	/* A write's command ends: the FIFO wants data, at once. */
+	wr(&s, SDHBCT, 512);
+	wr(&s, SDHBLC, 1);
+	wr(&s, SDEDM, 4 << 14 | 4 << 9);
+	wr(&s, SDHCFG, SLOW_CARD | DATA_IRPT_EN);
+	wr(&s, SDARG, 8192);
+	wr(&s, SDCMD, NEW | WRITE | 24);
+	run_until(&s, now(&s) + clocks(200, 5));
+	CHECK(irq_level(&s.irq));
+	wr(&s, SDHCFG, SLOW_CARD);
+	for (unsigned i = 0; i < 128; i++) {
+		for (int k = 0; k < 10000 && fifo(&s) == 16; k++)
+			run_until(&s, now(&s) + 100);
+		wr(&s, SDDATA, i);
+	}
+	for (int k = 0; k < 10000 && !(rd(&s, SDHSTS) & BLOCK_IRPT); k++)
+		run_until(&s, now(&s) + 100);
+	wr(&s, SDHSTS, BLOCK_IRPT);
+
+	/* NO_RESPONSE: SDRSP0 keeps what it had, not CMD13's answer, which
+	 * has ILLEGAL_COMMAND for the CMD8 before it. */
+	command(&s, 8 | NO_RESPONSE, 0x1aa);
+	rsp = rd(&s, SDRSP0);
+	command(&s, 13 | NO_RESPONSE, 0xaaaa0000);
+	CHECK_EQ(rd(&s, SDRSP0), rsp);
+	/* SDHBCT 0 matters only to a transfer. */
+	wr(&s, SDHBCT, 0);
+	command(&s, 13, 0xaaaa0000);
+	wr(&s, SDHBCT, 512);
+	/* SDHBLC 0: one block, then nothing more is waited for. */
+	wr(&s, SDHBLC, 0);
+	CHECK_EQ(command(&s, READ | 17, 1024), READ | 17);
+	read_block(&s, words, 128);
+	CHECK(memcmp(words, s.disk.data + 1024, 512) == 0);
+	run_until(&s, now(&s) + 1000000000);
+	CHECK_EQ(rd(&s, SDHSTS) & REW_TIME_OUT, 0);
+	wr(&s, SDHSTS, 0x7f8);
+	/* The last block, then CMD12 before the next one times out. */
+	wr(&s, SDHBLC, 2);
+	CHECK_EQ(command(&s, READ | 18, CARD_SIZE - 512), READ | 18);
+	read_block(&s, words, 128);
+	run_until(&s, now(&s) + clocks(100, 5));
+	command(&s, BUSYWAIT | 12, 0);
+	run_until(&s, now(&s) + 1000000000);
+	CHECK_EQ(rd(&s, SDHSTS) & REW_TIME_OUT, 0);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
 /* 4 data lines, and the card's width that must match. */
 static void test_bus_width(void)
 {
@@ -1204,6 +1272,7 @@ int main(void)
 	RUN_TEST(test_read);
 	RUN_TEST(test_multiple_read);
 	RUN_TEST(test_write);
+	RUN_TEST(test_details);
 	RUN_TEST(test_bus_width);
 	RUN_TEST(test_clock);
 	RUN_TEST(test_abort);
