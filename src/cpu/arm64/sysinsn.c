@@ -213,6 +213,7 @@ static Arm64Exec zero_block(Arm64Cpu *c, uint64_t xt)
 			return arm64_bus_failure(c, t.pa + offset, chunk, true, status,
 			                         false, (xt & ~(size - 1)) + offset);
 	}
+	arm64_monitor_written(c, t.pa, (unsigned)size); /* a write too */
 	return ARM64_EXEC_OK;
 }
 

@@ -80,6 +80,7 @@
 #define ARM64_HCR_RW (UINT32_C(1) << 31)     /* EL1 uses AArch64 */
 #define ARM64_SCTLR_M (1u << 0)              /* MMU enable */
 #define ARM64_SCTLR_A (1u << 1)              /* alignment check */
+#define ARM64_SCTLR_C (1u << 2)              /* data cache enable */
 #define ARM64_SCTLR_SA (1u << 3)             /* SP alignment check */
 #define ARM64_SCTLR_SA0 (1u << 4)            /* SP alignment check at EL0 */
 #define ARM64_SCTLR_UMA (1u << 9)            /* EL0 access to DAIF */
@@ -355,10 +356,24 @@ enum { ARM64_PAGE_FETCH, ARM64_PAGE_READ, ARM64_PAGE_WRITE, ARM64_PAGE_KINDS };
 
 typedef struct Arm64Page {
 	uint64_t va;   /* of the page */
+	uint64_t pa;   /* of the page */
 	uint8_t *host; /* its bytes in host memory, or NULL: no page */
-	unsigned el;
-	bool device; /* Device memory: unaligned data accesses fault */
+	unsigned el;   /* whose permissions the translation checked */
+	bool device;   /* Device memory: unaligned data accesses fault */
 } Arm64Page;
+
+/*
+ * The exclusive monitor of a PE, local and global in one, as on the
+ * Cortex-A53: what the last Load-Exclusive marked, while it is in the
+ * Exclusive Access state. See exclusive.c.
+ */
+typedef struct Arm64Monitor {
+	bool exclusive; /* the Exclusive Access state, else Open Access */
+	uint64_t block; /* the PA of the marked block, ERG bytes */
+	uint64_t va;    /* the Load-Exclusive's address, size and registers */
+	unsigned size;
+	unsigned regs;
+} Arm64Monitor;
 
 typedef struct Arm64Cpu {
 	Cpu cpu;
@@ -377,6 +392,7 @@ typedef struct Arm64Cpu {
 
 	/* The Event Register of WFE and SEV, D1.7.1.1. */
 	bool event_register;
+	Arm64Monitor monitor;
 	Arm64Wait wait; /* meaningful while cpu.state is CPU_HALTED */
 
 	/* Address of the next instruction, set while one executes. */

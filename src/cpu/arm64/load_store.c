@@ -7,11 +7,11 @@
  *
  * Implemented so far: the general-purpose register forms with an
  * immediate offset (unsigned offset, unscaled, pre-index and post-index)
- * or a register offset, the literal forms, the register pairs, and the
- * prefetches, which are hints with no effect here. The SIMD&FP forms,
- * the unprivileged forms, and the exclusive and ordered classes are not
- * implemented yet. Classes that only hold instructions newer than
- * Armv8.0 are UNDEFINED.
+ * or a register offset, the literal forms, the register pairs, the
+ * prefetches, which are hints with no effect here, and the exclusive and
+ * ordered class, which is in exclusive.c. The SIMD&FP forms and the
+ * unprivileged forms are not implemented yet. Classes that only hold
+ * instructions newer than Armv8.0 are UNDEFINED.
  *
  * Where the manual leaves a choice of CONSTRAINED UNPREDICTABLE
  * behaviors, this model makes these:
@@ -249,8 +249,11 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 		/*
 		 * Exclusive, ordered and compare and swap classes, and the
 		 * Advanced SIMD structure loads and stores. Their encodings are
-		 * decoded in detail when they are implemented.
+		 * decoded in detail when they are implemented. The exclusive
+		 * and ordered class is size[31:30] 001000 with V clear.
 		 */
+		if (!bit32(insn, 26) && field32(insn, 29, 24) == 0x08)
+			return arm64_exec_exclusive(c, insn);
 		return ARM64_EXEC_UNIMPLEMENTED;
 	case 1:
 		/*

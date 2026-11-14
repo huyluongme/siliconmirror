@@ -419,24 +419,6 @@ static void test_undefined(void)
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
-static void test_not_implemented_yet(void)
-{
-	static const uint32_t insns[] = {
-		0xd5033f5f, /* CLREX */
-	};
-
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message,
-		             "is not implemented yet (Branches, Exception "
-		             "Generating and System instructions)") != NULL);
-		machine_destroy(m);
-	}
-}
-
 int main(void)
 {
 	RUN_TEST(test_b_and_bl);
@@ -452,6 +434,5 @@ int main(void)
 	RUN_TEST(test_sev_wakes_other_cpus);
 	RUN_TEST(test_barriers);
 	RUN_TEST(test_undefined);
-	RUN_TEST(test_not_implemented_yet);
 	return test_summary();
 }

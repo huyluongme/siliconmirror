@@ -314,8 +314,7 @@ static bool illegal_return(Arm64Cpu *c, uint64_t spsr)
  *
  * The return address goes through AArch64_BranchAddr() at the new
  * Exception level, which removes its tag when TCR_ELx.TBI says so.
- * ClearExclusiveLocal() has nothing to clear: the exclusive monitors are
- * not implemented yet.
+ * ClearExclusiveLocal() returns the exclusive monitor to Open Access.
  */
 Arm64Exec arm64_exec_eret(Arm64Cpu *c)
 {
@@ -339,6 +338,7 @@ Arm64Exec arm64_exec_eret(Arm64Cpu *c)
 	c->nzcv = (uint32_t)spsr & 0xf0000000;
 	c->daif = (uint32_t)spsr & 0x3c0;
 	c->event_register = true; /* SendEventLocal() */
+	arm64_monitor_clear(c);   /* ClearExclusiveLocal() */
 	c->next_pc = arm64_branch_addr(c, elr);
 	return ARM64_EXEC_OK;
 }

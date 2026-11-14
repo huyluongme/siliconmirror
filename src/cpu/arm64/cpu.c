@@ -39,6 +39,7 @@ static void arm64_reset(Cpu *base)
 	c->pc = c->config.reset_pc;
 	c->next_pc = c->pc;
 	c->event_register = false;
+	arm64_monitor_clear(c);
 	arm64_sysreg_reset(c);
 	arm64_timer_reset(c);
 	arm64_pmu_reset(c);
@@ -116,12 +117,12 @@ static Arm64Exec fetch(Arm64Cpu *c, uint32_t *insn)
 	const uint8_t *host;
 	uint64_t value;
 	BusStatus status;
-	bool device;
+	const Arm64Page *page;
 
 	/* The PC is aligned: the 4 bytes are in its page. */
-	host = arm64_page_lookup(c, ARM64_PAGE_FETCH, c->pc, &device);
-	if (host != NULL) {
-		*insn = load_le32(host);
+	page = arm64_page_find(c, ARM64_PAGE_FETCH, c->pc, c->el);
+	if (page != NULL) {
+		*insn = load_le32(page->host + (c->pc & 0xfff));
 		return ARM64_EXEC_OK;
 	}
 	result = arm64_translate(c, c->pc, ARM64_ACCESS_IFETCH, c->el, true, &t);
@@ -129,7 +130,7 @@ static Arm64Exec fetch(Arm64Cpu *c, uint32_t *insn)
 		return result;
 	if (t.fault != ARM64_FAULT_NONE)
 		return arm64_translation_fault(c, c->pc, ARM64_ACCESS_IFETCH, &t);
-	host = arm64_page_fill(c, ARM64_PAGE_FETCH, c->pc, t.pa, t.attr);
+	host = arm64_page_fill(c, ARM64_PAGE_FETCH, c->pc, c->el, t.pa, t.attr);
 	if (host != NULL) {
 		*insn = load_le32(host);
 		return ARM64_EXEC_OK;
@@ -227,6 +228,7 @@ static uint64_t arm64_run(Cpu *base, uint64_t max_insns)
 
 static void arm64_destroy(Cpu *base)
 {
+	arm64_monitor_clear(arm64_cpu_of(base)); /* out of arm64_exclusive_pes */
 	free(arm64_cpu_of(base));
 }
 
@@ -263,6 +265,46 @@ void arm64_tlb_flush_all_pes(Arm64Cpu *c)
 	for (unsigned i = 0; i < m->num_cpus; i++)
 		if (m->cpus[i]->ops == &arm64_ops)
 			arm64_tlb_flush(arm64_cpu_of(m->cpus[i]));
+}
+
+unsigned arm64_exclusive_pes;
+
+void arm64_monitor_mark(Arm64Cpu *c)
+{
+	if (!c->monitor.exclusive)
+		arm64_exclusive_pes++;
+	c->monitor.exclusive = true;
+}
+
+void arm64_monitor_clear(Arm64Cpu *c)
+{
+	if (c->monitor.exclusive)
+		arm64_exclusive_pes--;
+	c->monitor.exclusive = false;
+}
+
+/*
+ * A write of another PE to the block that a monitor marks clears it, and
+ * the clearing of the monitor is an event for its PE (D1.7.1).
+ */
+void arm64_monitor_search(Arm64Cpu *c, uint64_t pa, unsigned size)
+{
+	Machine *m = c->cpu.machine;
+
+	if (m == NULL)
+		return;
+	for (unsigned i = 0; i < m->num_cpus; i++) {
+		Arm64Cpu *o;
+
+		if (m->cpus[i]->ops != &arm64_ops)
+			continue;
+		o = arm64_cpu_of(m->cpus[i]);
+		if (o != c && o->monitor.exclusive &&
+		    pa < o->monitor.block + ARM64_ERG && o->monitor.block < pa + size) {
+			arm64_monitor_clear(o);
+			arm64_set_event_register(o);
+		}
+	}
 }
 
 void arm64_set_event_register(Arm64Cpu *c)

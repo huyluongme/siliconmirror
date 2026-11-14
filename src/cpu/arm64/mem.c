@@ -80,12 +80,17 @@ static Arm64Exec host_access(uint8_t *host, unsigned size, bool write,
 	return ARM64_EXEC_OK;
 }
 
+/*
+ * A data access of size bytes at va, with the permissions of el in the
+ * current translation regime. A write tells the other PEs' exclusive
+ * monitors.
+ */
 static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
-                             bool write, uint64_t *value)
+                             bool write, uint64_t *value, unsigned el)
 {
 	Arm64Access access = write ? ARM64_ACCESS_WRITE : ARM64_ACCESS_READ;
 	unsigned kind = write ? ARM64_PAGE_WRITE : ARM64_PAGE_READ;
-	bool aligned = (va & (size - 1)) == 0, device;
+	bool aligned = (va & (size - 1)) == 0;
 	uint64_t next_page = (va | 0xfff) + 1;
 	Arm64Translation t, t2;
 	Arm64Exec result;
@@ -94,43 +99,56 @@ static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
 	if (!aligned && alignment_checked(c))
 		return arm64_alignment_fault(c, va, write);
 	/*
-	 * In a page that this kind of access translated before, at this
-	 * level; but an unaligned access to Device memory faults.
+	 * In a page that this kind of access translated before, with these
+	 * permissions; but an unaligned access to Device memory faults.
 	 */
 	if (next_page - va >= size) {
-		host = arm64_page_lookup(c, kind, va, &device);
-		if (host != NULL && (aligned || !device))
-			return host_access(host, size, write, value);
+		const Arm64Page *page = arm64_page_find(c, kind, va, el);
+
+		if (page != NULL && (aligned || !page->device)) {
+			host_access(page->host + (va & 0xfff), size, write, value);
+			if (write)
+				arm64_monitor_written(c, page->pa | (va & 0xfff), size);
+			return ARM64_EXEC_OK;
+		}
 	}
-	result = arm64_translate(c, va, access, c->el, aligned, &t);
+	result = arm64_translate(c, va, access, el, aligned, &t);
 	if (result != ARM64_EXEC_OK)
 		return result;
 	if (t.fault != ARM64_FAULT_NONE)
 		return arm64_translation_fault(c, va, access, &t);
 	if (next_page - va >= size) {
-		host = arm64_page_fill(c, kind, va, t.pa, t.attr);
-		if (host != NULL)
-			return host_access(host, size, write, value);
-		return physical_access(c, va, t.pa, size, write, value);
+		host = arm64_page_fill(c, kind, va, el, t.pa, t.attr);
+		result = host != NULL
+		             ? host_access(host, size, write, value)
+		             : physical_access(c, va, t.pa, size, write, value);
+		if (write && result == ARM64_EXEC_OK)
+			arm64_monitor_written(c, t.pa, size);
+		return result;
 	}
 
-	result = arm64_translate(c, next_page, access, c->el, false, &t2);
+	result = arm64_translate(c, next_page, access, el, false, &t2);
 	if (result != ARM64_EXEC_OK)
 		return result;
 	if (t2.fault != ARM64_FAULT_NONE)
 		return arm64_translation_fault(c, next_page, access, &t2);
-	return split_access(c, va, t.pa, t2.pa, (unsigned)(next_page - va), size,
-	                    write, value);
+	result = split_access(c, va, t.pa, t2.pa, (unsigned)(next_page - va), size,
+	                      write, value);
+	if (write && result == ARM64_EXEC_OK) {
+		arm64_monitor_written(c, t.pa, (unsigned)(next_page - va));
+		arm64_monitor_written(c, t2.pa, size - (unsigned)(next_page - va));
+	}
+	return result;
 }
 
 Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
                          uint64_t *value)
 {
-	return data_access(c, address, size, false, value);
+	return data_access(c, address, size, false, value, c->el);
 }
 
 Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
                           uint64_t value)
 {
-	return data_access(c, address, size, true, &value);
+	return data_access(c, address, size, true, &value, c->el);
 }

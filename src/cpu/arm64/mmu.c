@@ -188,8 +188,8 @@ void arm64_tlb_flush(Arm64Cpu *c)
 	memset(c->pages, 0, sizeof(c->pages));
 }
 
-uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, uint64_t pa,
-                         uint8_t attr)
+uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, unsigned el,
+                         uint64_t pa, uint8_t attr)
 {
 	Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
 	uint8_t *host =
@@ -198,8 +198,9 @@ uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, uint64_t pa,
 	if (host == NULL)
 		return NULL;
 	p->va = va & ~(uint64_t)0xfff;
+	p->pa = pa & ~(uint64_t)0xfff;
 	p->host = host;
-	p->el = c->el;
+	p->el = el;
 	p->device = (attr & 0xf0) == 0;
 	return host + (va & 0xfff);
 }

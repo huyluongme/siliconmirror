@@ -419,31 +419,29 @@ Arm64Exec arm64_at(Arm64Cpu *c, uint64_t va, unsigned el, bool write);
 void arm64_tlb_flush(Arm64Cpu *c);
 
 /*
- * The host memory of the byte at va, when an access of kind at the
- * current level translated its page before, or NULL. An access whose
- * bytes are all in that page may use it: the translation, the
- * permission and the memory type would be the same, until the TLB
- * empties. *device says whether the page is Device memory.
+ * The page of va, when an access of kind with the permissions of el
+ * translated it before, or NULL. An access whose bytes are all in that
+ * page may use it: the translation, the permission and the memory type
+ * would be the same, until the TLB empties.
  */
-static inline uint8_t *arm64_page_lookup(Arm64Cpu *c, unsigned kind,
-                                         uint64_t va, bool *device)
+static inline const Arm64Page *arm64_page_find(const Arm64Cpu *c, unsigned kind,
+                                               uint64_t va, unsigned el)
 {
 	uint64_t page = va & ~(uint64_t)0xfff;
-	Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
+	const Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
 
-	if (p->host == NULL || p->va != page || p->el != c->el)
+	if (p->host == NULL || p->va != page || p->el != el)
 		return NULL;
-	*device = p->device;
-	return p->host + (va & 0xfff);
+	return p;
 }
 
 /*
- * Keep the page of va, which an access of kind at the current level
- * translated to pa with memory attributes attr, when it is RAM. Returns
- * the host memory of the byte at va, or NULL.
+ * Keep the page of va, which an access of kind with the permissions of
+ * el translated to pa with memory attributes attr, when it is RAM.
+ * Returns the host memory of the byte at va, or NULL.
  */
-uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, uint64_t pa,
-                         uint8_t attr);
+uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, unsigned el,
+                         uint64_t pa, uint8_t attr);
 uint64_t arm64_branch_addr(const Arm64Cpu *c, uint64_t target);
 
 /*
@@ -469,6 +467,38 @@ Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
                          uint64_t *value);
 Arm64Exec arm64_mem_write(Arm64Cpu *c, uint64_t address, unsigned size,
                           uint64_t value);
+
+/*
+ * The exclusive monitors. arm64_exec_exclusive(), from exclusive.c,
+ * executes the Load/store exclusive class of C4.1. From cpu.c:
+ * arm64_monitor_mark() puts the PE's monitor in the Exclusive Access
+ * state, for what c->monitor holds; arm64_monitor_clear() returns it to
+ * Open Access, for a Store-Exclusive, CLREX, an exception return and a
+ * reset; arm64_monitor_written(), below, tells the monitors of the other
+ * PEs that the PE wrote size bytes at pa, through arm64_monitor_search().
+ * A monitor marks a block of ARM64_ERG bytes, the Exclusives reservation
+ * granule of CTR_EL0.ERG.
+ */
+#define ARM64_ERG 64u /* the Cortex-A53's, 16 words: one cache line */
+
+Arm64Exec arm64_exec_exclusive(Arm64Cpu *c, uint32_t insn);
+void arm64_monitor_mark(Arm64Cpu *c);
+void arm64_monitor_clear(Arm64Cpu *c);
+void arm64_monitor_search(Arm64Cpu *c, uint64_t pa, unsigned size);
+
+/*
+ * How many PEs of every machine have a monitor in the Exclusive Access
+ * state. While there are none, a write has no monitor to clear: it spares
+ * every store the search, so it may count PEs of other machines too.
+ */
+extern unsigned arm64_exclusive_pes;
+
+static inline void arm64_monitor_written(Arm64Cpu *c, uint64_t pa,
+                                         unsigned size)
+{
+	if (arm64_exclusive_pes != 0)
+		arm64_monitor_search(c, pa, size);
+}
 
 /*
  * Keep, for the message that stops the machine, a bus access of size

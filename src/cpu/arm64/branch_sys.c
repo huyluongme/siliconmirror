@@ -9,9 +9,9 @@
  * Implemented so far: the branches, the hints, the DMB, DSB and ISB
  * barriers, the System register moves and PSTATE moves, which are in
  * sysreg.c, the System instructions, which are in sysinsn.c, and the
- * exception generating instructions and ERET, which are in exception.c.
- * CLREX is not implemented yet. Classes that only hold instructions
- * newer than Armv8.0 are UNDEFINED.
+ * exception generating instructions and ERET, which are in exception.c,
+ * and CLREX. Classes that only hold instructions newer than Armv8.0 are
+ * UNDEFINED.
  *
  * A branch goes to its target through AArch64_BranchAddr(), which
  * removes a tag from the top byte when TCR_ELx.TBI says so.
@@ -151,16 +151,18 @@ static Arm64Exec hint(Arm64Cpu *c, uint32_t insn)
 /*
  * Barriers. DMB, DSB and ISB, C6.2.150, C6.2.152 and C6.2.178, have
  * nothing to wait for here: each instruction completes, memory accesses
- * included, before the next one starts.
+ * included, before the next one starts. CLREX, C6.2.89, clears the local
+ * monitor whatever its CRm.
  */
-static Arm64Exec barrier(uint32_t insn)
+static Arm64Exec barrier(Arm64Cpu *c, uint32_t insn)
 {
 	if (field32(insn, 4, 0) != 0x1f) /* Rt != 11111: UNALLOCATED */
 		return ARM64_EXEC_UNDEFINED;
 
 	switch (field32(insn, 7, 5)) { /* op2 */
 	case 2:                        /* CLREX */
-		return ARM64_EXEC_UNIMPLEMENTED;
+		arm64_monitor_clear(c);
+		return ARM64_EXEC_OK;
 	case 4: /* DSB */
 	case 5: /* DMB */
 	case 6: /* ISB */
@@ -195,7 +197,7 @@ static Arm64Exec system_space(Arm64Cpu *c, uint32_t insn)
 	if (l == 0 && op1 == 3 && crn == 2 && field32(insn, 4, 0) == 0x1f)
 		return hint(c, insn);
 	if (l == 0 && op1 == 3 && crn == 3)
-		return barrier(insn);
+		return barrier(c, insn);
 	/*
 	 * The rest is HINTE (FEAT_HINTE), WFET and WFIT (FEAT_WFxT), or
 	 * UNALLOCATED.

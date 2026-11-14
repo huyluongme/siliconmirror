@@ -60,6 +60,17 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   `L2ECTLR_EL1`; for the other two, which control and report on the
   same L2, smirror assumes it.
 
+Each core has the Cortex-A53's exclusive monitor (`cpu/arm64/exclusive.c`),
+local and global in one: a Load-Exclusive marks the 64-byte block of its
+address, one cache line. A Store-Exclusive, `CLREX` or an exception
+return clears it; a store of the same core does not, as the TRM says. A
+write of another core to the block clears it and wakes that core from
+`WFE`, which is how Linux waits for a spinlock. Writes of DMA do not:
+they take no part in the cores' cache coherence. The A53 sends an
+exclusive access to memory that is not Normal Write-Back, or with the
+data cache off, to a monitor on its AXI bus; whether the BCM2837 has one
+is not known, so smirror stops there.
+
 The performance monitors (`cpu/arm64/pmu.c`) have the Cortex-A53's 6
 event counters and its cycle counter, with `PMCR_EL0` resetting to
 `0x41033000` and `PMCEID0_EL0` reading `0x67ffbfff`, as the BCM2837 has

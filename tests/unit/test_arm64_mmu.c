@@ -1621,7 +1621,7 @@ static void test_stops(void)
 		.values = values,
 		.num_values = 2,
 	};
-	const uint32_t clrex = 0xd503305f;
+	const uint32_t fadd = 0x1e622820; /* FADD D0, D1, D2 */
 	char expected[128];
 	Arm64Cpu *c;
 	Machine *m = machine(&c);
@@ -1709,9 +1709,9 @@ static void test_stops(void)
 	      NULL);
 	/* The next stop does not show that detail. */
 	c->sys.hcr_el2 &= ~ARM64_HCR_DC;
-	CHECK_EQ(arm64_test_step(m, c, clrex), MACHINE_STOP_ERROR);
+	CHECK_EQ(arm64_test_step(m, c, fadd), MACHINE_STOP_ERROR);
 	snprintf(expected, sizeof(expected), "is not implemented yet (%s)",
-	         arm64_group_name(arm64_group(clrex)));
+	         arm64_group_name(arm64_group(fadd)));
 	CHECK(strstr(m->stop_message, expected) != NULL);
 	machine_destroy(m);
 
