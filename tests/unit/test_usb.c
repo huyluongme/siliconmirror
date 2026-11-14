@@ -28,6 +28,8 @@ static unsigned configured_with = 99;
 static uint8_t vendor_out[4];
 static bool fake_is_busy;
 static uint8_t vendor_in = 0x11;
+static unsigned vendor_reads;
+static unsigned last_ep = 99;
 
 static bool fake_request(UsbDevice *d, const UsbSetup *s, uint8_t *data,
                          size_t *len)
@@ -36,6 +38,7 @@ static bool fake_request(UsbDevice *d, const UsbSetup *s, uint8_t *data,
 	if ((s->bm_request_type & USB_TYPE_MASK) != USB_TYPE_VENDOR)
 		return false;
 	if (s->b_request == 0xa1 && (s->bm_request_type & USB_DIR_IN)) {
+		vendor_reads++;
 		memcpy(data, "\x11\x22\x33\x44", 4);
 		data[0] = vendor_in;
 		*len = 4;
@@ -53,6 +56,7 @@ static UsbResult fake_in(UsbDevice *d, unsigned ep, uint8_t *buf, size_t max,
 {
 	(void)d;
 	(void)max;
+	last_ep = ep;
 	if (ep != 1)
 		return USB_STALL;
 	memcpy(buf, "ok", 2);
@@ -270,11 +274,148 @@ static void test_busy(void)
 	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
 }
 
+static UsbResult fake_out(UsbDevice *d, unsigned ep, const uint8_t *buf,
+                          size_t len)
+{
+	(void)d;
+	(void)buf;
+	(void)len;
+	last_ep = ep;
+	return USB_ACK;
+}
+
+/* Bus powered, remote wakeup, an OUT endpoint: config value 1. */
+static const uint8_t config_bus[9] = {9, 2, 9, 0, 0, 1, 0, 0xa0, 50};
+static const UsbDeviceClass fake_bus = {
+	.device = device_desc,
+	.config = config_bus,
+	.alternates = 1,
+	.in = fake_in,
+	.out = fake_out,
+};
+
+/* Requests of chapter 9 at their limits; the stages after each. */
+static void test_chapter9(void)
+{
+	UsbDevice d;
+	uint8_t buf[64], set_address[8] = {0, 5, 7, 0, 0, 0, 0, 0};
+	size_t got, len;
+
+	usb_device_init(&d, &fake, NULL, USB_SPEED_HIGH);
+	/* Endpoint 0's halt, before a configuration; a bus reset clears it. */
+	CHECK_EQ(control(&d, 0x02, 3, 0, 0x00, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0x02, 3, 0, 0x81, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(&d, 0x82, 0, 0, 0x00, 2, buf, &got), USB_ACK);
+	CHECK_EQ(buf[0], 1);
+	CHECK_EQ(control(&d, 0x82, 0, 0, 0x81, 2, buf, &got), USB_STALL);
+	CHECK_EQ(control(&d, 0x83, 0, 0, 0, 2, buf, &got), USB_STALL);
+	usb_device_reset(&d);
+	CHECK_EQ(control(&d, 0x82, 0, 0, 0x00, 2, buf, &got), USB_ACK);
+	CHECK_EQ(buf[0], 0);
+	/* GET_STATUS clears both bytes, and gives 2 of the 8 asked for. */
+	CHECK_EQ(control(&d, 0x80, 6, 0x0100, 0, 18, buf, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0x80, 0, 0, 0, 8, buf, &got), USB_ACK);
+	CHECK(got == 2 && buf[0] == 1 && buf[1] == 0);
+	/* The qualifier's configurations; 10 bytes of the 64 asked for. */
+	CHECK_EQ(control(&d, 0x80, 6, 0x0600, 0, 64, buf, &got), USB_ACK);
+	CHECK(got == 10 && buf[8] == 1 && buf[9] == 0);
+	/* SET_ADDRESS: 127 at most, wIndex 0, back to 0. */
+	CHECK_EQ(control(&d, 0, 5, 127, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(d.address, 127);
+	CHECK_EQ(control(&d, 0, 5, 7, 1, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(&d, 0, 5, 0, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(d.address, 0);
+	/* A SETUP that comes before SET_ADDRESS's status stage cancels it. */
+	CHECK_EQ(usb_device_setup(&d, set_address), USB_ACK);
+	CHECK_EQ(control(&d, 0, 9, 3, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(d.address, 0);
+	/* One status stage only. */
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+	CHECK_EQ(control(&d, 0x80, 8, 0, 0, 2, buf, &got), USB_ACK);
+	CHECK(got == 1 && buf[0] == 3);
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+	CHECK_EQ(usb_device_out(&d, 0, NULL, 0), USB_STALL);
+	/* SET_CONFIGURATION: the alternate setting and the halts reset. */
+	CHECK_EQ(control(&d, 0x01, 11, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0x02, 3, 0, 0x81, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0, 9, 3, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0x81, 10, 0, 0, 2, buf, &got), USB_ACK);
+	CHECK(got == 1 && buf[0] == 0);
+	CHECK_EQ(control(&d, 0x81, 10, 0, 1, 1, buf, &got), USB_STALL);
+	CHECK_EQ(usb_device_in(&d, 1, buf, 512, &len), USB_ACK);
+	/* No device sees endpoint 16. */
+	CHECK_EQ(usb_device_in(&d, 16, buf, 512, &len), USB_STALL);
+	CHECK(last_ep != 16);
+	/* Configuration 0: back to the Address state. */
+	CHECK_EQ(control(&d, 0, 9, 0, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(d.config, 0);
+	CHECK_EQ(control(&d, 0x81, 10, 0, 0, 1, buf, &got), USB_STALL);
+	CHECK_EQ(control(&d, 0x01, 11, 0, 0, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(&d, 0x81, 0, 0, 0, 2, buf, &got), USB_STALL);
+	/* An IN request without data has an IN status stage. */
+	CHECK_EQ(control(&d, 0x80, 0, 0, 0, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(usb_device_out(&d, 0, NULL, 0), USB_STALL);
+
+	/* An IN request runs once, however many packets it takes. */
+	vendor_reads = 0;
+	{
+		uint8_t read[8] = {0xc0, 0xa1, 0, 0, 0, 1, 4, 0};
+
+		CHECK_EQ(usb_device_setup(&d, read), USB_ACK);
+		CHECK_EQ(usb_device_in(&d, 0, buf, 2, &len), USB_ACK);
+		CHECK_EQ(usb_device_in(&d, 0, buf + 2, 2, &len), USB_ACK);
+		CHECK(memcmp(buf, "\x11\x22\x33\x44", 4) == 0);
+		CHECK_EQ(vendor_reads, 1);
+		CHECK_EQ(usb_device_out(&d, 0, NULL, 0), USB_ACK);
+		/* After a STALL, the next IN stalls too. */
+		read[1] = 0xa5;
+		CHECK_EQ(usb_device_setup(&d, read), USB_ACK);
+		CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+		CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+	}
+	/* OUT data in two packets; more than wLength stalls, and stays so. */
+	{
+		uint8_t write[8] = {0x40, 0xa0, 0, 0, 0, 1, 4, 0};
+
+		CHECK_EQ(usb_device_setup(&d, write), USB_ACK);
+		CHECK_EQ(usb_device_out(&d, 0, (const uint8_t *)"wx", 2), USB_ACK);
+		CHECK_EQ(usb_device_out(&d, 0, (const uint8_t *)"yz", 2), USB_ACK);
+		CHECK_EQ(usb_device_in(&d, 0, NULL, 0, &len), USB_ACK);
+		CHECK(memcmp(vendor_out, "wxyz", 4) == 0);
+		CHECK_EQ(usb_device_setup(&d, write), USB_ACK);
+		CHECK_EQ(usb_device_out(&d, 0, buf, 3), USB_ACK);
+		CHECK_EQ(usb_device_out(&d, 0, buf, 3), USB_STALL);
+		CHECK_EQ(usb_device_out(&d, 0, buf, 1), USB_STALL);
+	}
+	/* A bus reset in a data stage ends it. */
+	CHECK_EQ(
+		usb_device_setup(&d, (const uint8_t[8]){0x80, 6, 0, 1, 0, 0, 18, 0}),
+		USB_ACK);
+	usb_device_reset(&d);
+	CHECK_EQ(usb_device_in(&d, 0, buf, 8, &len), USB_STALL);
+	CHECK(usb_device_find(NULL, 0) == NULL);
+
+	/* Bus powered, with remote wakeup: GET_STATUS's two bits. */
+	usb_device_init(&d, &fake_bus, NULL, USB_SPEED_HIGH);
+	CHECK_EQ(control(&d, 0x80, 0, 0, 0, 2, buf, &got), USB_ACK);
+	CHECK_EQ(buf[0], 0);
+	CHECK_EQ(control(&d, 0x00, 3, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(&d, 0x80, 0, 0, 0, 2, buf, &got), USB_ACK);
+	CHECK_EQ(buf[0], 2);
+	CHECK_EQ(control(&d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	last_ep = 99;
+	CHECK_EQ(usb_device_out(&d, 16, buf, 2), USB_STALL);
+	CHECK(last_ep != 16);
+	CHECK_EQ(usb_device_out(&d, 2, buf, 2), USB_ACK);
+	CHECK_EQ(last_ep, 2);
+}
+
 int main(void)
 {
 	RUN_TEST(test_enumeration);
 	RUN_TEST(test_status_and_features);
 	RUN_TEST(test_vendor_requests);
 	RUN_TEST(test_busy);
+	RUN_TEST(test_chapter9);
 	return test_summary();
 }
