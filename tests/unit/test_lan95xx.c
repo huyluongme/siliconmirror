@@ -897,6 +897,18 @@ static void test_phy_link(void)
 	CHECK_EQ(mdio_read(&s, 0), 0x3000); /* the power up's soft reset */
 	mdio_write(&s, 0, 0x3000);
 	CHECK(mdio_read(&s, 1) & 0x0004);
+	/* Negotiation ignores the speed and duplex bits (7.5.1). */
+	mdio_write(&s, 0, 0x1000);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	mdio_write(&s, 0, 0x1100);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	CHECK_EQ(mdio_read(&s, 0), 0x1100);      /* kept, as R/W bits */
+	CHECK_EQ(mdio_read(&s, 31) >> 2 & 7, 6); /* still 100 full */
+	mdio_write(&s, 0, 0x1300);               /* ANRESTART does restart */
+	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
+	run(&s, 2000 * MS);
+	mdio_read(&s, 1);
+	CHECK(mdio_read(&s, 1) & 0x0004);
 	/* A soft reset drops the link at once. */
 	mdio_write(&s, 0, 0x8000);
 	mdio_read(&s, 1);

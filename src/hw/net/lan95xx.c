@@ -535,9 +535,12 @@ static void phy_write(Lan95xx *e, unsigned index, uint16_t v)
 			phy_soft_reset(e);
 		} else if (v & BMCR_POWERDOWN) {
 			phy_link_down(e);
-		} else if (((old ^ v) &
-		            (BMCR_ANENABLE | BMCR_SPEED100 | BMCR_FULLDPLX)) ||
-		           ((v & BMCR_ANRESTART) && (v & BMCR_ANENABLE))) {
+		} else if (v & BMCR_ANENABLE) {
+			/* Negotiation ignores the speed and duplex bits (7.5.1). */
+			if (!(old & BMCR_ANENABLE) || (v & BMCR_ANRESTART))
+				phy_restart(e);
+		} else if ((old & BMCR_ANENABLE) ||
+		           ((old ^ v) & (BMCR_SPEED100 | BMCR_FULLDPLX))) {
 			phy_restart(e);
 		}
 		return;
