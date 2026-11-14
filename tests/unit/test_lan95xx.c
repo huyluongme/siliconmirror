@@ -389,34 +389,38 @@ static void test_register_bits(void)
 	static const struct {
 		unsigned addr;
 		uint32_t bits, fixed, avoid; /* avoid: bits that stop the machine */
+		uint32_t reset;
 	} regs[] = {
-		{PMT_CTL, 0x0000036cu, 0x80, 0x10}, /* not PHY_RST */
-		{LED_GPIO_CFG, 0x03330777u, 0x7, 0},
-		{GPIO_CFG, 0xffffffffu, 0xff, 0},
-		{FLOW, 0xffff0006u, 0, 0x1},
-		{WUCSR, 0x200, 0, 0x6},
-		{COE_CR, 0, 0, 0x00010003u},
-		{AFC_CFG, 0x00ffffffu, 0, 0},
-		{E2P_DATA, 0xff, 0, 0},
-		{BURST_CAP, 0xff, 0, 0},
-		{DP_SEL, 0x7, 0x80000000u, 0}, /* DPRDY */
-		{DP_ADDR, 0x7fff, 0, 0},
-		{DP_DATA0, 0xffffffffu, 0, 0},
-		{DP_DATA1, 0x1f, 0, 0},
-		{GPIO_WAKE, 0x07ff07ffu, 0, 0},
-		{INT_EP_CTL, 0x800fffffu, 0, 0},
-		{BULK_IN_DLY, 0xffff, 0, 0},
-		{ADDRH, 0xffff, 0, 0},
-		{ADDRL, 0xffffffffu, 0, 0},
-		{HASHH, 0xffffffffu, 0, 0},
-		{HASHL, 0xffffffffu, 0, 0},
-		{MII_DATA, 0xffff, 0, 0},
-		{VLAN1, 0xffff, 0, 0},
-		{VLAN2, 0xffff, 0, 0},
+		{PMT_CTL, 0x0000036cu, 0x80, 0x10, 0x1c0}, /* not PHY_RST */
+		{LED_GPIO_CFG, 0x03330777u, 0x7, 0, 0x7},
+		{GPIO_CFG, 0xffffffffu, 0xff, 0, 0xff0000ffu},
+		{FLOW, 0xffff0006u, 0, 0x1, 0},
+		{WUCSR, 0x200, 0, 0x6, 0},
+		{COE_CR, 0, 0, 0x00010003u, 0},
+		{AFC_CFG, 0x00ffffffu, 0, 0, 0},
+		{E2P_DATA, 0xff, 0, 0, 0},
+		{BURST_CAP, 0xff, 0, 0, 0},
+		{DP_SEL, 0x7, 0x80000000u, 0, 0x80000000u}, /* DPRDY */
+		{DP_ADDR, 0x7fff, 0, 0, 0},
+		{DP_DATA0, 0xffffffffu, 0, 0, 0},
+		{DP_DATA1, 0x1f, 0, 0, 0},
+		{GPIO_WAKE, 0x07ff07ffu, 0, 0, 0},
+		{INT_EP_CTL, 0x800fffffu, 0, 0, 0},
+		{BULK_IN_DLY, 0xffff, 0, 0, 0x800},
+		{ADDRH, 0xffff, 0, 0, 0xffff},
+		{ADDRL, 0xffffffffu, 0, 0, 0xffffffffu},
+		{HASHH, 0xffffffffu, 0, 0, 0},
+		{HASHL, 0xffffffffu, 0, 0, 0},
+		{MII_DATA, 0xffff, 0, 0, 0},
+		{VLAN1, 0xffff, 0, 0, 0xffff},
+		{VLAN2, 0xffff, 0, 0, 0xffff},
 	};
 	const size_t n = sizeof(regs) / sizeof(regs[0]);
 	Setup s = setup(true);
 
+	for (size_t i = 0; i < n; i++)
+		CHECK_EQ(rd(&s, regs[i].addr), regs[i].reset);
+	CHECK_EQ(rd(&s, TX_CFG) | rd(&s, RX_CFG) | rd(&s, MII_ACCESS), 0);
 	for (size_t i = 0; i < n; i++)
 		wr(&s, regs[i].addr, 0);
 	for (size_t i = 0; i < n; i++) {
@@ -515,7 +519,9 @@ static void test_eeprom(void)
 	/* With ETC, after 1.28 us. */
 	wr(&s, HW_CFG, 1u << 4);
 	wr(&s, E2P_CMD, 0xe0000000u); /* ERAL */
-	run(&s, 1280);
+	run(&s, 1279);
+	CHECK(rd(&s, E2P_CMD) & 0x80000000u);
+	run(&s, 1);
 	CHECK_EQ(rd(&s, E2P_CMD), 0x60000400u);
 	/* EWEN is quick and does not time out. */
 	wr(&s, E2P_CMD, 0x00000400u);
@@ -567,7 +573,9 @@ static void test_resets(void)
 	mdio_write(&s, 4, 0x0061);
 	mdio_write(&s, 0, 0x8000);
 	CHECK_EQ(mdio_read(&s, 0), 0xb000);
-	run(&s, 256 * US);
+	run(&s, 256 * US - 1);
+	CHECK_EQ(mdio_read(&s, 0), 0xb000);
+	run(&s, 1);
 	CHECK_EQ(mdio_read(&s, 0), 0x3000);
 	CHECK_EQ(mdio_read(&s, 4), 0x01e1);
 
@@ -655,7 +663,9 @@ static void test_phy(void)
 	CHECK_EQ(mdio_read(&s, 3), 0xc0c3);
 	CHECK_EQ(mdio_read(&s, 18), 0x00e1);
 	CHECK_EQ(mdio_read(&s, 17), 0x0002); /* ENERGYON after the reset */
-	run(&s, 256 * MS);
+	run(&s, 256 * MS - 1);
+	CHECK_EQ(mdio_read(&s, 17), 0x0002);
+	run(&s, 1);
 	CHECK_EQ(mdio_read(&s, 17), 0x0000); /* no cable: no energy */
 	phy_reset(&s);
 	CHECK_EQ(mdio_read(&s, 1), 0x7809);
@@ -756,8 +766,11 @@ static void test_phy_registers(void)
 	/* BMCR's reserved bits read 0; SMR keeps 8 bits. */
 	mdio_write(&s, 0, 0x3101);
 	CHECK_EQ(mdio_read(&s, 0), 0x3100);
+	CHECK_EQ(mdio_read(&s, 2), 0);
 	mdio_write(&s, 18, 0xff41);
 	CHECK_EQ(mdio_read(&s, 18), 0x0041);
+	CHECK_EQ(mdio_read(&s, 27), 0);
+	CHECK_EQ(mdio_read(&s, 31) & 0x1000, 0); /* no negotiation done */
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
 }
@@ -781,6 +794,8 @@ static void test_phy_modes(void)
 		CHECK_EQ(mdio_read(&s, 18), mode << 5 | 1);
 	}
 	/* What a soft reset clears; ENERGYON stays, with a cable. */
+	run(&s, 256 * MS); /* ENERGYON falls; the cable's sets ISR */
+	mdio_write(&s, 30, 0x00ff);
 	lan95xx_plug(s.e, partner, NULL);
 	mdio_write(&s, 17, 0x2001);
 	mdio_write(&s, 27, 0xe400);
@@ -841,12 +856,16 @@ static void test_phy_link(void)
 	Setup s = setup(true);
 
 	link_up(&s);
+	mdio_write(&s, 30, 0x0002); /* the page received, alone */
+	mdio_read(&s, 29);
 	for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
 		mdio_write(&s, 4, modes[i].anar);
 		mdio_write(&s, 0, modes[i].bmcr);
 		CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
 		run(&s, 2000 * MS);
 		CHECK(mdio_read(&s, 1) & 0x0004);
+		if (i == 0)
+			CHECK(rd(&s, INT_STS) & 1u << 15); /* PHY_INT */
 		CHECK_EQ(mdio_read(&s, 31) >> 2 & 7, modes[i].speed);
 	}
 	/* The same BMCR again, or ANRESTART without AN: no restart. */
@@ -868,6 +887,18 @@ static void test_phy_link(void)
 	CHECK(mdio_read(&s, 1) & 0x0004);
 	CHECK(mdio_read(&s, 1) & 0x0004);
 	mdio_write(&s, 0, 0x1800);
+	mdio_read(&s, 1);
+	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
+	/* Negotiation written again without ANRESTART: no restart. */
+	mdio_write(&s, 0, 0x1200);
+	run(&s, 2001 * MS);
+	mdio_read(&s, 1);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	CHECK_EQ(mdio_read(&s, 0), 0x3000); /* the power up's soft reset */
+	mdio_write(&s, 0, 0x3000);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	/* A soft reset drops the link at once. */
+	mdio_write(&s, 0, 0x8000);
 	mdio_read(&s, 1);
 	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
@@ -1418,10 +1449,11 @@ static void test_tx_detail(void)
 		size_t sent;
 		bool fcs;
 	} frames[] = {
-		{1514, 0, 1518, true},    {59, 0, 64, true},
-		{60, 0, 64, true},        {61, 0, 65, true},
-		{42, 1u << 12, 46, true}, {42, 3u << 12, 42, false},
+		{1514, 0, 1518, true},     {59, 0, 64, true},
+		{60, 0, 64, true},         {61, 0, 65, true},
+		{42, 1u << 12, 46, true},  {42, 3u << 12, 42, false},
 		{42, 1u << 13, 64, true}, /* the padding brings the FCS */
+		{60, 1u << 13, 60, false},
 	};
 	const uint32_t fl = 3u << 12; /* FIRST and LAST */
 	Setup s = setup(true);
@@ -1445,6 +1477,18 @@ static void test_tx_detail(void)
 		if (frames[i].fcs)
 			CHECK_EQ(load_le32(sent + sent_len - 4), crc32(sent, sent_len - 4));
 	}
+	/* The longest frame: 2047 bytes and the FCS. No counter of RX moves. */
+	{
+		static uint8_t big[2100];
+
+		make_frame(big, bcast, 0x0800, 2051);
+		tx_buffer(out, big, 2047, 0, fl, 2047);
+		CHECK_EQ(bulk_write(&s, out, 8 + 2047), USB_ACK);
+		CHECK(sent_len == 2051 && memcmp(sent, big, 2051) == 0);
+		CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 0, 32, c, &got), USB_ACK);
+		for (int i = 0; i < 32; i++)
+			CHECK_EQ(c[i], 0);
+	}
 	/* An odd size from offset 3; one whose transfer ends mid-DWORD. */
 	tx_buffer(out, frame + 7, 61, 3, fl, 61);
 	CHECK_EQ(bulk_write(&s, out, 8 + 3 + 61), USB_ACK);
@@ -1461,14 +1505,21 @@ static void test_tx_detail(void)
 	CHECK(sent_len == 64 && memcmp(sent, frame + 100, 42) == 0);
 
 	/* Errors (5.4.2.5). */
-	tx_fails(&s, out, tx_buffer(out, frame, 0, 0, fl, 42));
-	tx_fails(&s, out, tx_buffer(out, frame, 50, 0, fl, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 0, 0, 1u << 13, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 50, 0, 1u << 13, 42));
 	tx_fails(&s, out, tx_buffer(out, frame, 42, 0, 1u << 13, 42));
 	tx_fails(&s, out, tx_buffer(out, frame, 42, 0, 1u << 12, 42));
 	tx_fails(&s, out, tx_buffer(out, frame, 20, 0, fl, 42));
 	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42);
 	n += tx_buffer(out + n, frame + 20, 22, 0, fl, 42);
 	tx_fails(&s, out, n); /* FIRST again */
+	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42);
+	n += tx_buffer(out + n, frame + 20, 10, 0, 1u << 13, 42);
+	tx_fails(&s, out, n); /* FIRST again, without LAST */
+	n = tx_buffer(out, frame, 1, 0, 1u << 13, 42); /* one byte, then 41 */
+	n += tx_buffer(out + n, frame + 1, 41, 0, 1u << 12, 42);
+	CHECK_EQ(bulk_write(&s, out, n), USB_ACK);
+	CHECK(sent_len == 64 && memcmp(sent, frame, 42) == 0);
 	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42 | 1u << 24);
 	n += tx_buffer(out + n, frame + 20, 22, 0, 1u << 12, 42 | 2u << 24);
 	tx_fails(&s, out, n); /* command B changed */
@@ -1509,6 +1560,13 @@ static void test_tx_detail(void)
 	/* The counters: good frames; with no link, carrier lost and bad. */
 	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
 	CHECK_EQ(load_le32(c), sent_count);
+	/* A frame looped back counts as sent too. */
+	wr(&s, MAC_CR, 1u << 21 | 1u << 18 | 0xc);
+	CHECK_EQ(bulk_write(&s, out, tx_buffer(out, frame, 60, 0, fl, 60)),
+	         USB_ACK);
+	wr(&s, MAC_CR, 1u << 18 | 0xc);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
+	CHECK_EQ(load_le32(c), 1);
 	lan95xx_plug(s.e, NULL, NULL);
 	CHECK_EQ(bulk_write(&s, out, tx_buffer(out, frame, 60, 0, fl, 60)),
 	         USB_ACK);
@@ -1565,6 +1623,19 @@ static void test_bursts(void)
 	CHECK(lan95xx_receive(s.e, frame, 1276));
 	CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
 	CHECK_EQ(got, 2560);
+	/* One byte more, and the second frame waits for the next burst. */
+	for (unsigned off = 0; off <= 2; off += 2) {
+		wr(&s, HW_CFG, off << 9 | 1u << 5 | 1u << 1);
+		make_frame(frame, own, 0x0800, 1276 - off);
+		CHECK(lan95xx_receive(s.e, frame, 1276 - off));
+		make_frame(frame, own, 0x0800, 1277 - off);
+		CHECK(lan95xx_receive(s.e, frame, 1277 - off));
+		CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+		CHECK_EQ(got, 1280);
+		CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+		CHECK_EQ(got, 1281);
+	}
+	wr(&s, HW_CFG, 1u << 5 | 1u << 1);
 	/* A bulk IN shorter than wMaxPacketSize takes what fits. */
 	{
 		uint8_t *small = malloc(64);
