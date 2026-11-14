@@ -35,7 +35,7 @@ typedef struct Raspi3bFirmwareConfig {
 	Machine *machine;
 	Bcm2835Gpio *gpio;
 	Raspi3bProperty *property;
-	Bcm2835Pm *pm;      /* its RSTS gives the partition, or NULL for 0 */
+	Bcm2835Pm *pm;      /* its RSTS gives the partition to boot */
 	const char *kernel; /* -kernel: an image on the host, or NULL */
 	BlockDevice *card;  /* the SD card, or NULL */
 

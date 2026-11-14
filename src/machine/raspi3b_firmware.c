@@ -830,7 +830,7 @@ bool raspi3b_firmware_boot(const Raspi3bFirmwareConfig *config, char *error,
 	 * asks it not to boot, which is how the board powers off (Linux's
 	 * bcm2835_wdt.c).
 	 */
-	partition = config->pm != NULL ? bcm2835_pm_partition(config->pm) : 0;
+	partition = bcm2835_pm_partition(config->pm);
 	if (partition == BCM2835_PM_HALT_PARTITION) {
 		machine_stop(config->machine, MACHINE_STOP_SHUTDOWN,
 		             "the board halted: RSTS gives the firmware partition "
