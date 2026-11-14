@@ -1,6 +1,8 @@
 # A U-Boot session on the raspi3b: the card of scripts/uboot-card.sh,
-# from power on to the prompt; the SD card, USB, Ethernet; a reset.
-# drive.c runs it; see its comment for the commands.
+# from power on to the prompt; the SD card, read and written; USB and
+# Ethernet; a reset, after which the saved environment is there.
+# drive.c runs it; see its comment for the commands. Each command waits
+# for the prompt before the next: the mini UART takes 8 bytes ahead.
 
 # The boot, about 75 s on a fast host.
 timeout 900
@@ -34,6 +36,50 @@ type md.b ${kernel_addr_r} 0x2c\r
 expect arm_64bit=1.enab
 expect =u-boot.bin.
 expect U-Boot>
+type part list mmc 0\r
+expect Partition Type: DOS
+expect U-Boot>
+
+# Writes: 1 MiB of random data to a file and back, blocks outside the
+# partition, and the environment.
+type random ${kernel_addr_r} 0x100000 7\r
+expect 1048576 bytes filled with random data
+expect U-Boot>
+type crc32 ${kernel_addr_r} 0x100000\r
+expect ==> 9a89cac0
+expect U-Boot>
+type fatwrite mmc 0:1 ${kernel_addr_r} big.bin 0x100000\r
+expect 1048576 bytes written
+expect U-Boot>
+type fatload mmc 0:1 ${scriptaddr} big.bin\r
+expect 1048576 bytes read
+expect U-Boot>
+type crc32 ${scriptaddr} 0x100000\r
+expect ==> 9a89cac0
+expect U-Boot>
+type mmc write ${kernel_addr_r} 0x800 0x100\r
+expect 256 blocks written: OK
+expect U-Boot>
+type mw.b ${scriptaddr} 0 0x20000\r
+expect U-Boot>
+type mmc read ${scriptaddr} 0x800 0x100\r
+expect 256 blocks read: OK
+expect U-Boot>
+type cmp.b ${kernel_addr_r} ${scriptaddr} 0x20000\r
+expect Total of 131072 byte(s) were the same
+expect U-Boot>
+type setenv smirror_test 42\r
+expect U-Boot>
+type saveenv\r
+expect Saving Environment to FAT... OK
+expect U-Boot>
+type fatls mmc 0:1\r
+expect 1048576   big.bin
+expect 16384   uboot.env
+expect 9 file(s), 0 dir(s)
+expect U-Boot>
+type sleep 1\r
+expect U-Boot>
 
 # USB: the LAN9514's hub and its Ethernet controller.
 type usb tree\r
@@ -43,14 +89,30 @@ expect U-Boot>
 type net list\r
 expect eth0 : smsc95xx_eth
 expect U-Boot>
+type usb reset\r
+expect resetting USB...
+expect Bus usb@7e980000: 3 USB Device(s) found
+expect U-Boot>
+# No cable: the PHY never sees a link, after U-Boot's 5 s.
+timeout 600
+type dhcp\r
+expect Waiting for Ethernet connection... unable to connect.
+type \x03
+expect U-Boot>
+timeout 120
 
 # The watchdog resets the board, which boots again.
 type reset\r
 expect resetting ...
 timeout 900
 expect U-Boot 2026.07
+expect Loading Environment from FAT... OK
 expect Bus usb@7e980000: 3 USB Device(s) found
 expect Hit any key to stop autoboot
 type \x20
+expect U-Boot>
+timeout 120
+type printenv smirror_test\r
+expect smirror_test=42
 expect U-Boot>
 quit

@@ -16,7 +16,8 @@
  *   type TEXT         type TEXT; \r, \n, \\ and \xHH are escapes
  *   quit              press Ctrl-A x; smirror must end with status 0
  *
- * When a wait fails, everything smirror printed is shown.
+ * What smirror prints goes to standard output as it comes, so that
+ * ctest's log holds the session; a failure says why on standard error.
  */
 
 #define _XOPEN_SOURCE 700
@@ -44,10 +45,10 @@ static pid_t child;
 
 static void fail(const char *fmt, const char *arg)
 {
-	fprintf(stderr, "drive: ");
+	fflush(stdout);
+	fprintf(stderr, "\ndrive: ");
 	fprintf(stderr, fmt, arg);
-	fprintf(stderr, "\n--- smirror printed:\n%.*s\n---\n", (int)output_len,
-	        output != NULL ? output : "");
+	fputc('\n', stderr);
 	if (child > 0)
 		kill(child, SIGKILL);
 	exit(1);
@@ -90,6 +91,8 @@ static bool read_until(const char *text, double timeout)
 		n = read(master, output + output_len, 4096);
 		if (n <= 0)
 			return false; /* EIO once smirror has closed the terminal */
+		fwrite(output + output_len, 1, (size_t)n, stdout);
+		fflush(stdout);
 		output_len += (size_t)n;
 		output[output_len] = '\0';
 	}
