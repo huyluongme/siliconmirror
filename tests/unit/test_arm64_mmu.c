@@ -744,6 +744,85 @@ static void test_tlb(void)
 	machine_destroy(m);
 }
 
+/*
+ * Instructions come straight from the page of the last fetch (fetch() in
+ * cpu.c), past the MMU. What changes the translation, the level, the
+ * page or the bytes there must still show.
+ */
+static void test_fetch_page(void)
+{
+	const uint32_t movz7 = 0xd28000e0u; /* MOVZ X0, #7 */
+	const uint32_t movz9 = 0xd2800120u; /* MOVZ X0, #9 */
+	const uint32_t movz5 = 0xd28000a0u; /* MOVZ X0, #5 */
+	Arm64Cpu *c;
+	Machine *m = machine(&c);
+
+	mmu_on(m, c, 1, false);
+	/* An instruction that the code stores, then runs. */
+	c->x[0] = movz7;
+	c->x[1] = CODE + 4;
+	step(m, c, STR);
+	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->x[0], 7);
+	/* The page mapped elsewhere: after TLBI, the new one runs. */
+	map(m, CODE, PAGE(0x90000));
+	CHECK_EQ(bus_write(m->bus, 0x90000 + 0xc, 4, movz9), BUS_OK);
+	step(m, c, TLBI_VMALLE1); /* at CODE + 8, still the old page */
+	CHECK_EQ(c->pc, CODE + 0xc);
+	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->x[0], 9);
+	/* The next page, which is elsewhere. */
+	map(m, CODE + 0x1000, PAGE(0x95000));
+	CHECK_EQ(bus_write(m->bus, 0x95000, 4, movz5), BUS_OK);
+	arm64_tlb_flush(c);
+	c->pc = CODE + 0xffc;
+	CHECK_EQ(bus_write(m->bus, 0x90ffc, 4, NOP), BUS_OK);
+	CHECK_EQ(machine_run(m, 2), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->x[0], 5);
+	/* The same page at EL0, which may not execute it. */
+	map(m, CODE, PAGE(CODE) | UXN);
+	arm64_tlb_flush(c);
+	c->pc = CODE;
+	c->sys.spsr[1] = 0; /* EL0t */
+	c->sys.elr[1] = CODE;
+	step(m, c, NOP);
+	step(m, c, ERET);
+	CHECK_EQ(c->el, 0);
+	CHECK_EQ(machine_run(m, 1), MACHINE_STOP_LIMIT);
+	CHECK_EQ(c->el, 1);
+	CHECK_EQ(c->pc, VBAR(1) + LOWER);
+	CHECK_EQ(c->sys.esr[1] >> 26, 0x20); /* Instruction Abort, lower EL */
+	machine_destroy(m);
+
+	/* Reads: two pages that share an entry, 64 pages apart. */
+	m = machine(&c);
+	mmu_on(m, c, 1, false);
+	map(m, 0x2000, PAGE(0x60000));
+	map(m, 0x42000, PAGE(0x61000));
+	put(m, 0x60000, 0x1111);
+	put(m, 0x61000, 0x2222);
+	for (unsigned i = 0; i < 4; i++) { /* A, B, B from its entry, A */
+		bool b = i == 1 || i == 2;
+
+		c->x[1] = b ? 0x42000 : 0x2000;
+		step(m, c, LDR);
+		CHECK_EQ(c->x[0], b ? 0x2222 : 0x1111);
+		c->pc = CODE;
+	}
+	/* An unaligned read into the next page, which is elsewhere. */
+	map(m, 0x3000, PAGE(0x70000));
+	map(m, 0x4000, PAGE(0x72000));
+	put(m, 0x70ff8, 0x1111111111111111u);
+	put(m, 0x72000, 0x2222222222222222u);
+	c->x[1] = 0x3ff8;
+	step(m, c, LDR); /* the page is kept */
+	c->pc = CODE;
+	c->x[1] = 0x3ffc;
+	step(m, c, LDR);
+	CHECK_EQ(c->x[0], 0x2222222211111111u);
+	machine_destroy(m);
+}
+
 /* Faults become Data Aborts and Instruction Aborts, D1.4.3. */
 static void test_aborts(void)
 {
@@ -1622,6 +1701,7 @@ static void test_stops(void)
 	             "1-byte read from 0x0000000000300000 (virtual "
 	             "0x0000000000002000)") != NULL);
 	c->sys.hcr_el2 |= ARM64_HCR_DC;
+	arm64_tlb_flush(c); /* as an MSR of HCR_EL2 does */
 	CHECK_EQ(arm64_test_step(m, c, NOP), MACHINE_STOP_ERROR);
 	CHECK(strstr(m->stop_message,
 	             "instruction fetch from 0x0000000000080000 is not "
@@ -1685,6 +1765,7 @@ int main(void)
 	RUN_TEST(test_el1_ranges);
 	RUN_TEST(test_permissions);
 	RUN_TEST(test_tlb);
+	RUN_TEST(test_fetch_page);
 	RUN_TEST(test_aborts);
 	RUN_TEST(test_branch_addr);
 	RUN_TEST(test_at);

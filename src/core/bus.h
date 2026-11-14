@@ -70,6 +70,13 @@ BusStatus bus_read(Bus *bus, uint64_t addr, unsigned size, uint64_t *value);
 BusStatus bus_write(Bus *bus, uint64_t addr, unsigned size, uint64_t value);
 
 /*
+ * The host memory of [addr, addr + len) when one RAM region holds all of
+ * it, else NULL: for the fast paths of the CPUs. RAM stays where it is
+ * while the bus exists.
+ */
+uint8_t *bus_ram_pointer(Bus *bus, uint64_t addr, uint64_t len);
+
+/*
  * Copy len bytes between buf and the bus, for loaders and debuggers. The
  * range may span several adjacent regions; MMIO regions are accessed one
  * byte at a time. On error, the bytes before the failing address have

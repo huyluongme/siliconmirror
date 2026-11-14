@@ -387,6 +387,33 @@ Arm64Exec arm64_translation_fault(Arm64Cpu *c, uint64_t far, Arm64Access access,
                                   const Arm64Translation *t);
 Arm64Exec arm64_at(Arm64Cpu *c, uint64_t va, unsigned el, bool write);
 void arm64_tlb_flush(Arm64Cpu *c);
+
+/*
+ * The host memory of the byte at va, when an access of kind at the
+ * current level translated its page before, or NULL. An access whose
+ * bytes are all in that page may use it: the translation, the
+ * permission and the memory type would be the same, until the TLB
+ * empties. *device says whether the page is Device memory.
+ */
+static inline uint8_t *arm64_page_lookup(Arm64Cpu *c, unsigned kind,
+                                         uint64_t va, bool *device)
+{
+	uint64_t page = va & ~(uint64_t)0xfff;
+	Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
+
+	if (p->host == NULL || p->va != page || p->el != c->el)
+		return NULL;
+	*device = p->device;
+	return p->host + (va & 0xfff);
+}
+
+/*
+ * Keep the page of va, which an access of kind at the current level
+ * translated to pa with memory attributes attr, when it is RAM. Returns
+ * the host memory of the byte at va, or NULL.
+ */
+uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, uint64_t pa,
+                         uint8_t attr);
 uint64_t arm64_branch_addr(const Arm64Cpu *c, uint64_t target);
 
 /*

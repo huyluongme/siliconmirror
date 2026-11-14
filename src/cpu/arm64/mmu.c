@@ -185,6 +185,23 @@ uint64_t arm64_branch_addr(const Arm64Cpu *c, uint64_t target)
 void arm64_tlb_flush(Arm64Cpu *c)
 {
 	memset(c->tlb, 0, sizeof(c->tlb));
+	memset(c->pages, 0, sizeof(c->pages));
+}
+
+uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, uint64_t pa,
+                         uint8_t attr)
+{
+	Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
+	uint8_t *host =
+		bus_ram_pointer(c->cpu.machine->bus, pa & ~(uint64_t)0xfff, 0x1000);
+
+	if (host == NULL)
+		return NULL;
+	p->va = va & ~(uint64_t)0xfff;
+	p->host = host;
+	p->el = c->el;
+	p->device = (attr & 0xf0) == 0;
+	return host + (va & 0xfff);
 }
 
 static unsigned tlb_index(uint64_t key)

@@ -315,9 +315,36 @@ static void test_status_strings(void)
 	CHECK(strcmp(bus_status_str((BusStatus)99), "unknown bus status") == 0);
 }
 
+/* bus_ram_pointer(): host memory of a range inside one RAM region. */
+static void test_ram_pointer(void)
+{
+	Bus *bus = bus_create();
+	FakeDevice dev = {0};
+	uint8_t *p;
+
+	CHECK_EQ(bus_map_ram(bus, "ram", 0x1000, 0x2000), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "next", 0x3000, 0x1000), BUS_OK);
+	CHECK_EQ(bus_map_mmio(bus, "dev", 0x4000, 0x1000, &fake_ops, &dev), BUS_OK);
+	CHECK_EQ(bus_write(bus, 0x1ffc, 4, 0x11223344), BUS_OK);
+	p = bus_ram_pointer(bus, 0x1000, 0x2000);
+	CHECK(p != NULL);
+	CHECK(bus_ram_pointer(bus, 0x1ffc, 4) == p + 0xffc);
+	CHECK_EQ(p[0xffc], 0x44);
+	CHECK(bus_ram_pointer(bus, 0x2fff, 1) == p + 0x1fff);
+	CHECK(bus_ram_pointer(bus, 0x2fff, 2) == NULL); /* into "next" */
+	CHECK(bus_ram_pointer(bus, 0x1000, 0x2001) == NULL);
+	CHECK(bus_ram_pointer(bus, 0x1000, 0) == NULL);
+	CHECK(bus_ram_pointer(bus, 0x0fff, 1) == NULL); /* unmapped */
+	CHECK(bus_ram_pointer(bus, 0x4000, 4) == NULL); /* MMIO */
+	CHECK_EQ(dev.reads + dev.writes, 0);
+	CHECK(bus_ram_pointer(bus, 0x3000, 0x1000) != NULL);
+	bus_destroy(bus);
+}
+
 int main(void)
 {
 	RUN_TEST(test_empty_bus);
+	RUN_TEST(test_ram_pointer);
 	RUN_TEST(test_ram_starts_zeroed);
 	RUN_TEST(test_ram_access_sizes);
 	RUN_TEST(test_ram_is_little_endian);

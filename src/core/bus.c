@@ -190,6 +190,16 @@ static BusStatus find_access_region(Bus *bus, uint64_t addr, unsigned size,
 	return BUS_OK;
 }
 
+uint8_t *bus_ram_pointer(Bus *bus, uint64_t addr, uint64_t len)
+{
+	BusRegion *r = find_region(bus, addr);
+
+	/* For len 0, len - 1 wraps around: NULL as well. */
+	if (r == NULL || r->ram == NULL || len - 1 > region_last(r) - addr)
+		return NULL;
+	return r->ram + (addr - r->base);
+}
+
 BusStatus bus_read(Bus *bus, uint64_t addr, unsigned size, uint64_t *value)
 {
 	assert(VALID_SIZE(size));

@@ -11,6 +11,7 @@
 #include "core/machine.h"
 #include "cpu/arm64/internal.h"
 #include "cpu/arm64/sysreg.h"
+#include "util/byteorder.h"
 #include "util/macros.h"
 
 Arm64Cpu *arm64_cpu_of(Cpu *cpu)
@@ -109,15 +110,28 @@ static void stop(Arm64Cpu *c, Arm64Exec result, bool fetch, uint32_t insn)
 static Arm64Exec fetch(Arm64Cpu *c, uint32_t *insn)
 {
 	Arm64Translation t;
-	Arm64Exec result =
-		arm64_translate(c, c->pc, ARM64_ACCESS_IFETCH, c->el, true, &t);
+	Arm64Exec result;
+	const uint8_t *host;
 	uint64_t value;
 	BusStatus status;
+	bool device;
 
+	/* The PC is aligned: the 4 bytes are in its page. */
+	host = arm64_page_lookup(c, ARM64_PAGE_FETCH, c->pc, &device);
+	if (host != NULL) {
+		*insn = load_le32(host);
+		return ARM64_EXEC_OK;
+	}
+	result = arm64_translate(c, c->pc, ARM64_ACCESS_IFETCH, c->el, true, &t);
 	if (result != ARM64_EXEC_OK)
 		return result;
 	if (t.fault != ARM64_FAULT_NONE)
 		return arm64_translation_fault(c, c->pc, ARM64_ACCESS_IFETCH, &t);
+	host = arm64_page_fill(c, ARM64_PAGE_FETCH, c->pc, t.pa, t.attr);
+	if (host != NULL) {
+		*insn = load_le32(host);
+		return ARM64_EXEC_OK;
+	}
 	status = bus_read(c->cpu.machine->bus, t.pa, 4, &value);
 	if (status != BUS_OK)
 		return arm64_bus_failure(c, t.pa, 4, false, status, false, c->pc);

@@ -314,6 +314,17 @@ typedef struct Arm64SysRegs {
 	uint64_t impdef[ARM64_MAX_IMPDEF]; /* as listed in config.model */
 } Arm64SysRegs;
 
+/* A 4KB page of RAM that an access at el translated. */
+#define ARM64_PAGE_ENTRIES 64 /* for each kind of access; a power of 2 */
+enum { ARM64_PAGE_FETCH, ARM64_PAGE_READ, ARM64_PAGE_WRITE, ARM64_PAGE_KINDS };
+
+typedef struct Arm64Page {
+	uint64_t va;   /* of the page */
+	uint8_t *host; /* its bytes in host memory, or NULL: no page */
+	unsigned el;
+	bool device; /* Device memory: unaligned data accesses fault */
+} Arm64Page;
+
 typedef struct Arm64Cpu {
 	Cpu cpu;
 	Arm64Config config;
@@ -380,6 +391,14 @@ typedef struct Arm64Cpu {
 	unsigned pa_bits;
 	bool granule_4k, granule_16k, granule_64k;
 	Arm64TlbEntry tlb[ARM64_TLB_ENTRIES];
+
+	/*
+	 * 4KB pages of RAM that fetches, reads and writes translated, so
+	 * that the next accesses there skip the MMU and the bus. What
+	 * translates them changes only with the TLB, so that emptying the
+	 * TLB empties these too (see internal.h).
+	 */
+	Arm64Page pages[ARM64_PAGE_KINDS][ARM64_PAGE_ENTRIES];
 } Arm64Cpu;
 
 /*

@@ -24,6 +24,7 @@
 
 #include "core/machine.h"
 #include "cpu/arm64/internal.h"
+#include "util/byteorder.h"
 
 /* SCTLR_ELx.A for the current Exception level, SCTLR_EL1.A at EL0. */
 static bool alignment_checked(const Arm64Cpu *c)
@@ -68,24 +69,50 @@ static Arm64Exec split_access(Arm64Cpu *c, uint64_t va, uint64_t pa,
 	return ARM64_EXEC_OK;
 }
 
+/* An access to host memory, which holds RAM. */
+static Arm64Exec host_access(uint8_t *host, unsigned size, bool write,
+                             uint64_t *value)
+{
+	if (write)
+		store_le(host, size, *value);
+	else
+		*value = load_le(host, size);
+	return ARM64_EXEC_OK;
+}
+
 static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
                              bool write, uint64_t *value)
 {
 	Arm64Access access = write ? ARM64_ACCESS_WRITE : ARM64_ACCESS_READ;
-	bool aligned = (va & (size - 1)) == 0;
+	unsigned kind = write ? ARM64_PAGE_WRITE : ARM64_PAGE_READ;
+	bool aligned = (va & (size - 1)) == 0, device;
 	uint64_t next_page = (va | 0xfff) + 1;
 	Arm64Translation t, t2;
 	Arm64Exec result;
+	uint8_t *host;
 
 	if (!aligned && alignment_checked(c))
 		return arm64_alignment_fault(c, va, write);
+	/*
+	 * In a page that this kind of access translated before, at this
+	 * level; but an unaligned access to Device memory faults.
+	 */
+	if (next_page - va >= size) {
+		host = arm64_page_lookup(c, kind, va, &device);
+		if (host != NULL && (aligned || !device))
+			return host_access(host, size, write, value);
+	}
 	result = arm64_translate(c, va, access, c->el, aligned, &t);
 	if (result != ARM64_EXEC_OK)
 		return result;
 	if (t.fault != ARM64_FAULT_NONE)
 		return arm64_translation_fault(c, va, access, &t);
-	if (next_page - va >= size)
+	if (next_page - va >= size) {
+		host = arm64_page_fill(c, kind, va, t.pa, t.attr);
+		if (host != NULL)
+			return host_access(host, size, write, value);
 		return physical_access(c, va, t.pa, size, write, value);
+	}
 
 	result = arm64_translate(c, next_page, access, c->el, false, &t2);
 	if (result != ARM64_EXEC_OK)
