@@ -615,6 +615,221 @@ static void test_stop_strings(void)
 	      0);
 }
 
+/*
+ * A host clock that the tests drive: its time moves on as the test sets
+ * it, as cpu runs (per_insn for each instruction), and as it sleeps.
+ */
+static struct {
+	uint64_t ns, per_insn, slept, longest;
+	unsigned sleeps, polls;
+	FakeCpu *cpu;
+} host;
+
+static uint64_t host_now(void *ctx)
+{
+	(void)ctx;
+	return host.ns + host.per_insn * (host.cpu ? host.cpu->executed : 0);
+}
+
+static void host_sleep(void *ctx, uint64_t ns)
+{
+	(void)ctx;
+	host.ns += ns;
+	host.slept += ns;
+	host.sleeps++;
+	if (ns > host.longest)
+		host.longest = ns;
+}
+
+static const MachineHostClock host_clock = {.now = host_now,
+                                            .sleep = host_sleep};
+
+/* CPUs slower than the host's clock: virtual time keeps up with it. */
+static void test_host_clock_catch_up(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 100000);
+
+	memset(&host, 0, sizeof(host));
+	host.ns = 5000; /* any origin */
+	host.cpu = f;
+	host.per_insn = 10;
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(f->executed, 100000);
+	/* 1000 instructions a turn, which take 10 us on the host. */
+	CHECK_EQ(f->runs, 100);
+	CHECK_EQ(m->events.now, 1000000);
+	CHECK_EQ(host.sleeps, 0);
+	machine_destroy(m);
+}
+
+/* Every CPU waits: sleep until the host's clock reaches the event. */
+static void test_host_clock_sleeps(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 100);
+	Waker w = {.cpu = f};
+
+	memset(&host, 0, sizeof(host));
+	event_init(&w.ev, wake, &w);
+	event_schedule(&m->events, &w.ev, 2500000);
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(w.fired_at, 2500000);
+	CHECK_EQ(f->executed, 110);
+	CHECK_EQ(host.slept, 2500000);
+	CHECK_EQ(host.longest, 1000000); /* MACHINE_POLL_NS at most */
+	machine_destroy(m);
+}
+
+/* The third poll of the input wakes the CPU. */
+static void host_input_poll(void *ctx)
+{
+	(void)ctx;
+	if (++host.polls == 3) {
+		host.cpu->halt_at = host.cpu->executed + 10;
+		host.cpu->cpu.state = CPU_RUNNING;
+	}
+}
+
+static bool host_input_wait(void *ctx)
+{
+	(void)ctx;
+	return false;
+}
+
+/* Input wakes a CPU before the next event, which still comes in time. */
+static void test_host_clock_input(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 100);
+	Waker w = {.cpu = f};
+
+	memset(&host, 0, sizeof(host));
+	host.cpu = f; /* per_insn 0: only sleeps move the clock */
+	f->probe_at = 100;
+	event_init(&w.ev, wake, &w);
+	event_schedule(&m->events, &w.ev, 10000000);
+	CHECK(machine_add_input(m, host_input_poll, host_input_wait, m));
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(f->now_then, 1000000); /* woken after 1 ms of sleep */
+	CHECK_EQ(w.fired_at, 10000000);
+	CHECK_EQ(f->executed, 120);
+	CHECK_EQ(host.slept, 10000000);
+	/*
+	 * Polls: before the first turn; when each wait starts, then each
+	 * 1 ms of it (2, then 9); after the event at 10 ms.
+	 */
+	CHECK_EQ(host.polls, 13);
+	machine_destroy(m);
+}
+
+/* Following the host from a later virtual time: from there on. */
+static void test_host_clock_late_start(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 3000);
+
+	memset(&host, 0, sizeof(host));
+	host.cpu = f;
+	host.per_insn = 10;
+	CHECK_EQ(machine_run(m, 2000), MACHINE_STOP_LIMIT);
+	CHECK_EQ(m->events.now, 2000);
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	/* 1000 more instructions: 10 us of the host's, from 2 us. */
+	CHECK_EQ(m->events.now, 12000);
+	machine_destroy(m);
+}
+
+static void quiet_poll(void *ctx)
+{
+	(void)ctx;
+}
+
+/* The second input wakes the second CPU, as soon as it does. */
+static void test_host_clock_second(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *a = add_fake_cpu(m, 100), *b = add_fake_cpu(m, 100);
+	Waker w = {.cpu = a};
+
+	memset(&host, 0, sizeof(host));
+	host.cpu = b;
+	b->probe_at = 100;
+	event_init(&w.ev, wake, &w);
+	event_schedule(&m->events, &w.ev, 10000000);
+	CHECK(machine_add_input(m, quiet_poll, host_input_wait, &host));
+	CHECK(machine_add_input(m, host_input_poll, host_input_wait, m));
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(b->now_then, 1000000);
+	CHECK_EQ(b->executed, 110);
+	CHECK_EQ(w.fired_at, 10000000);
+	machine_destroy(m);
+}
+
+/* What the second poll schedules comes before the next event. */
+static Waker early;
+
+static void scheduling_poll(void *ctx)
+{
+	Machine *m = ctx;
+
+	if (++host.polls == 2)
+		event_schedule(&m->events, &early.ev, m->events.now + 100000);
+}
+
+static void test_host_clock_earlier_event(void)
+{
+	Machine *m = machine_create();
+	FakeCpu *f = add_fake_cpu(m, 100);
+	Waker w = {.cpu = f};
+
+	memset(&host, 0, sizeof(host));
+	memset(&early, 0, sizeof(early));
+	early.cpu = f;
+	f->probe_at = 100;
+	event_init(&early.ev, wake, &early);
+	event_init(&w.ev, wake, &w);
+	event_schedule(&m->events, &w.ev, 10000000);
+	CHECK(machine_add_input(m, scheduling_poll, host_input_wait, m));
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(early.fired_at, 101000);
+	CHECK_EQ(f->now_then, 101000); /* the CPU ran then, not later */
+	CHECK_EQ(f->executed, 120);
+	machine_destroy(m);
+}
+
+/* An event that wakes no CPU, then none: the machine is idle. */
+static unsigned silent_fired;
+
+static void silent_event(void *ctx)
+{
+	(void)ctx;
+	silent_fired++;
+}
+
+static void test_host_clock_idle_after(void)
+{
+	Machine *m = machine_create();
+	Event ev;
+
+	add_fake_cpu(m, 100);
+	memset(&host, 0, sizeof(host));
+	silent_fired = 0;
+	event_init(&ev, silent_event, NULL);
+	event_schedule(&m->events, &ev, 2000000);
+	machine_follow_host(m, &host_clock);
+	CHECK_EQ(machine_run(m, 0), MACHINE_STOP_IDLE);
+	CHECK_EQ(silent_fired, 1);
+	CHECK_EQ(host.slept, 2000000);
+	machine_destroy(m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_no_cpus_is_idle);
@@ -637,5 +852,12 @@ int main(void)
 	RUN_TEST(test_inputs);
 	RUN_TEST(test_device_limit);
 	RUN_TEST(test_stop_strings);
+	RUN_TEST(test_host_clock_catch_up);
+	RUN_TEST(test_host_clock_sleeps);
+	RUN_TEST(test_host_clock_input);
+	RUN_TEST(test_host_clock_late_start);
+	RUN_TEST(test_host_clock_second);
+	RUN_TEST(test_host_clock_earlier_event);
+	RUN_TEST(test_host_clock_idle_after);
 	return test_summary();
 }

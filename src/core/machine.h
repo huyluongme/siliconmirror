@@ -75,6 +75,17 @@ typedef void (*MachineIdleListener)(void *ctx, bool idle, uint64_t since);
  * As the first wait that blocks holds the machine, at most one input
  * should block at a time.
  */
+/*
+ * The host's clock, which virtual time may follow (machine_follow_host()):
+ * now gives its time in nanoseconds, from any origin, and sleep waits for
+ * ns nanoseconds.
+ */
+typedef struct MachineHostClock {
+	uint64_t (*now)(void *ctx);
+	void (*sleep)(void *ctx, uint64_t ns);
+	void *ctx;
+} MachineHostClock;
+
 typedef struct MachineInput {
 	void (*poll)(void *ctx);
 	bool (*wait)(void *ctx);
@@ -99,6 +110,11 @@ struct Machine {
 	MachineInput inputs[MACHINE_MAX_INPUTS];
 	unsigned num_inputs;
 	uint64_t next_poll; /* virtual time of the next poll of the inputs */
+
+	/* The host's clock, when virtual time follows it. */
+	bool follow_host;
+	MachineHostClock host;
+	uint64_t host_origin, virtual_origin; /* two times that matched */
 };
 
 /* Create a machine with an empty bus. Returns NULL when out of memory. */
@@ -140,6 +156,18 @@ bool machine_add_input(Machine *m, void (*poll)(void *ctx),
 
 /* Remove the input of ctx, if the machine has one. */
 void machine_remove_input(Machine *m, void *ctx);
+
+/*
+ * Make virtual time follow the host's clock from now on, as QEMU does by
+ * default, instead of counting the instructions alone: a turn still
+ * counts them, but when the CPUs ran slower than the host's clock, the
+ * next turn starts at the host's time; and when every CPU waits, the
+ * machine sleeps until the host's clock reaches the next event, or until
+ * input from the host wakes a CPU. Without it, virtual time is the same
+ * on every run, which the tests need; with it, a guest waits as long as
+ * it would on the board.
+ */
+void machine_follow_host(Machine *m, const MachineHostClock *clock);
 
 /* Reset every device, in the order they were added, then every CPU. */
 void machine_reset(Machine *m);

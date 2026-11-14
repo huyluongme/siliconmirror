@@ -182,6 +182,56 @@ static bool run_cpus(Machine *m, uint64_t end, uint64_t limit, uint64_t *last)
 	return any_running;
 }
 
+void machine_follow_host(Machine *m, const MachineHostClock *clock)
+{
+	m->host = *clock;
+	m->follow_host = true;
+	m->host_origin = clock->now(clock->ctx);
+	m->virtual_origin = m->events.now;
+}
+
+/* The virtual time that the host's clock gives. */
+static uint64_t host_time(const Machine *m)
+{
+	return m->virtual_origin + (m->host.now(m->host.ctx) - m->host_origin);
+}
+
+static bool any_cpu_running(const Machine *m)
+{
+	for (unsigned i = 0; i < m->num_cpus; i++)
+		if (m->cpus[i]->state == CPU_RUNNING)
+			return true;
+	return false;
+}
+
+/*
+ * Every CPU waits, and the next event is at virtual time next: sleep
+ * until the host's clock gets there, polling the inputs every
+ * MACHINE_POLL_NS; what they bring may wake a CPU, or schedule an
+ * earlier event. Returns the virtual time to go on to.
+ */
+static uint64_t host_wait(Machine *m, uint64_t next)
+{
+	for (;;) {
+		uint64_t t = host_time(m);
+
+		if (t >= next)
+			return next;
+		if (t > m->events.now)
+			event_queue_run_until(&m->events, t); /* nothing is due */
+		for (unsigned i = 0; i < m->num_inputs; i++)
+			m->inputs[i].poll(m->inputs[i].ctx);
+		m->next_poll = m->events.now + MACHINE_POLL_NS;
+		if (any_cpu_running(m))
+			return m->events.now;
+		next = event_queue_next(&m->events);
+		if (next > t)
+			m->host.sleep(m->host.ctx, next - t < MACHINE_POLL_NS
+			                               ? next - t
+			                               : MACHINE_POLL_NS);
+	}
+}
+
 /*
  * After a turn that started at start: tell the idle listener if the CPUs
  * started running, or all stopped. last is from run_cpus().
@@ -236,8 +286,17 @@ MachineStop machine_run(Machine *m, uint64_t max_insns)
 				             "every CPU is waiting and no event is pending");
 				break;
 			}
-			/* Nothing runs until the next event: skip straight to it. */
-			end = next;
+			/*
+			 * Nothing runs until the next event: skip straight to it,
+			 * or wait for it on the host's clock.
+			 */
+			end = m->follow_host ? host_wait(m, next) : next;
+		} else if (m->follow_host) {
+			/* The CPUs ran slower than the host: catch up. */
+			uint64_t t = host_time(m);
+
+			if (t > end)
+				end = t;
 		}
 		if (m->stop != MACHINE_STOP_NONE)
 			break;
