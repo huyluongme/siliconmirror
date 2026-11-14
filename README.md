@@ -59,6 +59,12 @@ and `flex`) and fetches the Raspberry Pi firmware files. The test takes
 a few minutes, so only the `release` and `ci-release` builds run it
 (`make PRESET=release test`); without the card it is skipped.
 
+`scripts/linux-card.sh` makes a card for Linux in
+`~/.cache/siliconmirror-linux`: the firmware files and the `kernel8.img`
+of the same release, and an initramfs of BusyBox 1.38.0 (built with an
+`aarch64-linux-gnu-` GCC), whose `/init` starts a shell on the serial
+console. smirror does not boot it to that shell yet: see the roadmap.
+
 `scripts/fuzz.sh [SECONDS]` fuzzes, with clang's libFuzzer, what
 smirror reads from an SD card: the MBR, FAT, `config.txt`, device
 trees and gzip kernels, each for SECONDS (60 by default).
