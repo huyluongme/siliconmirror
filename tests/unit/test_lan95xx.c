@@ -462,17 +462,19 @@ static void test_eeprom(void)
 
 	CHECK_EQ(rd(&s, E2P_CMD), 0); /* tried after the reset: not loaded */
 	wr(&s, E2P_DATA, 0x5a);
-	wr(&s, E2P_CMD, 0x80000000u | 0x001); /* READ 1 */
-	CHECK_EQ(rd(&s, E2P_CMD), 0x80000001u);
+	wr(&s, E2P_CMD, 0x80000000u | 0x1ff); /* READ 0x1ff */
+	CHECK_EQ(rd(&s, E2P_CMD), 0x800001ffu);
 	run(&s, 20 * 1120 - 1);
 	CHECK(rd(&s, E2P_CMD) & 0x80000000u);
 	run(&s, 1);
-	CHECK_EQ(rd(&s, E2P_CMD), 0x00000001u); /* no time-out */
+	CHECK_EQ(rd(&s, E2P_CMD), 0x000001ffu); /* no time-out */
 	CHECK_EQ(rd(&s, E2P_DATA), 0);          /* the data line reads low */
 
 	/* RELOAD finds no 0xA5: Data Loaded stays clear. */
 	wr(&s, E2P_CMD, 0xf0000000u);
-	run(&s, 1 * MS);
+	run(&s, 20 * 1120 - 1);
+	CHECK(rd(&s, E2P_CMD) & 0x80000000u);
+	run(&s, 1);
 	CHECK_EQ(rd(&s, E2P_CMD), 0x70000000u);
 
 	/* A write times out after 30 ms; the time-out bit clears with a 1. */
@@ -489,9 +491,12 @@ static void test_eeprom(void)
 	run(&s, 1280);
 	CHECK_EQ(rd(&s, E2P_CMD), 0x60000400u);
 	/* EWEN is quick and does not time out. */
+	wr(&s, E2P_CMD, 0x00000400u);
 	wr(&s, E2P_CMD, 0xa0000000u);
-	run(&s, 12 * 1120);
-	CHECK_EQ(rd(&s, E2P_CMD), 0x20000400u);
+	run(&s, 12 * 1120 - 1);
+	CHECK(rd(&s, E2P_CMD) & 0x80000000u);
+	run(&s, 1);
+	CHECK_EQ(rd(&s, E2P_CMD), 0x20000000u);
 
 	/* A command while one runs stops the machine. */
 	wr(&s, E2P_CMD, 0x80000000u);
@@ -552,6 +557,63 @@ static void test_resets(void)
 	lan95xx_reset(s.e);
 	CHECK_EQ(s.d->config, 0);
 	CHECK_EQ(control(s.d, 0, 9, 1, 0, 0, NULL, &len), USB_ACK);
+	CHECK_EQ(mdio_read(&s, 0), 0x3800);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/*
+ * The lite reset: the FIFOs empty, the counters clear, the EEPROM and
+ * the PHY reset (5.13.2); a USB reset ends the PHY's resets.
+ */
+static void test_lite_reset(void)
+{
+	Setup s = setup(true);
+	uint8_t frame[100], buf[64], c[40];
+	size_t got;
+
+	link_up(&s);
+	make_frame(frame, own, 0x0800, 100);
+	CHECK(lan95xx_receive(s.e, frame, 100));
+	frame[50] ^= 1;
+	CHECK(lan95xx_receive(s.e, frame, 100));
+	/* A frame sent, and the start of another. */
+	store_le32(buf, 42u | 1u << 13 | 1u << 12);
+	store_le32(buf + 4, 42);
+	memcpy(buf + 8, frame, 42);
+	CHECK_EQ(bulk_write(&s, buf, 50), USB_ACK);
+	CHECK_EQ(sent_count, 1);
+	store_le32(buf, 100u | 1u << 13 | 1u << 12);
+	store_le32(buf + 4, 100);
+	CHECK_EQ(bulk_write(&s, buf, 16), USB_ACK);
+	CHECK(rd(&s, TX_FIFO_INF) < 0x2000);
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 208);
+	wr(&s, E2P_CMD, 0xb0000010u); /* a write, to time out in 30 ms */
+
+	wr(&s, HW_CFG, 1u << 3);
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 0);
+	CHECK_EQ(rd(&s, TX_FIFO_INF), 0x2000);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 0, 32, c, &got), USB_ACK);
+	for (int i = 0; i < 32; i++)
+		CHECK_EQ(c[i], 0);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 40, c, &got), USB_ACK);
+	for (int i = 0; i < 40; i++)
+		CHECK_EQ(c[i], 0);
+	CHECK_EQ(rd(&s, E2P_CMD), 0);
+	run(&s, 30 * MS);
+	CHECK_EQ(rd(&s, E2P_CMD), 0);
+	/* The PHY starts again: the link, its latch clear. */
+	run(&s, 2000 * MS);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+
+	/* A USB reset during PMT_CTL's PHY reset, or BMCR's. */
+	CHECK_EQ(try_write(&s, PMT_CTL, 1u << 4), USB_NAK);
+	lan95xx_reset(s.e);
+	CHECK_EQ(control(s.d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	phy_reset(&s);
+	mdio_write(&s, 0, 0x8000);
+	lan95xx_reset(s.e);
+	CHECK_EQ(control(s.d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
 	CHECK_EQ(mdio_read(&s, 0), 0x3800);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
@@ -620,6 +682,161 @@ static void test_phy(void)
 	mdio_write(&s, 0, 0x3000); /* up again: a reset, then the link */
 	run(&s, 256 * US + 2000 * MS);
 	CHECK(mdio_read(&s, 1) & 0x0004);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* The PHY's registers: their writable bits, the read-only ones (7.5). */
+static void test_phy_registers(void)
+{
+	static const struct {
+		unsigned index;
+		uint16_t bits;
+	} regs[] = {
+		{2, 0xffff},  {3, 0xffff},  {4, 0x2dff},  {17, 0x2001},
+		{27, 0xe400}, {30, 0x00ff}, {31, 0x0fe0},
+	};
+	static const unsigned read_only[] = {1, 5, 6, 29};
+	const size_t n = sizeof(regs) / sizeof(regs[0]);
+	uint16_t base[32];
+	Setup s = setup(true);
+
+	phy_reset(&s);
+	run(&s, 256 * MS); /* no cable: ENERGYON has fallen */
+	for (size_t i = 0; i < n; i++)
+		mdio_write(&s, regs[i].index, 0);
+	for (size_t i = 0; i < n; i++)
+		base[regs[i].index] = mdio_read(&s, regs[i].index);
+	for (size_t i = 0; i < n; i++) {
+		mdio_write(&s, regs[i].index, 0xffff);
+		for (size_t j = 0; j < n; j++)
+			CHECK_EQ(mdio_read(&s, regs[j].index),
+			         base[regs[j].index] | (i == j ? regs[j].bits : 0));
+		mdio_write(&s, regs[i].index, 0);
+	}
+	for (size_t i = 0; i < sizeof(read_only) / sizeof(read_only[0]); i++) {
+		uint16_t v = mdio_read(&s, read_only[i]);
+
+		mdio_write(&s, read_only[i], 0xffff);
+		CHECK_EQ(mdio_read(&s, read_only[i]), v);
+	}
+	/* BMCR's reserved bits read 0; SMR keeps 8 bits. */
+	mdio_write(&s, 0, 0x3101);
+	CHECK_EQ(mdio_read(&s, 0), 0x3100);
+	mdio_write(&s, 18, 0xff41);
+	CHECK_EQ(mdio_read(&s, 18), 0x0041);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* A soft reset: the registers from SMR's MODE (Table 7-7). */
+static void test_phy_modes(void)
+{
+	static const uint16_t bmcr[8] = {0x0000, 0x0100, 0x2000, 0x2100,
+	                                 0x3000, 0x3000, 0,      0x3000};
+	Setup s = setup(true);
+
+	phy_reset(&s);
+	for (unsigned mode = 0; mode < 8; mode++) {
+		if (mode == 6)
+			continue;
+		mdio_write(&s, 18, (uint16_t)(mode << 5 | 1));
+		mdio_write(&s, 0, 0x8000);
+		run(&s, 256 * US);
+		CHECK_EQ(mdio_read(&s, 0), bmcr[mode]);
+		CHECK_EQ(mdio_read(&s, 4), mode == 4 || mode == 5 ? 0x0081 : 0x01e1);
+		CHECK_EQ(mdio_read(&s, 18), mode << 5 | 1);
+	}
+	/* What a soft reset clears; ENERGYON stays, with a cable. */
+	lan95xx_plug(s.e, partner, NULL);
+	mdio_write(&s, 17, 0x2001);
+	mdio_write(&s, 27, 0xe400);
+	mdio_write(&s, 30, 0x00ff);
+	mdio_write(&s, 0, 0x8000);
+	run(&s, 256 * US);
+	CHECK_EQ(mdio_read(&s, 17), 0x0002);
+	CHECK_EQ(mdio_read(&s, 27), 0);
+	CHECK_EQ(mdio_read(&s, 29), 0);
+	CHECK_EQ(mdio_read(&s, 30), 0);
+	lan95xx_plug(s.e, NULL, NULL);
+	run(&s, 256 * MS);
+	mdio_write(&s, 0, 0x8000);
+	run(&s, 256 * US);
+	CHECK_EQ(mdio_read(&s, 17), 0);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* What the PHY does not model stops the machine. */
+static void test_phy_unmodelled(void)
+{
+	static const struct {
+		unsigned index;
+		uint16_t value;
+		const char *message;
+	} stops[] = {
+		{0, 0x4000, "PHY loopback"},
+		{0, 0x0080, "collision test"},
+		{7, 0, "PHY register not modelled"},
+		{18, 0x00c1, "reserved mode"}, /* then the soft reset */
+	};
+
+	for (size_t i = 0; i < sizeof(stops) / sizeof(stops[0]); i++) {
+		Setup s = setup(true);
+
+		phy_reset(&s);
+		mdio_write(&s, stops[i].index, stops[i].value);
+		if (stops[i].index == 18)
+			mdio_write(&s, 0, 0x8000);
+		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+		CHECK(strstr(s.m->stop_message, stops[i].message) != NULL);
+		teardown(&s);
+	}
+}
+
+/* Speed and duplex as negotiated or forced; what restarts the link. */
+static void test_phy_link(void)
+{
+	static const struct {
+		uint16_t anar, bmcr;
+		unsigned speed; /* PSCSR's HCDSPEED */
+	} modes[] = {
+		{0x01e1, 0x1200, 6}, {0x0081, 0x1200, 2}, {0x0041, 0x1200, 5},
+		{0x0021, 0x1200, 1}, {0x01e1, 0x2100, 6}, {0x01e1, 0x0100, 5},
+		{0x01e1, 0x0000, 1}, {0x01e1, 0x2000, 2},
+	};
+	Setup s = setup(true);
+
+	link_up(&s);
+	for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+		mdio_write(&s, 4, modes[i].anar);
+		mdio_write(&s, 0, modes[i].bmcr);
+		CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
+		run(&s, 2000 * MS);
+		CHECK(mdio_read(&s, 1) & 0x0004);
+		CHECK_EQ(mdio_read(&s, 31) >> 2 & 7, modes[i].speed);
+	}
+	/* The same BMCR again, or ANRESTART without AN: no restart. */
+	mdio_write(&s, 0, 0x2000);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	mdio_write(&s, 0, 0x2200);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	/* No ability in common: no link. */
+	mdio_write(&s, 4, 0x0001);
+	mdio_write(&s, 0, 0x1200);
+	CHECK_EQ(mdio_read(&s, 6), 0);
+	run(&s, 3000 * MS);
+	mdio_read(&s, 1);
+	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
+	/* Powered down, the link falls. */
+	mdio_write(&s, 4, 0x01e1);
+	mdio_write(&s, 0, 0x1200);
+	run(&s, 2000 * MS);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	mdio_write(&s, 0, 0x1800);
+	mdio_read(&s, 1);
+	CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
 }
@@ -1188,7 +1405,12 @@ int main(void)
 	RUN_TEST(test_unmodelled);
 	RUN_TEST(test_eeprom);
 	RUN_TEST(test_resets);
+	RUN_TEST(test_lite_reset);
 	RUN_TEST(test_phy);
+	RUN_TEST(test_phy_registers);
+	RUN_TEST(test_phy_modes);
+	RUN_TEST(test_phy_unmodelled);
+	RUN_TEST(test_phy_link);
 	RUN_TEST(test_tx);
 	RUN_TEST(test_rx);
 	RUN_TEST(test_rx_status);
