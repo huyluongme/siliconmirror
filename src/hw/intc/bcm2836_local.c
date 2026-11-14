@@ -195,7 +195,7 @@ static uint64_t clock_hz(const Bcm2836Local *local)
 /* Edges of a clock of hz Hz from time 0 up to time t, both included. */
 static uint64_t edges_at(uint64_t t, uint64_t hz)
 {
-	return mul_div_floor(t, hz, NS_PER_SECOND);
+	return mul_div_floor_ns(t, hz);
 }
 
 /* Where the timer is at time now: its count and its accumulator. */

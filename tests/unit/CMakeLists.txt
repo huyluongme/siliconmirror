@@ -13,6 +13,10 @@ add_executable(test_bits test_bits.c)
 target_link_libraries(test_bits PRIVATE util)
 add_test(NAME unit.bits COMMAND test_bits)
 
+add_executable(test_muldiv test_muldiv.c)
+target_link_libraries(test_muldiv PRIVATE util)
+add_test(NAME unit.muldiv COMMAND test_muldiv)
+
 add_executable(test_fdt test_fdt.c)
 target_link_libraries(test_fdt PRIVATE util)
 add_test(NAME unit.fdt COMMAND test_fdt)

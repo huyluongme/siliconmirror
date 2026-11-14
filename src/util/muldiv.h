@@ -37,4 +37,20 @@ static inline uint64_t mul_div_ceil(uint64_t a, uint64_t b, uint64_t c)
 	return q > UINT64_MAX ? UINT64_MAX : (uint64_t)q;
 }
 
+/*
+ * floor(t * hz / 10^9), the edges of a clock of hz Hz in t nanoseconds,
+ * as mul_div_floor() gives them. With t = q 10^9 + r, it is
+ * q hz + floor(r hz / 10^9): 64-bit arithmetic is enough while hz and q
+ * are below 2^32 (136 years), and the divisions by the constant become
+ * multiplications, far cheaper than the 128-bit division.
+ */
+static inline uint64_t mul_div_floor_ns(uint64_t t, uint64_t hz)
+{
+	uint64_t q = t / 1000000000u, r = t % 1000000000u;
+
+	if (hz > UINT32_MAX || q > UINT32_MAX)
+		return mul_div_floor(t, hz, 1000000000u);
+	return q * hz + r * hz / 1000000000u;
+}
+
 #endif /* UTIL_MULDIV_H */
