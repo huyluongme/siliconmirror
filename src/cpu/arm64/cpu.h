@@ -283,6 +283,21 @@ typedef struct Arm64Pmu {
 	uint32_t evtyper[ARM64_PMU_COUNTERS];
 } Arm64Pmu;
 
+/*
+ * The self-hosted debug registers of an Armv8.0 PE that the emulator has:
+ * up to 16 breakpoints and 16 watchpoints, MDSCR_EL1 and the OS Lock.
+ */
+#define ARM64_DEBUG_PAIRS 16
+
+typedef struct Arm64Debug {
+	uint64_t bvr[ARM64_DEBUG_PAIRS], wvr[ARM64_DEBUG_PAIRS];
+	uint32_t bcr[ARM64_DEBUG_PAIRS], wcr[ARM64_DEBUG_PAIRS];
+	uint32_t mdscr; /* MDE, KDE, TDCC and SS */
+	uint32_t edscr; /* the EDSCR fields that MDSCR_EL1 shows */
+	bool oslk;      /* OSLSR_EL1.OSLK, the OS Lock */
+	bool dlk;       /* OSDLR_EL1.DLK, the OS Double Lock */
+} Arm64Debug;
+
 /* The Generic Timer registers of a PE, and its state. */
 typedef struct Arm64GenericTimer {
 	uint64_t cntfrq_el0, cntkctl_el1, cnthctl_el2, cntvoff_el2;
@@ -402,6 +417,7 @@ typedef struct Arm64Cpu {
 	Arm64SysRegs sys;
 	Arm64GenericTimer timer;
 	Arm64Pmu pmu;
+	Arm64Debug debug;
 	IrqLine inputs[ARM64_NUM_INPUTS];
 	uint32_t asserted; /* bit n set while inputs[n] is high */
 	/*

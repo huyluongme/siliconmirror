@@ -42,6 +42,7 @@ static void arm64_reset(Cpu *base)
 	arm64_sysreg_reset(c);
 	arm64_timer_reset(c);
 	arm64_pmu_reset(c);
+	arm64_debug_reset(c);
 	arm64_tlb_flush(c);
 	base->state = CPU_RUNNING;
 }

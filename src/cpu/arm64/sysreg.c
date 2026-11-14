@@ -571,6 +571,8 @@ Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn)
 		return arm64_sys_trap(c, 2, insn);
 	if (arm64_pmu_owns(encoding))
 		return arm64_pmu_access(c, insn);
+	if (arm64_debug_owns(encoding))
+		return arm64_debug_access(c, insn);
 	if (r != NULL)
 		return access_sysreg(c, r, insn);
 	index = find_impdef(c, encoding);
@@ -679,6 +681,8 @@ bool arm64_cpu_read_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t *value)
 
 	if (arm64_pmu_owns(encoding))
 		return arm64_pmu_read(c, encoding, value);
+	if (arm64_debug_owns(encoding))
+		return arm64_debug_read(c, encoding, value);
 	if (r != NULL) {
 		/* SP_EL0 can be read even while it is the current SP. */
 		if (r->kind == KIND_SP_EL0) {
@@ -701,6 +705,8 @@ bool arm64_cpu_write_sysreg(Arm64Cpu *c, uint16_t encoding, uint64_t value)
 
 	if (arm64_pmu_owns(encoding))
 		return arm64_pmu_write(c, encoding, value);
+	if (arm64_debug_owns(encoding))
+		return arm64_debug_write(c, encoding, value);
 	if (r != NULL) {
 		switch (r->kind) {
 		case KIND_FIELD:
@@ -744,6 +750,8 @@ const char *arm64_sysreg_name(const Arm64Cpu *c, uint16_t encoding)
 		return r->name;
 	if (arm64_pmu_owns(encoding))
 		return arm64_pmu_name(encoding);
+	if (arm64_debug_owns(encoding))
+		return arm64_debug_name(encoding);
 	index = find_impdef(c, encoding);
 	return index >= 0 ? c->config.model->impdef[index].name : NULL;
 }

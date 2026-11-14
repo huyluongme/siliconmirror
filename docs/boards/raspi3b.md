@@ -65,12 +65,16 @@ event counters and its cycle counter, with `PMCR_EL0` resetting to
 `0x41033000` and `PMCEID0_EL0` reading `0x67ffbfff`, as the BCM2837 has
 an L2 cache. Their registers hold what software writes and follow the
 architecture's access rules and traps, but the counters do not count
-yet: turning one on stops the machine.
+yet: turning one on stops the machine. The self-hosted debug registers
+(`cpu/arm64/debug.c`) are its 6 breakpoints and 4 watchpoints,
+`MDSCR_EL1` and the OS Lock, which a reset locks; debug exceptions and
+halting are not emulated yet, so making one possible, such as software
+step or an enabled breakpoint with `MDSCR_EL1.MDE`, stops the machine.
 
 A System register that the Cortex-A53 has but smirror does not
-implement yet, such as `MDSCR_EL1` of the debug registers or `FPCR`,
-stops the machine with the register's name. Encodings that the core
-does not have are UNDEFINED.
+implement yet, such as `FPCR` or the debug communications channel's
+`DBGDTR_EL0`, stops the machine with the register's name. Encodings that
+the core does not have are UNDEFINED.
 
 ## Memory map
 

@@ -105,40 +105,17 @@ static const Arm64ImpDefReg bcm2837_impdef[] = {
 
 /*
  * Registers of the core that the emulator does not implement yet: the
- * debug registers (section 11.3),
+ * debug registers of section 11.3 that need an external debugger or the
+ * SoC's debug configuration,
  * FPCR and FPSR, and the registers that hold AArch32 state. Their
  * encodings come from the GNU assembler. The list is sorted by encoding.
  */
 static const Arm64NamedReg bcm2837_missing[] = {
 	{ARM64_SYSREG(2, 0, 0, 0, 2), "OSDTRRX_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 0, 4), "DBGBVR0_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 0, 5), "DBGBCR0_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 0, 6), "DBGWVR0_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 0, 7), "DBGWCR0_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 1, 4), "DBGBVR1_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 1, 5), "DBGBCR1_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 1, 6), "DBGWVR1_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 1, 7), "DBGWCR1_EL1"},
 	{ARM64_SYSREG(2, 0, 0, 2, 0), "MDCCINT_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 2, 2), "MDSCR_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 2, 4), "DBGBVR2_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 2, 5), "DBGBCR2_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 2, 6), "DBGWVR2_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 2, 7), "DBGWCR2_EL1"},
 	{ARM64_SYSREG(2, 0, 0, 3, 2), "OSDTRTX_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 3, 4), "DBGBVR3_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 3, 5), "DBGBCR3_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 3, 6), "DBGWVR3_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 3, 7), "DBGWCR3_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 4, 4), "DBGBVR4_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 4, 5), "DBGBCR4_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 5, 4), "DBGBVR5_EL1"},
-	{ARM64_SYSREG(2, 0, 0, 5, 5), "DBGBCR5_EL1"},
 	{ARM64_SYSREG(2, 0, 0, 6, 2), "OSECCR_EL1"},
 	{ARM64_SYSREG(2, 0, 1, 0, 0), "MDRAR_EL1"},
-	{ARM64_SYSREG(2, 0, 1, 0, 4), "OSLAR_EL1"},
-	{ARM64_SYSREG(2, 0, 1, 1, 4), "OSLSR_EL1"},
-	{ARM64_SYSREG(2, 0, 1, 3, 4), "OSDLR_EL1"},
 	{ARM64_SYSREG(2, 0, 1, 4, 4), "DBGPRCR_EL1"},
 	{ARM64_SYSREG(2, 0, 7, 8, 6), "DBGCLAIMSET_EL1"},
 	{ARM64_SYSREG(2, 0, 7, 9, 6), "DBGCLAIMCLR_EL1"},

@@ -317,6 +317,17 @@ bool arm64_timer_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
  * returns ARM64_EXEC_UNIMPLEMENTED with c->detail for what is not
  * emulated.
  */
+/*
+ * Self-hosted debug, from debug.c: the same functions for its registers,
+ * and arm64_debug_reset().
+ */
+bool arm64_debug_owns(uint16_t encoding);
+const char *arm64_debug_name(uint16_t encoding);
+Arm64Exec arm64_debug_access(Arm64Cpu *c, uint32_t insn);
+bool arm64_debug_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
+bool arm64_debug_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
+void arm64_debug_reset(Arm64Cpu *c);
+
 bool arm64_pmu_owns(uint16_t encoding);
 const char *arm64_pmu_name(uint16_t encoding);
 Arm64Exec arm64_pmu_access(Arm64Cpu *c, uint32_t insn);

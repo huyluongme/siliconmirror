@@ -6,6 +6,7 @@ add_library(cpu STATIC
 	arm64/branch_sys.c
 	arm64/cortex_a53.c
 	arm64/cpu.c
+	arm64/debug.c
 	arm64/decode.c
 	arm64/dp_imm.c
 	arm64/dp_reg.c
