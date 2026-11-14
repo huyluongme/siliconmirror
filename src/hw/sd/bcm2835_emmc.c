@@ -82,7 +82,7 @@ struct Bcm2835Emmc {
 	uint64_t base_hz;
 	IrqLine *irq;
 
-	uint32_t arg2, blksizecnt, arg1, cmdtm, resp[4];
+	uint32_t arg2, blksizecnt, arg1, cmdtm;
 	uint32_t control0, control1, control2;
 	uint32_t interrupt, irpt_mask, irpt_en;
 	uint32_t boot_timeout, dbg_sel, exrdfifo_cfg, exrdfifo_en;
@@ -188,7 +188,7 @@ static uint64_t emmc_read(void *ctx, uint64_t offset, unsigned size)
 	case RESP0 + 4:
 	case RESP0 + 8:
 	case RESP3:
-		return emmc->resp[(offset - RESP0) / 4];
+		return 0; /* no card has answered */
 	case STATUS:
 		return STATUS_IDLE | (emmc->busy ? CMD_INHIBIT : 0);
 	case CONTROL0:
@@ -239,8 +239,6 @@ static void reset_registers(Bcm2835Emmc *emmc)
 {
 	event_cancel(&emmc->machine->events, &emmc->command_done);
 	emmc->arg2 = emmc->blksizecnt = emmc->arg1 = emmc->cmdtm = 0;
-	for (int i = 0; i < 4; i++)
-		emmc->resp[i] = 0;
 	emmc->control0 = emmc->control1 = emmc->control2 = 0;
 	emmc->interrupt = emmc->irpt_mask = emmc->irpt_en = 0;
 	emmc->boot_timeout = emmc->dbg_sel = 0;
