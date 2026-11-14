@@ -1232,7 +1232,9 @@ static bool reg_write(Lan95xx *e, unsigned addr, uint32_t v)
 			stop(e, "write of a reserved register", addr, v);
 			return false;
 		}
-		*r = v & reg_info[addr / 4].writable;
+		/* Read-only bits, such as DP_SEL's DPRDY, keep their value. */
+		*r = (old & ~reg_info[addr / 4].writable) |
+		     (v & reg_info[addr / 4].writable);
 		return true;
 	}
 }

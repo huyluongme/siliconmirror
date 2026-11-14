@@ -34,6 +34,10 @@ enum {
 	E2P_DATA = 0x034,
 	BURST_CAP = 0x038,
 	DP_SEL = 0x040,
+	DP_ADDR = 0x048,
+	DP_DATA0 = 0x04c,
+	DP_DATA1 = 0x050,
+	GPIO_WAKE = 0x064,
 	INT_EP_CTL = 0x068,
 	BULK_IN_DLY = 0x06c,
 	MAC_CR = 0x100,
@@ -44,6 +48,7 @@ enum {
 	MII_ACCESS = 0x114,
 	MII_DATA = 0x118,
 	VLAN1 = 0x120,
+	VLAN2 = 0x124,
 	COE_CR = 0x130,
 };
 
@@ -373,6 +378,39 @@ static void test_registers(void)
 	teardown(&s);
 }
 
+/* Each register keeps its own bits, and changes no other (7.3). */
+static void test_register_bits(void)
+{
+	static const struct {
+		unsigned addr;
+		uint32_t bits, fixed;
+	} regs[] = {
+		{AFC_CFG, 0x00ffffffu, 0},    {E2P_DATA, 0xff, 0},
+		{BURST_CAP, 0xff, 0},         {DP_SEL, 0x7, 0x80000000u}, /* DPRDY */
+		{DP_ADDR, 0x7fff, 0},         {DP_DATA0, 0xffffffffu, 0},
+		{DP_DATA1, 0x1f, 0},          {GPIO_WAKE, 0x07ff07ffu, 0},
+		{INT_EP_CTL, 0x800fffffu, 0}, {BULK_IN_DLY, 0xffff, 0},
+		{ADDRH, 0xffff, 0},           {ADDRL, 0xffffffffu, 0},
+		{HASHH, 0xffffffffu, 0},      {HASHL, 0xffffffffu, 0},
+		{MII_DATA, 0xffff, 0},        {VLAN1, 0xffff, 0},
+		{VLAN2, 0xffff, 0},
+	};
+	const size_t n = sizeof(regs) / sizeof(regs[0]);
+	Setup s = setup(true);
+
+	for (size_t i = 0; i < n; i++)
+		wr(&s, regs[i].addr, 0);
+	for (size_t i = 0; i < n; i++) {
+		wr(&s, regs[i].addr, 0xffffffffu);
+		for (size_t j = 0; j < n; j++)
+			CHECK_EQ(rd(&s, regs[j].addr),
+			         regs[j].fixed | (i == j ? regs[j].bits : 0));
+		wr(&s, regs[i].addr, 0);
+	}
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
 /* What stops the machine: reserved registers and missing features. */
 static void test_unmodelled(void)
 {
@@ -386,7 +424,10 @@ static void test_unmodelled(void)
 		{0x0a0, 0, false, "reserved register"},
 		{0x200, 0, true, "reserved register"},
 		{0x009, 0, false, "reserved register"},
+		{0x134, 0, false, "reserved register"},
+		{0x134, 0, true, "reserved register"},
 		{0x070, 0, false, "debug registers"},
+		{0x07c, 0, false, "debug registers"},
 		{0x044, 1, true, "data port"},
 		{HW_CFG, 1, true, "soft reset"},
 		{0x11c, 1, true, "pause frames"},
@@ -907,6 +948,7 @@ int main(void)
 {
 	RUN_TEST(test_descriptors);
 	RUN_TEST(test_registers);
+	RUN_TEST(test_register_bits);
 	RUN_TEST(test_unmodelled);
 	RUN_TEST(test_eeprom);
 	RUN_TEST(test_resets);
