@@ -225,9 +225,122 @@ static void test_ports(void)
 	machine_destroy(m);
 }
 
+/* A hub of 7 ports, one TT, bus powered; its last port in use. */
+static void test_last_port(void)
+{
+	UsbHubConfig c = lan9514;
+	Machine *m = machine_create();
+	UsbHub *h;
+	UsbDevice leaf_dev, *d;
+	uint8_t buf[64];
+	size_t got;
+
+	/* From 1 to USB_HUB_MAX_PORTS ports. */
+	c.ports = 0;
+	CHECK(usb_hub_create(m, &c) == NULL);
+	c.ports = USB_HUB_MAX_PORTS + 1;
+	CHECK(usb_hub_create(m, &c) == NULL);
+	c.ports = 1;
+	h = usb_hub_create(m, &c);
+	CHECK(h != NULL);
+	usb_hub_destroy(h);
+
+	c.ports = USB_HUB_MAX_PORTS;
+	c.multi_tt = false;
+	c.self_powered = false;
+	h = usb_hub_create(m, &c);
+	CHECK(h != NULL);
+	d = usb_hub_device(h);
+	CHECK_EQ(control(d, 0x80, 6, 0x0100, 0, 18, buf, &got), USB_ACK);
+	CHECK_EQ(buf[6], 1); /* high speed, one TT */
+	CHECK_EQ(control(d, 0x80, 6, 0x0200, 0, 64, buf, &got), USB_ACK);
+	CHECK_EQ(got, 25); /* one alternate setting */
+	CHECK_EQ(buf[7], 0x80);
+	CHECK_EQ(buf[9 + 7], 0);
+	CHECK_EQ(control(d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x01, 11, 0, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x01, 11, 1, 0, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(d, 0xa0, 6, 0x2900, 0, 64, buf, &got), USB_ACK);
+	CHECK(got == 9 &&
+	      memcmp(buf,
+	             (const uint8_t[]){9, 0x29, 7, 0x0d, 0, 0x32, 2, 0x02, 0xff},
+	             9) == 0);
+
+	/* The last port: power, a device, its change bit, its reset. */
+	usb_device_init(&leaf_dev, &leaf, NULL, USB_SPEED_HIGH);
+	usb_hub_attach(h, 0, &leaf_dev); /* no such ports */
+	usb_hub_attach(h, 8, &leaf_dev);
+	usb_hub_attach(h, 7, &leaf_dev);
+	CHECK_EQ(control(d, 0x23, 3, 8, 7, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(port_status(d, 7), 1u << 16 | 1u << 8 | 1u << 0);
+	CHECK_EQ(usb_device_in(d, 1, buf, 1, &got), USB_ACK);
+	CHECK(got == 1 && buf[0] == 0x80);
+	CHECK_EQ(control(d, 0x23, 1, 16, 7, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(port_status(d, 7), 1u << 8 | 1u << 0);
+	CHECK_EQ(control(d, 0x23, 3, 4, 7, 0, NULL, &got), USB_ACK);
+	event_queue_run_until(&m->events, m->events.now + 10 * MS);
+	CHECK_EQ(port_status(d, 7), 1u << 20 | 1u << 10 | 1u << 8 | 3u);
+	leaf_dev.address = 3;
+	CHECK(usb_device_find(d, 3) == &leaf_dev);
+	CHECK_EQ(control(d, 0xa3, 0, 0, 0, 4, buf, &got), USB_STALL);
+	CHECK_EQ(control(d, 0xa3, 0, 0, 8, 4, buf, &got), USB_STALL);
+	/* A bus reset of the hub takes its ports' power. */
+	usb_device_reset(d);
+	CHECK_EQ(control(d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(port_status(d, 7), 0);
+	/* Destroyed while the port resets. */
+	CHECK_EQ(control(d, 0x23, 3, 8, 7, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x23, 3, 4, 7, 0, NULL, &got), USB_ACK);
+	usb_hub_destroy(h);
+	event_queue_run_until(&m->events, m->events.now + 10 * MS);
+	machine_destroy(m);
+}
+
+/* The hub's own features, the TT requests, power on and off again. */
+static void test_hub_requests(void)
+{
+	Machine *m = machine_create();
+	UsbHub *h = usb_hub_create(m, &lan9514);
+	UsbDevice *d = usb_hub_device(h), leaf_dev;
+	uint8_t buf[8];
+	size_t got;
+
+	CHECK_EQ(control(d, 0, 9, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0xa0, 0, 0, 0, 8, buf, &got), USB_ACK);
+	CHECK_EQ(got, 4);
+	CHECK_EQ(control(d, 0x20, 1, 0, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x20, 1, 1, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x20, 1, 2, 0, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(d, 0x20, 3, 0, 0, 0, NULL, &got), USB_STALL);
+	CHECK_EQ(control(d, 0xa3, 1, 16, 1, 4, buf, &got), USB_STALL);
+	for (uint8_t r = 8; r <= 11; r++) /* GET_TT_STATE is an IN */
+		CHECK_EQ(control(d, 0x23, r, 0, 1, 0, NULL, &got),
+		         r == 10 ? USB_STALL : USB_ACK);
+
+	/* Power twice: one connection change; an empty port: none. */
+	usb_device_init(&leaf_dev, &leaf, NULL, USB_SPEED_HIGH);
+	usb_hub_attach(h, 1, &leaf_dev);
+	CHECK_EQ(control(d, 0x23, 3, 8, 1, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x23, 1, 16, 1, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x23, 3, 8, 1, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(port_status(d, 1), 1u << 8 | 1u << 0);
+	CHECK_EQ(control(d, 0x23, 3, 8, 2, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x23, 1, 8, 2, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(port_status(d, 2), 0);
+	/* Power off during a reset: the reset never ends. */
+	CHECK_EQ(control(d, 0x23, 3, 4, 1, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(d, 0x23, 1, 8, 1, 0, NULL, &got), USB_ACK);
+	event_queue_run_until(&m->events, m->events.now + 10 * MS);
+	CHECK_EQ(port_status(d, 1), 1u << 16);
+	usb_hub_destroy(h);
+	machine_destroy(m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_descriptors);
 	RUN_TEST(test_ports);
+	RUN_TEST(test_last_port);
+	RUN_TEST(test_hub_requests);
 	return test_summary();
 }
