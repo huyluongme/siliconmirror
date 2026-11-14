@@ -157,7 +157,17 @@ The main loop, `machine_run()` in `core/machine.c`, works in turns:
 
 When every CPU is waiting (WFI, WFE), time jumps straight to the next
 event. When no event is pending either, nothing can ever happen again, so
-the machine stops with `MACHINE_STOP_IDLE`. At the end of a turn, the
+the machine stops with `MACHINE_STOP_IDLE`.
+
+With `-clock host` (`machine_follow_host()`), virtual time follows the
+host's monotonic clock instead, as QEMU's does by default. A turn still
+counts its instructions, but when the CPUs ran slower than the host,
+the next turn starts at the host's time; and when every CPU waits, the
+machine sleeps until the host's clock reaches the next event, polling
+the input every 1 ms of it, which may wake a CPU sooner. A guest that
+waits, such as U-Boot in its delays, then waits as long as on the
+board, not as long as its instructions take; runs no longer repeat
+exactly, so the tests use the default. At the end of a turn, the
 machine tells its idle listener, if a device set one, when every CPU
 has stopped running or one runs again: a device that watches the bus
 traffic of the CPUs, such as the AXI outstanding interrupt of the

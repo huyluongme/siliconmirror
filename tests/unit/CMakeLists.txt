@@ -13,6 +13,10 @@ add_executable(test_bits test_bits.c)
 target_link_libraries(test_bits PRIVATE util)
 add_test(NAME unit.bits COMMAND test_bits)
 
+add_executable(test_host_clock test_host_clock.c)
+target_link_libraries(test_host_clock PRIVATE backend)
+add_test(NAME unit.host_clock COMMAND test_host_clock)
+
 add_executable(test_muldiv test_muldiv.c)
 target_link_libraries(test_muldiv PRIVATE util)
 add_test(NAME unit.muldiv COMMAND test_muldiv)

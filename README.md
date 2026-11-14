@@ -116,6 +116,7 @@ contains `compile_commands.json` for editors and language servers.
 | `-sd FILE`     | SD card image; without `-kernel` the board boots from it, as the real one   |
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
 | `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
+| `-clock CLOCK` | `virtual` (the default): time counts instructions, the same on every run; `host`: time follows the host's clock, as on the board, and U-Boot boots far faster |
 
 The SD card image is used as it is, as a real card would be: what the
 guest writes goes to the file, and two smirror processes cannot use the

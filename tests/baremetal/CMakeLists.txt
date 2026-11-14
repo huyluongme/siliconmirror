@@ -47,6 +47,7 @@ add_baremetal_program(miniuart)
 add_baremetal_program(mailbox)
 add_baremetal_program(sdboot)
 add_baremetal_program(sdcard)
+add_baremetal_program(sleep)
 
 set(smirror $<TARGET_FILE:smirror>)
 
@@ -56,6 +57,30 @@ add_expect_test(baremetal.hello
 	STDOUT "^Hello, world!\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel hello.bin)
+
+# Either clock runs it the same; the host's sleeps for its waits.
+add_expect_test(baremetal.hello-clock-host
+	STDOUT "^Hello, world!\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel hello.bin -clock host)
+
+add_expect_test(baremetal.hello-clock-virtual
+	STDOUT "^Hello, world!\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel hello.bin -clock virtual)
+
+# A wait of 2 s on the timer: with -clock host, it takes 2 s on the
+# host's clock. See sleep.s.
+add_expect_test(baremetal.sleep-clock-host
+	STDOUT "^awake\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	MIN_SECONDS 2
+	COMMAND ${smirror} -M raspi3b -kernel sleep.bin -clock host)
+
+add_expect_test(baremetal.sleep-clock-virtual
+	STDOUT "^awake\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel sleep.bin -clock virtual)
 
 add_expect_test(baremetal.hello-serial-null
 	STDOUT "^$"

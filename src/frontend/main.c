@@ -19,6 +19,7 @@
 #include "backend/block/file.h"
 #include "backend/char/file.h"
 #include "backend/char/stdio.h"
+#include "backend/clock/host.h"
 #include "core/machine.h"
 #include "machine/board.h"
 
@@ -31,6 +32,7 @@ typedef struct Options {
 	const char *kernel;  /* -kernel */
 	const char *serial;  /* -serial */
 	const char *sd;      /* -sd */
+	const char *clock;   /* -clock */
 } Options;
 
 static void print_usage(FILE *out)
@@ -48,6 +50,11 @@ static void print_usage(FILE *out)
 	      "  -serial DEV        Where the serial console goes: stdio (the "
 	      "default),\n"
 	      "                     null or file:PATH\n"
+	      "  -clock CLOCK       virtual (the default): time counts the "
+	      "instructions,\n"
+	      "                     the same on every run; host: time follows "
+	      "the host's\n"
+	      "                     clock, as on the board\n"
 	      "  -h, -help          Show this help and exit\n"
 	      "  -version           Show version information and exit\n"
 	      "\n"
@@ -103,6 +110,8 @@ static const char **option_value(Options *options, const char *name)
 		return &options->serial;
 	if (strcmp(name, "sd") == 0)
 		return &options->sd;
+	if (strcmp(name, "clock") == 0)
+		return &options->clock;
 	return NULL;
 }
 
@@ -217,6 +226,19 @@ int main(int argc, char **argv)
 		return EXIT_SUCCESS;
 	}
 
+	bool follow_host = false;
+
+	if (options.clock != NULL) {
+		if (strcmp(options.clock, "host") == 0) {
+			follow_host = true;
+		} else if (strcmp(options.clock, "virtual") != 0) {
+			fprintf(stderr,
+			        "smirror: unknown clock '%s': use virtual or host\n",
+			        options.clock);
+			return EXIT_FAILURE;
+		}
+	}
+
 	const Board *board = board_find(options.machine);
 
 	if (board == NULL) {
@@ -252,6 +274,8 @@ int main(int argc, char **argv)
 
 	if (terminal != NULL)
 		char_stdio_on_quit(terminal, quit, m);
+	if (follow_host)
+		machine_follow_host(m, &host_clock);
 
 	int status = run(m);
 

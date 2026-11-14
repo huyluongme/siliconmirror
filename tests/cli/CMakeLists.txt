@@ -70,6 +70,11 @@ add_expect_test(cli.sd-then-serial-unknown
 	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
 		-serial bogus)
 
+add_expect_test(cli.clock-unknown
+	STATUS 1
+	STDERR "^smirror: unknown clock 'bogus': use virtual or host\n$"
+	COMMAND ${smirror} -M raspi3b -clock bogus)
+
 add_expect_test(cli.serial-twice
 	STATUS 1
 	STDERR "^smirror: only one -serial is supported\n$"
