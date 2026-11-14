@@ -626,6 +626,8 @@ static void test_initramfs(void)
 		{"initramfs initrd.img\n", 0x81000, 0x81006, "initrd"},
 		{"initramfs initrd.img 0\n", 0x81000, 0x81006, "initrd"},
 		{"initramfs initrd.img 0x800000\n", 0x800000, 0x800006, "initrd"},
+		/* Just below the kernel, which starts at 0x80000. */
+		{"initramfs initrd.img 0x7fffa\n", 0x7fffa, 0x80000, "initrd"},
 		{"initramfs initrd.img,second.img 0x800000\n", 0x800000, 0x80000c,
 	     "initrdsecond"},
 		{"initramfs ,initrd.img,,second.img, 0x800000\n", 0x800000, 0x80000c,
@@ -752,7 +754,7 @@ static void test_device_tree(void)
 		{"device_tree_address=0xf8\n", 0, 0, "clear of the stub"},
 		{"device_tree_address=0x7fff8\n", 0, 0, "clear of the stub"},
 		{"initramfs initrd.img 0x100000\ndevice_tree_address=0x100000\n", 0, 0,
-	     "the initramfs"},
+	     "bytes at 0x100000, does not fit"}, /* over the initramfs */
 		{"device_tree_address=0x2efffff8\n", 0, 0, "does not fit"},
 	};
 
@@ -762,6 +764,7 @@ static void test_device_tree(void)
 		card(&c, true, true);
 		snprintf(config, sizeof(config), "arm_64bit=1\n%s", places[i].config);
 		add_text(&c, "CONFIG  TXT", "config.txt", config);
+		add_text(&c, "INITRD  IMG", "initrd.img", "initrd");
 		add_dtb(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb");
 		if (places[i].error != NULL) {
 			boot_fails(&c, places[i].error);
