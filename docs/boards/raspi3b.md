@@ -673,8 +673,13 @@ smirror does what that firmware does, without running it:
    Pi 3 `arm_64bit` is 0 by default, which boots `kernel7.img` as a
    32-bit kernel: smirror runs only 64-bit kernels, and stops with a
    message instead. A kernel named `kernel7.img`, `kernel7l.img` or
-   `kernel.img` is 32-bit too, as the documentation says. Kernels
-   compressed with gzip are not supported yet. `os_prefix` is put
+   `kernel.img` is 32-bit too, as the documentation says. A kernel
+   that is a gzip file, as the `kernel8.img` of Raspberry Pi OS is, is
+   decompressed first: the documentation says that the firmware knows
+   one by its first bytes. smirror's own decompressor
+   (`util/inflate.c`, after RFC 1951 and 1952) takes one gzip member
+   and checks its CRC and size; anything else stops the machine with
+   why. `os_prefix` is put
    before the names of the kernel, the initramfs, `cmdline.txt` and the
    device tree, if the kernel and the device tree are there with it.
 7. Where the kernel goes: `kernel_address`, or, for an image with the
@@ -685,7 +690,11 @@ smirror does what that firmware does, without running it:
 8. The initramfs: `initramfs FILES ADDRESS|followkernel`, `ramfsfile`
    with `ramfsaddr`, or `auto_initramfs=1`. Several files, separated by
    commas, are loaded one after the other. `followkernel` puts them
-   right after the kernel, at the next 4 KB: the firmware's own
+   after the kernel and the memory it takes, at the next 4 KB: for a
+   Linux image, its header's `image_size`, which counts its BSS, as
+   Linux's `booting.rst` asks ("At least image_size bytes from the start
+   of the image must be free for use by the kernel"); a kernel clears
+   its BSS, which would destroy an initramfs there. The firmware's own
    alignment is not documented.
 9. The command line: the first line of `cmdline.txt`, or of the file
    `cmdline=` names.

@@ -19,6 +19,7 @@
 #include "machine/raspi3b.h"
 #include "util/byteorder.h"
 #include "util/fdt.h"
+#include "util/inflate.h"
 #include "util/macros.h"
 
 /*
@@ -35,10 +36,13 @@ static_assert(sizeof(stub) == RASPI3B_STUB_SIZE, "the stub has the wrong size");
 
 /*
  * A 64-bit Linux image starts with a header (Linux,
- * Documentation/arch/arm64/booting.rst): text_offset at byte 8, the
- * magic "ARM\x64" at byte 56.
+ * Documentation/arch/arm64/booting.rst): text_offset at byte 8,
+ * image_size at byte 16, the magic "ARM\x64" at byte 56. image_size
+ * counts the memory the kernel takes, its BSS too, and is 0 before Linux
+ * 3.17.
  */
 #define IMAGE_TEXT_OFFSET 8
+#define IMAGE_SIZE_OFFSET 16
 #define IMAGE_MAGIC_OFFSET 56
 #define IMAGE_MAGIC 0x644d5241u /* "ARM\x64", little-endian */
 #define IMAGE_HEADER_SIZE 64
@@ -60,7 +64,11 @@ static_assert(sizeof(stub) == RASPI3B_STUB_SIZE, "the stub has the wrong size");
 #define DTB_END 0x2f000000u
 #define DTB_ALIGN 256
 
-/* initramfs followkernel: right after the kernel, at our alignment. */
+/*
+ * initramfs followkernel: after the kernel and the memory it takes, at
+ * our alignment. booting.rst: "At least image_size bytes from the start
+ * of the image must be free for use by the kernel."
+ */
 #define INITRD_ALIGN 4096
 
 #define CMDLINE_MAX 4096 /* the longest command line; ours */
@@ -487,6 +495,18 @@ static uint64_t kernel_address(Boot *b, const uint8_t *image, size_t size)
 	return address;
 }
 
+/* The memory the kernel takes: a Linux image's image_size, or its size. */
+static uint64_t kernel_footprint(const uint8_t *image, size_t size)
+{
+	uint64_t image_size;
+
+	if (size < IMAGE_HEADER_SIZE ||
+	    load_le32(image + IMAGE_MAGIC_OFFSET) != IMAGE_MAGIC)
+		return size;
+	image_size = load_le64(image + IMAGE_SIZE_OFFSET);
+	return image_size > size ? image_size : size;
+}
+
 /* Load the kernel: -kernel's file, or name from the card. */
 static bool load_kernel(Boot *b, const char *name, uint64_t *entry)
 {
@@ -515,10 +535,23 @@ static bool load_kernel(Boot *b, const char *name, uint64_t *entry)
 			return fail(b, "the kernel, %s, is empty", path);
 		}
 	}
+	/*
+	 * A gzip file, which the firmware recognises by its first bytes
+	 * (Raspberry Pi documentation, config.txt, arm_64bit).
+	 */
 	if (size >= 2 && image[0] == 0x1f && image[1] == 0x8b) {
+		uint8_t *plain;
+		size_t plain_size;
+		char why[128];
+
+		ok = gunzip(image, size, b->arm_memory, &plain, &plain_size, why,
+		            sizeof(why));
 		free(image);
-		return fail(b, "the kernel is compressed with gzip, which smirror "
-		               "does not support yet");
+		if (!ok)
+			return fail(b, "the kernel, a gzip file, does not decompress: %s",
+			            why);
+		image = plain;
+		size = plain_size;
 	}
 	address = kernel_address(b, image, size);
 	if (address < RASPI3B_STUB_SIZE || address > b->arm_memory ||
@@ -530,10 +563,10 @@ static bool load_kernel(Boot *b, const char *name, uint64_t *entry)
 		            size, address);
 	}
 	ok = write_bus(b, address, image, size, "the kernel");
-	free(image);
 	*entry = address;
 	b->kernel_start = address;
-	b->kernel_end = address + size;
+	b->kernel_end = address + kernel_footprint(image, size);
+	free(image);
 	return ok;
 }
 

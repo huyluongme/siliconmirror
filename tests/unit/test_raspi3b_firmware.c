@@ -25,6 +25,7 @@
 #include "machine/raspi3b.h"
 #include "test.h"
 #include "util/byteorder.h"
+#include "util/crc32.h"
 #include "util/fdt.h"
 #include "util/macros.h"
 
@@ -56,6 +57,21 @@ static size_t image_kernel(uint8_t *out, uint64_t text_offset)
 	for (size_t i = 0; i < ARRAY_SIZE(kernel); i++)
 		store_le32(out + 64 + 4 * i, kernel[i]);
 	return 64 + sizeof(kernel);
+}
+
+/* data in a gzip file of one stored block (RFC 1951 and 1952). */
+static size_t gzip_stored(uint8_t *out, const uint8_t *data, uint16_t size)
+{
+	static const uint8_t header[10] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3};
+
+	memcpy(out, header, sizeof(header));
+	out[10] = 1; /* the last block, stored */
+	store_le16(out + 11, size);
+	store_le16(out + 13, (uint16_t)~size);
+	memcpy(out + 15, data, size);
+	store_le32(out + 15 + size, crc32(data, size));
+	store_le32(out + 19 + size, size);
+	return 23 + (size_t)size;
 }
 
 /* A device tree like the board's: the nodes the firmware changes. */
@@ -349,8 +365,8 @@ static void test_card_errors(void)
 	card(&c, true, false);
 	add_text(&c, "CONFIG  TXT", "config.txt", "kernel=kernel8.img\n");
 	add(&c, "KERNEL8 IMG", "kernel8.img", gzip, sizeof(gzip));
-	boot_fails(&c, "the kernel is compressed with gzip, which smirror does "
-	               "not support yet");
+	boot_fails(&c, "the kernel, a gzip file, does not decompress: it is not "
+	               "gzip");
 	block_mem_free(&c.fs.m);
 	card(&c, true, true);
 	add_text(&c, "CONFIG  TXT", "config.txt",
@@ -680,6 +696,71 @@ static void test_initramfs(void)
 		machine_destroy(m);
 		block_mem_free(&c.fs.m);
 	}
+}
+
+/*
+ * A kernel8.img compressed with gzip runs as the image inside it would;
+ * the initramfs that follows it keeps clear of its image_size.
+ */
+static void test_gzip_kernel(void)
+{
+	uint8_t image[64 + sizeof(kernel)], gz[sizeof(image) + 32];
+	size_t size = image_kernel(image, 0), gz_size;
+	uint64_t x0, where;
+	uint32_t dtb, value;
+	char data[8] = "";
+	Card c;
+	Machine *m;
+	Fdt *fdt;
+
+	/* 0x3000 bytes of BSS after the image. */
+	store_le64(image + 16, size + 0x3000);
+	gz_size = gzip_stored(gz, image, (uint16_t)size);
+	card(&c, true, false);
+	add(&c, "KERNEL8 IMG", "kernel8.img", gz, gz_size);
+	add_text(&c, "CONFIG  TXT", "config.txt",
+	         "arm_64bit=1\ninitramfs initrd.img followkernel\n");
+	add_text(&c, "INITRD  IMG", "initrd.img", "initrd");
+	add_dtb(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb");
+	m = boot_ok(&c);
+	CHECK_EQ(rd(m, RASPI3B_STUB_KERNEL, 4), 0x200000);
+	CHECK_EQ(rd(m, 0x200000, 4), load_le32(image));
+	CHECK_EQ(rd(m, 0x200000 + size - 4, 4), load_le32(image + size - 4));
+	run_kernel(m, &x0, &where);
+	CHECK_EQ(where, 0x200000 + 64);
+	fdt = guest_dtb(m, &dtb);
+	CHECK(fdt_get_u32(fdt_find(fdt, "/chosen"), "linux,initrd-start", &value));
+	CHECK_EQ(value, 0x204000); /* 0x200000 + size + 0x3000, aligned */
+	CHECK_EQ(bus_read_block(m->bus, value, data, 6), BUS_OK);
+	CHECK(strcmp(data, "initrd") == 0);
+	fdt_free(fdt);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* A kernel of its header alone: its image_size counts too. */
+	store_le64(image + 16, 0x2000);
+	card(&c, true, false);
+	add(&c, "KERNEL8 IMG", "kernel8.img", image, 64);
+	add_text(&c, "CONFIG  TXT", "config.txt",
+	         "arm_64bit=1\ninitramfs initrd.img followkernel\n");
+	add_text(&c, "INITRD  IMG", "initrd.img", "initrd");
+	add_dtb(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb");
+	m = boot_ok(&c);
+	fdt = guest_dtb(m, &dtb);
+	CHECK(fdt_get_u32(fdt_find(fdt, "/chosen"), "linux,initrd-start", &value));
+	CHECK_EQ(value, 0x202000);
+	fdt_free(fdt);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* A wrong CRC stops the boot. */
+	gz[gz_size - 8] ^= 1;
+	card(&c, true, false);
+	add(&c, "KERNEL8 IMG", "kernel8.img", gz, gz_size);
+	add_text(&c, "CONFIG  TXT", "config.txt", "arm_64bit=1\n");
+	boot_fails(
+		&c, "the kernel, a gzip file, does not decompress: its CRC is wrong");
+	block_mem_free(&c.fs.m);
 }
 
 /* Which device tree, where it goes, and what the firmware adds to it. */
@@ -1377,7 +1458,7 @@ static void test_kernel_edges(void)
 		add_text(&c, "CONFIG  TXT", "config.txt", config);
 		add(&c, "KERNEL8 IMG", "kernel8.img", images[i].data, images[i].size);
 		if (images[i].address == 0) {
-			boot_fails(&c, "the kernel is compressed with gzip");
+			boot_fails(&c, "the kernel, a gzip file, does not decompress");
 		} else {
 			m = boot_ok(&c);
 			CHECK_EQ(rd(m, RASPI3B_STUB_KERNEL, 4), images[i].address);
@@ -1598,6 +1679,7 @@ int main(void)
 	RUN_TEST(test_pins);
 	RUN_TEST(test_kernel_address);
 	RUN_TEST(test_initramfs);
+	RUN_TEST(test_gzip_kernel);
 	RUN_TEST(test_device_tree);
 	RUN_TEST(test_os_prefix);
 	RUN_TEST(test_memory);
