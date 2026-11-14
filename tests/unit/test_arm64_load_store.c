@@ -466,26 +466,6 @@ static void test_unallocated(void)
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
-static void test_not_implemented_yet(void)
-{
-	static const uint32_t insns[] = {
-		0x3dc00020, /* LDR Q0, [X1] */
-		0x4c407020, /* LD1 {V0.16B}, [X1] */
-		0x5c000040, /* LDR D0, . + 8 */
-		0x6d400420, /* LDP D0, D1, [X1] */
-	};
-
-	for (unsigned i = 0; i < ARRAY_SIZE(insns); i++) {
-		Arm64Cpu *c;
-		Machine *m = arm64_test_machine(&c);
-
-		CHECK_EQ(arm64_test_step(m, c, insns[i]), MACHINE_STOP_ERROR);
-		CHECK(strstr(m->stop_message,
-		             "is not implemented yet (Loads and Stores)") != NULL);
-		machine_destroy(m);
-	}
-}
-
 int main(void)
 {
 	RUN_TEST(test_store_sizes);
@@ -502,6 +482,5 @@ int main(void)
 	RUN_TEST(test_bus_errors);
 	RUN_TEST(test_classes_newer_than_armv8_0_are_undefined);
 	RUN_TEST(test_unallocated);
-	RUN_TEST(test_not_implemented_yet);
 	return test_summary();
 }

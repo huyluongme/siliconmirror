@@ -293,6 +293,13 @@ Arm64Exec arm64_exec_dp_reg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
 
 /*
+ * The Advanced SIMD load/store structure classes, from simd_ldst.c:
+ * LD1-LD4 and ST1-ST4 of multiple structures and of a single structure,
+ * and LD1R-LD4R. The caller has checked that insn is in one of them.
+ */
+Arm64Exec arm64_exec_simd_ldst(Arm64Cpu *c, uint32_t insn);
+
+/*
  * Exceptions, from exception.c. arm64_raise() makes the current
  * instruction raise a synchronous exception that returns to it, and
  * returns ARM64_EXEC_EXCEPTION; arm64_take_exception() then takes the
@@ -539,6 +546,18 @@ Arm64Exec arm64_mem_read_as(Arm64Cpu *c, uint64_t address, unsigned size,
                             unsigned el, uint64_t *value);
 Arm64Exec arm64_mem_write_as(Arm64Cpu *c, uint64_t address, unsigned size,
                              unsigned el, uint64_t value);
+
+/*
+ * A SIMD&FP data access of size bytes: 1, 2, 4, 8, 16 or 32 (a pair of
+ * Q registers). data holds the bytes in little-endian order, eight in
+ * each word, the first word first. pair marks an LDP or STP, whose
+ * alignment is that of one of its two registers. A read changes data
+ * only when it succeeds; a write that faults may have written a part.
+ */
+Arm64Exec arm64_mem_read_vec(Arm64Cpu *c, uint64_t address, unsigned size,
+                             bool pair, uint64_t *data);
+Arm64Exec arm64_mem_write_vec(Arm64Cpu *c, uint64_t address, unsigned size,
+                              bool pair, const uint64_t *data);
 
 /*
  * The exclusive monitors. arm64_exec_exclusive(), from exclusive.c,

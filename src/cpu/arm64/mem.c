@@ -22,6 +22,8 @@
  * machine: what the real board does there is not known.
  */
 
+#include <string.h>
+
 #include "core/machine.h"
 #include "cpu/arm64/internal.h"
 #include "util/byteorder.h"
@@ -81,23 +83,22 @@ static Arm64Exec host_access(uint8_t *host, unsigned size, bool write,
 }
 
 /*
- * A data access of size bytes at va, with the permissions of el in the
- * current translation regime. A write tells the other PEs' exclusive
- * monitors.
+ * One access of size bytes at va, with the permissions of el in the
+ * current translation regime, AArch64_MemSingle() of J1.2: aligned says
+ * whether the access that it is part of is aligned, which Device memory
+ * requires. A write tells the other PEs' exclusive monitors.
  */
-static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
-                             bool write, uint64_t *value, unsigned el)
+static Arm64Exec single_access(Arm64Cpu *c, uint64_t va, unsigned size,
+                               bool write, uint64_t *value, unsigned el,
+                               bool aligned)
 {
 	Arm64Access access = write ? ARM64_ACCESS_WRITE : ARM64_ACCESS_READ;
 	unsigned kind = write ? ARM64_PAGE_WRITE : ARM64_PAGE_READ;
-	bool aligned = (va & (size - 1)) == 0;
 	uint64_t next_page = (va | 0xfff) + 1;
 	Arm64Translation t, t2;
 	Arm64Exec result;
 	uint8_t *host;
 
-	if (!aligned && alignment_checked(c))
-		return arm64_alignment_fault(c, va, write);
 	/*
 	 * In a page that this kind of access translated before, with these
 	 * permissions; but an unaligned access to Device memory faults.
@@ -141,6 +142,17 @@ static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
 	return result;
 }
 
+/* A data access of size bytes, the access of a general-purpose register. */
+static Arm64Exec data_access(Arm64Cpu *c, uint64_t va, unsigned size,
+                             bool write, uint64_t *value, unsigned el)
+{
+	bool aligned = (va & (size - 1)) == 0;
+
+	if (!aligned && alignment_checked(c))
+		return arm64_alignment_fault(c, va, write);
+	return single_access(c, va, size, write, value, el, aligned);
+}
+
 Arm64Exec arm64_mem_read(Arm64Cpu *c, uint64_t address, unsigned size,
                          uint64_t *value)
 {
@@ -163,4 +175,69 @@ Arm64Exec arm64_mem_write_as(Arm64Cpu *c, uint64_t address, unsigned size,
                              unsigned el, uint64_t value)
 {
 	return data_access(c, address, size, true, &value, el);
+}
+
+/*
+ * Mem{} of J1.2 for an access of AccessType_ASIMD, as pieces of at most 8
+ * bytes, in the order of the pseudocode:
+ *  - 16 bytes at an address aligned to 8: two halves, each an aligned
+ *    access when the whole access is aligned;
+ *  - 32 bytes at an address aligned to 8: four aligned words;
+ *  - an aligned pair: its two registers;
+ *  - an aligned access: itself;
+ *  - an unaligned access: its bytes, which go in pieces of 8 here, as
+ *    unaligned accesses. A piece that crosses into another page faults
+ *    there if that page is Device memory: the choice Constraint_FAULT of
+ *    Unpredictable_DEVPAGE2.
+ */
+static Arm64Exec vector_access(Arm64Cpu *c, uint64_t address, unsigned size,
+                               bool pair, bool write, uint64_t *data)
+{
+	unsigned element = pair ? size / 2 : size;
+	bool aligned = (address & (element - 1)) == 0;
+	unsigned piece = size;
+
+	if (!aligned && alignment_checked(c))
+		return arm64_alignment_fault(c, address, write);
+	if (size >= 16 && (address & 7) == 0) {
+		piece = 8;
+		aligned = aligned || size == 32;
+	} else if (aligned && pair) {
+		piece = size / 2;
+	} else if (!aligned && size > 8) {
+		piece = 8;
+	}
+	for (unsigned offset = 0; offset < size; offset += piece) {
+		unsigned word = offset / 8, shift = 8 * (offset % 8);
+		uint64_t value = (data[word] >> shift) & bytes_mask(piece);
+		Arm64Exec result = single_access(c, address + offset, piece, write,
+		                                 &value, c->el, aligned);
+
+		if (result != ARM64_EXEC_OK)
+			return result;
+		if (!write)
+			data[word] =
+				(data[word] & ~(bytes_mask(piece) << shift)) | value << shift;
+	}
+	return ARM64_EXEC_OK;
+}
+
+Arm64Exec arm64_mem_read_vec(Arm64Cpu *c, uint64_t address, unsigned size,
+                             bool pair, uint64_t *data)
+{
+	uint64_t buffer[4] = {0};
+	Arm64Exec result = vector_access(c, address, size, pair, false, buffer);
+
+	if (result == ARM64_EXEC_OK)
+		memcpy(data, buffer, (size + 7) / 8 * sizeof(buffer[0]));
+	return result;
+}
+
+Arm64Exec arm64_mem_write_vec(Arm64Cpu *c, uint64_t address, unsigned size,
+                              bool pair, const uint64_t *data)
+{
+	uint64_t buffer[4] = {0};
+
+	memcpy(buffer, data, (size + 7) / 8 * sizeof(buffer[0]));
+	return vector_access(c, address, size, pair, true, buffer);
 }

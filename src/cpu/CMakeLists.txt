@@ -19,6 +19,7 @@ add_library(cpu STATIC
 	arm64/sysinsn.c
 	arm64/sysreg.c
 	arm64/pmu.c
+	arm64/simd_ldst.c
 	arm64/timer.c)
 
 target_link_libraries(cpu PUBLIC core)
