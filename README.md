@@ -59,6 +59,10 @@ and `flex`) and fetches the Raspberry Pi firmware files. The test takes
 a few minutes, so only the `release` and `ci-release` builds run it
 (`make PRESET=release test`); without the card it is skipped.
 
+`scripts/fuzz.sh [SECONDS]` fuzzes, with clang's libFuzzer, what
+smirror reads from an SD card: the MBR, FAT, `config.txt` and device
+trees, each for SECONDS (60 by default).
+
 ```sh
 make test                  # build and run the tests
 ./build/debug/smirror -version

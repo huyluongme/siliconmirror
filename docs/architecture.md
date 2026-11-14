@@ -50,6 +50,7 @@ tests/
   cli/                Command-line tests
   baremetal/          AArch64 test programs run inside the emulator
   uboot/              A U-Boot session on the raspi3b
+  fuzz/               Fuzzers for what an SD card holds
 ```
 
 ## Layers
@@ -210,3 +211,8 @@ Known limits, to be handled when the devices that need it arrive:
   files, both at pinned versions. The session takes minutes, so only
   optimized builds run it, and only on a host that has the card; the CI
   does not.
+- `tests/fuzz/`: libFuzzer targets for what smirror reads from an SD
+  card, which may be anything: the MBR, FAT volumes, `config.txt` and
+  devicetree blobs. `scripts/fuzz.sh` builds them with clang,
+  AddressSanitizer and UBSan, and runs each from seeds that real tools
+  make.
