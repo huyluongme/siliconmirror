@@ -30,8 +30,9 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 		add_compile_options(-Werror)
 	endif()
 	if(SMIRROR_SANITIZE)
+		# Undefined behaviour fails the test that meets it.
 		add_compile_options(-fsanitize=address,undefined
-			-fno-omit-frame-pointer)
+			-fno-sanitize-recover=undefined -fno-omit-frame-pointer)
 		add_link_options(-fsanitize=address,undefined)
 	endif()
 endif()
