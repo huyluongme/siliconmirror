@@ -23,8 +23,11 @@
 #define BASE_HZ 200000000
 
 enum {
+	ARG2 = 0x00,
+	BLKSIZECNT = 0x04,
 	ARG1 = 0x08,
 	CMDTM = 0x0c,
+	RESP0 = 0x10,
 	STATUS = 0x24,
 	CONTROL0 = 0x28,
 	CONTROL1 = 0x2c,
@@ -32,8 +35,17 @@ enum {
 	IRPT_MASK = 0x34,
 	IRPT_EN = 0x38,
 	CAPS = 0x40,
+	CONTROL2 = 0x3c,
 	CAPS_1 = 0x44,
 	FORCE_IRPT = 0x50,
+	BOOT_TIMEOUT = 0x70,
+	DBG_SEL = 0x74,
+	EXRDFIFO_CFG = 0x80,
+	EXRDFIFO_EN = 0x84,
+	TUNE_STEP = 0x88,
+	TUNE_STEPS_STD = 0x8c,
+	TUNE_STEPS_DDR = 0x90,
+	SPI_INT_SPT = 0xf0,
 	SLOTISR_VER = 0xfc,
 };
 
@@ -179,6 +191,14 @@ static void test_commands(void)
 	CHECK_EQ(rd(&s, INTERRUPT), 0);
 	run_until(&s, t + clocks(56, 0x301));
 	CHECK_EQ(rd(&s, INTERRUPT), CMD_DONE);
+	wr(&s, INTERRUPT, CMD_DONE);
+	clock_on(&s, 0x200);
+	t = s.m->events.now;
+	wr(&s, CMDTM, CMD(0, 0));
+	run_until(&s, t + clocks(56, 0x200) - 1);
+	CHECK_EQ(rd(&s, INTERRUPT), 0);
+	run_until(&s, t + clocks(56, 0x200));
+	CHECK_EQ(rd(&s, INTERRUPT), CMD_DONE);
 	teardown(&s);
 }
 
@@ -245,6 +265,88 @@ static void test_resets(void)
 	teardown(&s);
 }
 
+/* Each register keeps its bits, and changes no other. */
+static void test_register_values(void)
+{
+	static const struct {
+		uint64_t offset;
+		uint32_t value, read;
+	} regs[] = {
+		{ARG2, 0xffffffff, 0xffffffff},
+		{BLKSIZECNT, 0xffffffff, 0xffff03ff},
+		{ARG1, 0xffffffff, 0xffffffff},
+		{CONTROL0, 0x00000f02, 0x00000f02},
+		{IRPT_MASK, 0xffffffff, 0xffffffff},
+		{IRPT_EN, 0xffffffff, 0xffffffff},
+		{CONTROL2, 0x00000004, 0x00000004},
+		{BOOT_TIMEOUT, 0xffffffff, 0xffffffff},
+		{DBG_SEL, 0xffffffff, 1},
+		{EXRDFIFO_CFG, 0xffffffff, 7},
+		{EXRDFIFO_EN, 0xffffffff, 1},
+		{TUNE_STEP, 0xffffffff, 7},
+		{TUNE_STEPS_STD, 0xffffffff, 0x3f},
+		{TUNE_STEPS_DDR, 0xffffffff, 0x3f},
+		{SPI_INT_SPT, 0xffffffff, 0xff},
+		{INTERRUPT, 0xffffffff, 0},
+		{CMDTM, 0, 0}, /* read only here: a write is a command */
+		{RESP0, 0, 0},
+		{RESP0 + 4, 0, 0},
+		{RESP0 + 8, 0, 0},
+		{RESP0 + 12, 0, 0},
+	};
+	const size_t n = ARRAY_SIZE(regs);
+	Setup s;
+
+	setup(&s);
+	for (size_t i = 0; i < n; i++) {
+		if (regs[i].offset == CMDTM || (regs[i].offset & ~0xfu) == RESP0)
+			continue;
+		wr(&s, regs[i].offset, regs[i].value);
+		for (size_t j = 0; j < n; j++)
+			CHECK_EQ(rd(&s, regs[j].offset), i == j ? regs[j].read : 0);
+		wr(&s, regs[i].offset, 0);
+	}
+	/* The host controller's reset: all back, with the clock bits written. */
+	for (size_t i = 0; i < n; i++)
+		if (regs[i].offset != CMDTM && (regs[i].offset & ~0xfu) != RESP0)
+			wr(&s, regs[i].offset, regs[i].value);
+	wr(&s, CONTROL1, 1u << 24 | CLK_INTLEN | CLK_EN);
+	for (size_t i = 0; i < n; i++)
+		CHECK_EQ(rd(&s, regs[i].offset), 0);
+	CHECK_EQ(rd(&s, CONTROL1), 0);
+	/* SRST_DATA ends at once: CONTROL1 does not keep it. */
+	wr(&s, CONTROL1, 1u << 26 | CLK_INTLEN);
+	CHECK_EQ(rd(&s, CONTROL1), CLK_INTLEN | CLK_STABLE);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/*
+ * The line rises when a command ends; a CONTROL1 write without
+ * SRST_CMD leaves the command alone; a reset drops the line.
+ */
+static void test_command_end(void)
+{
+	Setup s;
+
+	setup(&s);
+	clock_on(&s, 0);
+	wr(&s, IRPT_EN, 0xffffffff);
+	wr(&s, CMDTM, CMD(0, 0));
+	wr(&s, CONTROL1, CLK_INTLEN | CLK_EN);
+	run_until(&s, s.m->events.now + 1000000);
+	CHECK(irq_level(&s.irq));
+	CHECK_EQ(rd(&s, INTERRUPT), CMD_DONE);
+	wr(&s, CONTROL1, 1u << 24);
+	CHECK(!irq_level(&s.irq));
+	/* Destroyed with a command on the line, which never ends. */
+	clock_on(&s, 0);
+	wr(&s, CMDTM, CMD(0, 0));
+	bcm2835_emmc_destroy(s.emmc);
+	run_until(&s, s.m->events.now + 1000000);
+	machine_destroy(s.m);
+}
+
 /* What the controller or the WiFi chip would need stops the machine. */
 static void test_stops(void)
 {
@@ -267,6 +369,7 @@ static void test_stops(void)
 		{true, CAPS, 4, 0, true, "is not a register that software"},
 		{false, CONTROL1, 2, 0, true, "is not a 32-bit register read"},
 		{true, 0x2f, 1, 1, true, "is not a 32-bit register write"},
+		{true, CONTROL0, 2, 0, true, "is not a 32-bit register write"},
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(stops); i++) {
@@ -296,6 +399,12 @@ static void test_stops(void)
 	wr(&s, CMDTM, CMD(8, 2));
 	bus_write(s.m->bus, BASE + CMDTM, 4, CMD(8, 2));
 	CHECK(strstr(s.m->stop_message, "the last command has not finished"));
+	teardown(&s);
+	/* The internal clock alone is not the SD clock. */
+	setup(&s);
+	wr(&s, CONTROL1, CLK_INTLEN);
+	bus_write(s.m->bus, BASE + CMDTM, 4, CMD(0, 0));
+	CHECK(strstr(s.m->stop_message, "a command without the SD clock"));
 	CHECK_EQ(bus_read(s.m->bus, BASE + 0x100, 4, &v), BUS_ERR_UNMAPPED);
 	teardown(&s);
 }
@@ -306,6 +415,8 @@ int main(void)
 	RUN_TEST(test_commands);
 	RUN_TEST(test_interrupts);
 	RUN_TEST(test_resets);
+	RUN_TEST(test_register_values);
+	RUN_TEST(test_command_end);
 	RUN_TEST(test_stops);
 	return test_summary();
 }
