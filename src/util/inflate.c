@@ -56,9 +56,13 @@ static bool fail(Stream *s, const char *format, ...)
 	return false;
 }
 
-/* Read n bits, n <= 16, the first one lowest (section 3.1.1). */
+/*
+ * Read n bits, n <= 16, the first one lowest (section 3.1.1). *value is
+ * 0 when the data ends first.
+ */
 static bool get_bits(Stream *s, unsigned n, uint32_t *value)
 {
+	*value = 0;
 	while (s->nbits < n) {
 		if (s->in_pos == s->in_size)
 			return fail(s, "its data ends too early");
@@ -108,10 +112,12 @@ static bool one_code(const Huffman *h)
 	return codes == 1 && h->count[1] == 1;
 }
 
-/* Read one symbol of code h. */
+/* Read one symbol of code h; 0 when it fails. */
 static bool decode(Stream *s, const Huffman *h, unsigned *symbol)
 {
 	uint32_t code = 0, first = 0, index = 0;
+
+	*symbol = 0;
 
 	for (unsigned len = 1; len <= MAX_BITS; len++) {
 		uint32_t bit;
