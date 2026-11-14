@@ -343,6 +343,7 @@ static void test_structure_errors(void)
 		{"bad-token", "unknown token 0x7 at offset 56"},
 		{"name-offset", "a property name is outside the strings block"},
 		{"prop-too-long", "a property runs past the structure block"},
+		{"prop-just-past", "a property runs past the structure block"},
 		{"deep", "nodes nest deeper than 64"},
 	};
 
@@ -391,6 +392,15 @@ static void test_structure_errors(void)
 			word(&b, 3);
 			word(&b, 1000);
 			word(&b, 0);
+			b.strings[0] = 'x';
+			b.strings_len = 2;
+		} else if (strcmp(w, "prop-just-past") == 0) {
+			begin(&b, "");
+			word(&b, 3);
+			word(&b, 16); /* 4 bytes more than the block holds */
+			word(&b, 0);
+			word(&b, 0);
+			word(&b, 9); /* FDT_END */
 			b.strings[0] = 'x';
 			b.strings_len = 2;
 		} else {
