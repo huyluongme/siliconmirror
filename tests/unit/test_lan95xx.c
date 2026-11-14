@@ -7,6 +7,7 @@
  */
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/event.h"
@@ -49,6 +50,8 @@ enum {
 	MII_DATA = 0x118,
 	VLAN1 = 0x120,
 	VLAN2 = 0x124,
+	FLOW = 0x11c,
+	WUCSR = 0x12c,
 	COE_CR = 0x130,
 };
 
@@ -77,10 +80,11 @@ typedef struct Setup {
 static uint8_t sent[2100];
 static size_t sent_len;
 static unsigned sent_count;
+static void *sent_ctx;
 
 static void partner(void *ctx, const uint8_t *frame, size_t len)
 {
-	(void)ctx;
+	sent_ctx = ctx;
 	memcpy(sent, frame, len);
 	sent_len = len;
 	sent_count++;
@@ -384,17 +388,31 @@ static void test_register_bits(void)
 {
 	static const struct {
 		unsigned addr;
-		uint32_t bits, fixed;
+		uint32_t bits, fixed, avoid; /* avoid: bits that stop the machine */
 	} regs[] = {
-		{AFC_CFG, 0x00ffffffu, 0},    {E2P_DATA, 0xff, 0},
-		{BURST_CAP, 0xff, 0},         {DP_SEL, 0x7, 0x80000000u}, /* DPRDY */
-		{DP_ADDR, 0x7fff, 0},         {DP_DATA0, 0xffffffffu, 0},
-		{DP_DATA1, 0x1f, 0},          {GPIO_WAKE, 0x07ff07ffu, 0},
-		{INT_EP_CTL, 0x800fffffu, 0}, {BULK_IN_DLY, 0xffff, 0},
-		{ADDRH, 0xffff, 0},           {ADDRL, 0xffffffffu, 0},
-		{HASHH, 0xffffffffu, 0},      {HASHL, 0xffffffffu, 0},
-		{MII_DATA, 0xffff, 0},        {VLAN1, 0xffff, 0},
-		{VLAN2, 0xffff, 0},
+		{PMT_CTL, 0x0000036cu, 0x80, 0x10}, /* not PHY_RST */
+		{LED_GPIO_CFG, 0x03330777u, 0x7, 0},
+		{GPIO_CFG, 0xffffffffu, 0xff, 0},
+		{FLOW, 0xffff0006u, 0, 0x1},
+		{WUCSR, 0x200, 0, 0x6},
+		{COE_CR, 0, 0, 0x00010003u},
+		{AFC_CFG, 0x00ffffffu, 0, 0},
+		{E2P_DATA, 0xff, 0, 0},
+		{BURST_CAP, 0xff, 0, 0},
+		{DP_SEL, 0x7, 0x80000000u, 0}, /* DPRDY */
+		{DP_ADDR, 0x7fff, 0, 0},
+		{DP_DATA0, 0xffffffffu, 0, 0},
+		{DP_DATA1, 0x1f, 0, 0},
+		{GPIO_WAKE, 0x07ff07ffu, 0, 0},
+		{INT_EP_CTL, 0x800fffffu, 0, 0},
+		{BULK_IN_DLY, 0xffff, 0, 0},
+		{ADDRH, 0xffff, 0, 0},
+		{ADDRL, 0xffffffffu, 0, 0},
+		{HASHH, 0xffffffffu, 0, 0},
+		{HASHL, 0xffffffffu, 0, 0},
+		{MII_DATA, 0xffff, 0, 0},
+		{VLAN1, 0xffff, 0, 0},
+		{VLAN2, 0xffff, 0, 0},
 	};
 	const size_t n = sizeof(regs) / sizeof(regs[0]);
 	Setup s = setup(true);
@@ -402,7 +420,7 @@ static void test_register_bits(void)
 	for (size_t i = 0; i < n; i++)
 		wr(&s, regs[i].addr, 0);
 	for (size_t i = 0; i < n; i++) {
-		wr(&s, regs[i].addr, 0xffffffffu);
+		wr(&s, regs[i].addr, 0xffffffffu & ~regs[i].avoid);
 		for (size_t j = 0; j < n; j++)
 			CHECK_EQ(rd(&s, regs[j].addr),
 			         regs[j].fixed | (i == j ? regs[j].bits : 0));
@@ -426,6 +444,15 @@ static void test_unmodelled(void)
 		{0x200, 0, true, "reserved register"},
 		{0x009, 0, false, "reserved register"},
 		{0x134, 0, false, "reserved register"},
+		{0xfff, 0, false, "reserved register"},
+		{0x101, 0, false, "reserved register"},
+		{0x101, 0, true, "reserved register"},
+		{0x004, 0, true, "reserved register"},
+		{0x074, 0, false, "debug registers"},
+		{0x078, 0, false, "debug registers"},
+		{0x044, 0, false, "data port"},
+		{0x128, 0, false, "wake-up frame filter"},
+		{0x12c, 2, true, "wake-up detection"},
 		{0x134, 0, true, "reserved register"},
 		{0x070, 0, false, "debug registers"},
 		{0x07c, 0, false, "debug registers"},
@@ -720,6 +747,12 @@ static void test_phy_registers(void)
 		mdio_write(&s, read_only[i], 0xffff);
 		CHECK_EQ(mdio_read(&s, read_only[i]), v);
 	}
+	/* MII_ACCESS keeps all but BUSY; without BUSY nothing happens. */
+	CHECK_EQ(mdio_read(&s, 4), 0);
+	CHECK_EQ(rd(&s, MII_ACCESS), 1u << 11 | 4u << 6);
+	wr(&s, MII_DATA, 0x0021);
+	wr(&s, MII_ACCESS, 1u << 11 | 4u << 6 | 2u);
+	CHECK_EQ(mdio_read(&s, 4), 0);
 	/* BMCR's reserved bits read 0; SMR keeps 8 bits. */
 	mdio_write(&s, 0, 0x3101);
 	CHECK_EQ(mdio_read(&s, 0), 0x3100);
@@ -1239,6 +1272,9 @@ static void test_rx_fifo(void)
 	CHECK(lan95xx_receive(s.e, frame, 1514));
 	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_ACK);
 	CHECK_EQ(n, 512);
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 1518 - 512);
+	wr(&s, RX_CFG, 0);
+	CHECK_EQ(rd(&s, RX_FIFO_INF), 1518 - 512);
 	wr(&s, RX_CFG, 1);
 	CHECK_EQ(rd(&s, RX_FIFO_INF), 0);
 	CHECK_EQ(usb_device_in(s.d, 1, buf, 512, &n), USB_NAK);
@@ -1350,6 +1386,289 @@ static void test_filter(void)
 	teardown(&s);
 }
 
+/* One TX buffer: commands A and B, then size bytes from off. */
+static size_t tx_buffer(uint8_t *out, const uint8_t *data, size_t size,
+                        unsigned off, uint32_t a_flags, uint32_t b)
+{
+	store_le32(out, (uint32_t)size | (uint32_t)off << 16 | a_flags);
+	store_le32(out + 4, b);
+	memset(out + 8, 0xee, off);
+	memcpy(out + 8 + off, data, size);
+	return 8 + ((off + size + 3) & ~(size_t)3);
+}
+
+/* A TX error: TXE, and the FIFO empty. */
+static void tx_fails(Setup *s, const uint8_t *out, size_t n)
+{
+	unsigned count = sent_count;
+
+	CHECK_EQ(bulk_write(s, out, n), USB_ACK);
+	CHECK(rd(s, INT_STS) & 1u << 14);
+	wr(s, INT_STS, 1u << 14);
+	CHECK_EQ(rd(s, TX_FIFO_INF), 0x2000);
+	CHECK_EQ(sent_count, count);
+}
+
+/* TX in detail: padding and FCS, odd buffers, errors, counters. */
+static void test_tx_detail(void)
+{
+	static const struct {
+		size_t size;
+		uint32_t flags; /* command B's: NO_PAD, NO_CRC */
+		size_t sent;
+		bool fcs;
+	} frames[] = {
+		{1514, 0, 1518, true},    {59, 0, 64, true},
+		{60, 0, 64, true},        {61, 0, 65, true},
+		{42, 1u << 12, 46, true}, {42, 3u << 12, 42, false},
+		{42, 1u << 13, 64, true}, /* the padding brings the FCS */
+	};
+	const uint32_t fl = 3u << 12; /* FIRST and LAST */
+	Setup s = setup(true);
+	uint8_t out[2100], frame[1600], c[64];
+	size_t n, got;
+
+	link_up(&s);
+	wr(&s, HW_CFG, 1u << 8); /* SBP: an error does not halt the pipe */
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
+	CHECK_EQ(got, 40);
+	sent_count = 0;
+	make_frame(frame, bcast, 0x0800, 1518);
+	for (size_t i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+		n = frames[i].size;
+		tx_buffer(out, frame, n, 0, fl, (uint32_t)n | frames[i].flags);
+		CHECK_EQ(bulk_write(&s, out, 8 + n), USB_ACK);
+		CHECK_EQ(sent_len, frames[i].sent);
+		CHECK(memcmp(sent, frame, n) == 0);
+		for (size_t j = n; j < 60 && !(frames[i].flags & 1u << 12); j++)
+			CHECK_EQ(sent[j], 0);
+		if (frames[i].fcs)
+			CHECK_EQ(load_le32(sent + sent_len - 4), crc32(sent, sent_len - 4));
+	}
+	/* An odd size from offset 3; one whose transfer ends mid-DWORD. */
+	tx_buffer(out, frame + 7, 61, 3, fl, 61);
+	CHECK_EQ(bulk_write(&s, out, 8 + 3 + 61), USB_ACK);
+	CHECK(sent_len == 65 && memcmp(sent, frame + 7, 61) == 0);
+	tx_buffer(out, frame + 9, 61, 0, fl, 61);
+	CHECK_EQ(bulk_write(&s, out, 8 + 61), USB_ACK);
+	CHECK(sent_len == 65 && memcmp(sent, frame + 9, 61) == 0);
+	/* Two frames in a transfer, the second from a DWORD boundary. */
+	n = tx_buffer(out, frame, 61, 0, fl, 61);
+	n += tx_buffer(out + n, frame + 100, 42, 0, fl, 42);
+	got = sent_count;
+	CHECK_EQ(bulk_write(&s, out, n), USB_ACK);
+	CHECK_EQ(sent_count, got + 2);
+	CHECK(sent_len == 64 && memcmp(sent, frame + 100, 42) == 0);
+
+	/* Errors (5.4.2.5). */
+	tx_fails(&s, out, tx_buffer(out, frame, 0, 0, fl, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 50, 0, fl, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 42, 0, 1u << 13, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 42, 0, 1u << 12, 42));
+	tx_fails(&s, out, tx_buffer(out, frame, 20, 0, fl, 42));
+	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42);
+	n += tx_buffer(out + n, frame + 20, 22, 0, fl, 42);
+	tx_fails(&s, out, n); /* FIRST again */
+	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42 | 1u << 24);
+	n += tx_buffer(out + n, frame + 20, 22, 0, 1u << 12, 42 | 2u << 24);
+	tx_fails(&s, out, n); /* command B changed */
+	n = tx_buffer(out, frame, 20, 0, 1u << 13, 42 | 1u << 24);
+	n += tx_buffer(out + n, frame + 20, 22, 0, 1u << 12, 42 | 1u << 24);
+	CHECK_EQ(bulk_write(&s, out, n), USB_ACK);
+	CHECK(sent_len == 64 && memcmp(sent, frame, 42) == 0);
+
+	/* Without TXEN a frame waits; the write of MAC_CR sends it. */
+	wr(&s, MAC_CR, 1u << 18 | 1u << 2);
+	got = sent_count;
+	CHECK_EQ(bulk_write(&s, out, tx_buffer(out, frame, 60, 0, fl, 60)),
+	         USB_ACK);
+	CHECK_EQ(sent_count, got);
+	wr(&s, MAC_CR, 1u << 18 | 0xc);
+	CHECK_EQ(sent_count, got + 1);
+	/* STOP_TX: TX_ON clears, TXSTOP_INT; INT_STS clears what is written. */
+	wr(&s, MAC_CR, 1u << 18 | 0x8);
+	CHECK(rd(&s, INT_STS) & 1u << 16);
+	wr(&s, TX_CFG, 1u << 2 | 1u << 1);
+	CHECK_EQ(rd(&s, TX_CFG), 0);
+	CHECK(rd(&s, INT_STS) & 1u << 17);
+	wr(&s, INT_STS, 1u << 17);
+	CHECK_EQ(rd(&s, INT_STS) & (1u << 17 | 1u << 16), 1u << 16);
+	/* RXSTOP only when RXEN goes off. */
+	wr(&s, INT_STS, 1u << 16);
+	wr(&s, MAC_CR, 1u << 18 | 0x8);
+	wr(&s, MAC_CR, 1u << 18 | 0xc);
+	wr(&s, MAC_CR, 1u << 18 | 0xc);
+	CHECK_EQ(rd(&s, INT_STS) & 1u << 16, 0);
+	/* A flush empties the FIFO of a frame half there. */
+	CHECK_EQ(bulk_write(&s, out, 30), USB_ACK);
+	CHECK(rd(&s, TX_FIFO_INF) < 0x2000);
+	wr(&s, TX_CFG, 1u << 0);
+	CHECK_EQ(rd(&s, TX_FIFO_INF), 0x2000);
+	wr(&s, TX_CFG, 1u << 2);
+
+	/* The counters: good frames; with no link, carrier lost and bad. */
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
+	CHECK_EQ(load_le32(c), sent_count);
+	lan95xx_plug(s.e, NULL, NULL);
+	CHECK_EQ(bulk_write(&s, out, tx_buffer(out, frame, 60, 0, fl, 60)),
+	         USB_ACK);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
+	CHECK_EQ(load_le32(c), 0);
+	CHECK_EQ(load_le32(c + 32), 1); /* carrier lost */
+	CHECK_EQ(load_le32(c + 36), 1); /* bad */
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 1, 64, c, &got), USB_ACK);
+	for (int i = 0; i < 40; i++)
+		CHECK_EQ(c[i], 0);
+	/* The bulk OUT endpoint: 512 bytes a packet; no other OUT. */
+	CHECK_EQ(usb_device_out(s.d, 2, out, 513), USB_NO_RESPONSE);
+	CHECK_EQ(usb_device_out(s.d, 3, out, 8), USB_STALL);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* The bursts of MEF: their padding, the burst cap and its limit. */
+static void test_bursts(void)
+{
+	Setup s = setup(true);
+	uint8_t frame[1600], buf[8192];
+	size_t got;
+
+	link_up(&s);
+	make_frame(frame, own, 0x0800, 1514);
+	CHECK(lan95xx_receive(s.e, frame, 1514));
+	CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+	/* Frames of 65 and 64 bytes: zeros up to the DWORD boundary. */
+	wr(&s, HW_CFG, 1u << 5);
+	make_frame(frame, own, 0x0800, 65);
+	CHECK(lan95xx_receive(s.e, frame, 65));
+	make_frame(frame, own, 0x0800, 64);
+	CHECK(lan95xx_receive(s.e, frame, 64));
+	CHECK(lan95xx_receive(s.e, frame, 64));
+	CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+	CHECK_EQ(got, 72 + 68 + 68);
+	CHECK(buf[69] == 0 && buf[70] == 0 && buf[71] == 0);
+	CHECK(memcmp(buf + 72 + 68 + 4, frame, 64) == 0);
+	/* BURST_CAP up to 4 sets no cap, and nothing without BCE. */
+	make_frame(frame, own, 0x0800, 1514);
+	for (int cap = 4; cap <= 5; cap++) {
+		wr(&s, BURST_CAP, (uint32_t)cap);
+		wr(&s, HW_CFG, 1u << 5 | (cap == 4 ? 1u << 1 : 0));
+		for (int i = 0; i < 3; i++)
+			CHECK(lan95xx_receive(s.e, frame, 1514));
+		CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+		CHECK_EQ(got, 1520 + 1520 + 1518);
+	}
+	/* Frames that fill the cap exactly go in one burst. */
+	wr(&s, HW_CFG, 1u << 5 | 1u << 1);
+	make_frame(frame, own, 0x0800, 1276);
+	CHECK(lan95xx_receive(s.e, frame, 1276));
+	CHECK(lan95xx_receive(s.e, frame, 1276));
+	CHECK_EQ(bulk_read(&s, buf, &got), USB_ACK);
+	CHECK_EQ(got, 2560);
+	/* A bulk IN shorter than wMaxPacketSize takes what fits. */
+	{
+		uint8_t *small = malloc(64);
+		size_t n;
+
+		CHECK(small != NULL);
+		make_frame(frame, own, 0x0800, 100);
+		CHECK(lan95xx_receive(s.e, frame, 100));
+		CHECK_EQ(usb_device_in(s.d, 1, small, 64, &n), USB_ACK);
+		CHECK(n == 64 && memcmp(small + 4, frame, 60) == 0);
+		CHECK_EQ(usb_device_in(s.d, 1, small, 64, &n), USB_ACK);
+		CHECK(n == 40 && memcmp(small, frame + 60, 40) == 0);
+		free(small);
+	}
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* The requests' format; the interrupt endpoint; another configuration. */
+static void test_usb_requests(void)
+{
+	Setup s = setup(true);
+	uint8_t buf[64];
+	size_t got, n;
+
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 0, 64, buf, &got), USB_ACK);
+	CHECK_EQ(got, 32);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 0, 2, 64, buf, &got), USB_STALL);
+	CHECK_EQ(control(s.d, 0xc0, 0xa2, 1, 0, 64, buf, &got), USB_STALL);
+	CHECK_EQ(control(s.d, 0x40, 0xa2, 0, 0, 0, NULL, &got), USB_STALL);
+	/* One alternate setting. */
+	CHECK_EQ(control(s.d, 0x01, 11, 0, 0, 0, NULL, &got), USB_ACK);
+	CHECK_EQ(control(s.d, 0x01, 11, 1, 0, 0, NULL, &got), USB_STALL);
+	/* The interrupt endpoint's packet is 4 bytes. */
+	wr(&s, INT_EP_CTL, 1u << 31);
+	CHECK_EQ(usb_device_in(s.d, 3, buf, 4, &n), USB_ACK);
+	CHECK_EQ(n, 4);
+	CHECK_EQ(usb_device_in(s.d, 3, buf, 3, &n), USB_STALL);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+
+	/* Bus powered, without remote wakeup. */
+	{
+		Lan95xxConfig c = lan9514;
+		Machine *m = machine_create();
+		Lan95xx *e;
+
+		c.self_powered = false;
+		c.remote_wakeup = false;
+		e = lan95xx_create(m, &c);
+		CHECK_EQ(control(lan95xx_device(e), 0x80, 6, 0x0200, 0, 64, buf, &got),
+		         USB_ACK);
+		CHECK_EQ(buf[7], 0x80);
+		CHECK_EQ(control(lan95xx_device(e), 0x80, 0, 0, 0, 2, buf, &got),
+		         USB_ACK);
+		CHECK_EQ(buf[0], 0);
+		lan95xx_destroy(e);
+		machine_destroy(m);
+	}
+}
+
+/* A cable plugged in twice, or pulled twice; the partner's context. */
+static void test_plug(void)
+{
+	Setup s = setup(true);
+	uint8_t frame[64], out[72];
+	int marker;
+
+	phy_reset(&s);
+	run(&s, 256 * MS);
+	lan95xx_plug(s.e, NULL, NULL);
+	CHECK_EQ(mdio_read(&s, 17), 0);
+	link_up(&s);
+	lan95xx_plug(s.e, partner, &marker);
+	mdio_read(&s, 1);
+	CHECK(mdio_read(&s, 1) & 0x0004);
+	make_frame(frame, bcast, 0x0800, 64);
+	CHECK_EQ(bulk_write(&s, out, tx_buffer(out, frame, 60, 0, 3u << 12, 60)),
+	         USB_ACK);
+	CHECK(sent_ctx == &marker);
+	/* While the link negotiates, nothing comes in. */
+	mdio_write(&s, 0, 0x1200);
+	CHECK(!lan95xx_receive(s.e, frame, 64));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	teardown(&s);
+}
+
+/* Destroyed with its events pending, none fires after. */
+static void test_destroy_pending(void)
+{
+	for (int bmcr_reset = 0; bmcr_reset < 2; bmcr_reset++) {
+		Setup s = setup(true);
+
+		lan95xx_plug(s.e, partner, NULL);
+		phy_reset(&s);                /* the link, ENERGYON's check */
+		wr(&s, E2P_CMD, 0xb0000000u); /* the EEPROM's time-out */
+		if (bmcr_reset)
+			mdio_write(&s, 0, 0x8000); /* its end, not the link */
+		lan95xx_destroy(s.e);
+		run(&s, 3000 * MS);
+		machine_destroy(s.m);
+	}
+}
+
 /* The interrupt endpoint (5.3.1.3), and the MAC's loopback. */
 static void test_interrupts_and_loopback(void)
 {
@@ -1380,7 +1699,7 @@ static void test_interrupts_and_loopback(void)
 	CHECK_EQ(usb_device_in(s.d, 4, buf, 16, &n), USB_STALL);
 
 	/* Loopback: what goes out comes back in, not onto the cable. */
-	wr(&s, MAC_CR, 1u << 21 | 1u << 20 | 1u << 18 | 0xc);
+	wr(&s, MAC_CR, 1u << 21 | 1u << 18 | 0xc);
 	CHECK(!lan95xx_receive(s.e, frame, 64));
 	{
 		uint8_t out[72];
@@ -1417,5 +1736,10 @@ int main(void)
 	RUN_TEST(test_rx_fifo);
 	RUN_TEST(test_filter);
 	RUN_TEST(test_interrupts_and_loopback);
+	RUN_TEST(test_tx_detail);
+	RUN_TEST(test_bursts);
+	RUN_TEST(test_usb_requests);
+	RUN_TEST(test_plug);
+	RUN_TEST(test_destroy_pending);
 	return test_summary();
 }
