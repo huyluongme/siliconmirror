@@ -189,6 +189,10 @@ add_executable(test_raspi3b_property test_raspi3b_property.c)
 target_link_libraries(test_raspi3b_property PRIVATE machine)
 add_test(NAME unit.raspi3b_property COMMAND test_raspi3b_property)
 
+add_executable(test_raspi3b_vchiq test_raspi3b_vchiq.c)
+target_link_libraries(test_raspi3b_vchiq PRIVATE machine)
+add_test(NAME unit.raspi3b_vchiq COMMAND test_raspi3b_vchiq)
+
 add_executable(test_raspi3b_firmware test_raspi3b_firmware.c)
 target_link_libraries(test_raspi3b_firmware PRIVATE machine backend)
 add_test(NAME unit.raspi3b_firmware COMMAND test_raspi3b_firmware)

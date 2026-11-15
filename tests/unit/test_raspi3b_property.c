@@ -775,7 +775,7 @@ static void test_format(void)
 static void test_stops(void)
 {
 	Setup s;
-	uint32_t known[] = {sizeof(uint32_t[6]), 0, 0x00048010, 0, 0, 0};
+	uint32_t known[] = {sizeof(uint32_t[6]), 0, 0x00030020, 0, 0, 0};
 	uint32_t tag_code[] = {sizeof(uint32_t[7]), 0, 0x00010002, 4,
 	                       0x80000004,          0, 0};
 	uint32_t buf_code[] = {sizeof(uint32_t[3]), 1, 0};
@@ -787,7 +787,7 @@ static void test_stops(void)
 	uint32_t reply = 0x5a5a;
 
 	setup(&s);
-	send_stops(&s, known, ARRAY_SIZE(known), "tag 0x00048010 is not emulated");
+	send_stops(&s, known, ARRAY_SIZE(known), "tag 0x00030020 is not emulated");
 	send_stops(&s, tag_code, ARRAY_SIZE(tag_code),
 	           "a tag request code of 0x80000004 is not documented");
 	send_stops(&s, buf_code, ARRAY_SIZE(buf_code),
@@ -1900,6 +1900,7 @@ static void test_known_tags(void)
 		0x00038001,
 		0x00030030,
 		0x00038030,
+		0x00048010,
 		/* The frame buffer's. */
 		0x00040001,
 		0x00040002,

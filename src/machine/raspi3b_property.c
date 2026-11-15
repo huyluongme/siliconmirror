@@ -13,6 +13,7 @@
 
 #include "core/bus.h"
 #include "machine/raspi3b.h"
+#include "machine/raspi3b_vchiq.h"
 #include "util/byteorder.h"
 #include "util/macros.h"
 
@@ -233,6 +234,7 @@ struct Raspi3bProperty {
 	bool domain_on[NUM_DOMAINS];
 	Display display;
 	FbTag fb_tags[FB_TAGS_MAX]; /* those of the buffer being answered */
+	Raspi3bVchiq *vchiq;        /* the VideoCore's end of VCHIQ */
 	unsigned num_fb_tags;
 	Value value;              /* the tag being answered */
 	Clock clocks[NUM_CLOCKS]; /* last: a read past them leaves the object */
@@ -351,6 +353,7 @@ void raspi3b_property_reset(Raspi3bProperty *p)
 {
 	reset_clocks(p);
 	reset_display(&p->display);
+	raspi3b_vchiq_reset(p->vchiq);
 	p->turbo = 0;
 	memset(p->power_known, 0, sizeof(p->power_known));
 	memset(p->power_on, 0, sizeof(p->power_on));
@@ -375,8 +378,9 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 		return NULL;
 	p->machine = m;
 	p->ram_size = ram_size;
-	if (!raspi3b_property_configure(p, &defaults)) {
-		free(p);
+	p->vchiq = raspi3b_vchiq_create(m, ram_size);
+	if (p->vchiq == NULL || !raspi3b_property_configure(p, &defaults)) {
+		raspi3b_property_destroy(p);
 		return NULL;
 	}
 	return p;
@@ -384,8 +388,15 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 
 void raspi3b_property_destroy(Raspi3bProperty *p)
 {
+	if (p->vchiq != NULL)
+		raspi3b_vchiq_destroy(p->vchiq);
 	free(p->cmdline);
 	free(p);
+}
+
+Raspi3bVchiq *raspi3b_property_vchiq(Raspi3bProperty *p)
+{
+	return p->vchiq;
 }
 
 bool raspi3b_property_configure(Raspi3bProperty *p,
@@ -1432,6 +1443,19 @@ static bool fb_finish(Raspi3bProperty *p, uint8_t *buf)
 	return true;
 }
 
+/*
+ * VCHIQ_INIT: the VideoCore starts its end of VCHIQ on the memory at the
+ * request's bus address, and answers 0 (Linux's vchiq_arm.c takes any
+ * other answer for a failure).
+ */
+static bool vchiq_init(Raspi3bProperty *p, Value *v)
+{
+	if (!needs(p, v, 4) || !raspi3b_vchiq_init(p->vchiq, arg(v, 0)))
+		return false;
+	answer(v, 0, 0);
+	return true;
+}
+
 typedef struct Handler {
 	uint32_t tag;
 	bool (*fn)(Raspi3bProperty *p, Value *v);
@@ -1468,6 +1492,7 @@ static const Handler handlers[] = {
 	{0x00038001, set_clock_state},
 	{0x00030030, get_domain_state},
 	{0x00038030, set_domain_state},
+	{0x00048010, vchiq_init},
 };
 
 /*

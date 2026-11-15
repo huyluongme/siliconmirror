@@ -36,6 +36,7 @@
 #include <stdint.h>
 
 #include "core/machine.h"
+#include "machine/raspi3b_vchiq.h"
 
 #define RASPI3B_PROPERTY_CHANNEL 8 /* property tags, Arm to VideoCore */
 
@@ -83,6 +84,9 @@ void raspi3b_property_reset(Raspi3bProperty *p);
 
 /* The memory of the Arm: from 0, this many bytes. */
 uint32_t raspi3b_property_arm_memory(const Raspi3bProperty *p);
+
+/* The VideoCore's end of VCHIQ, which VCHIQ_INIT starts. */
+Raspi3bVchiq *raspi3b_property_vchiq(Raspi3bProperty *p);
 
 /* The MAC address of the board's Ethernet. */
 void raspi3b_property_mac(uint8_t mac[6]);
