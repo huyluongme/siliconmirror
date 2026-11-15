@@ -42,11 +42,18 @@
  *  - A transmitter or receiver that is disabled finishes the byte it is
  *    sending or receiving, as AUX_MU_CNTL_REG says; so does a mini UART
  *    that AUX_ENABLES disables.
+ *  - A 1-byte access to the offset of a register reads or writes its bits
+ *    7:0, as a 32-bit access whose bits 31:8 are zero would: on the real
+ *    chip, Linux's 8250_bcm2835aux driver reads and writes the mini UART
+ *    with 1-byte accesses, as the Raspberry Pi device trees give it no
+ *    reg-io-width. Only AUX_MU_BAUD_REG has writable bits above bit 7,
+ *    and nothing shows what a 1-byte write does to them: it stops the
+ *    machine.
  *  - The document says that the registers of a disabled module cannot be
  *    read or written, but not what happens: such an access stops the
- *    machine. So do accesses other than 32-bit ones, writes of the
- *    read-only registers, and accesses to offsets the document does not
- *    describe.
+ *    machine. So do other accesses that are not 32-bit ones, writes of
+ *    the read-only registers, and accesses to offsets the document does
+ *    not describe.
  */
 
 #include "hw/char/bcm2835_aux.h"
@@ -343,13 +350,13 @@ static void stop(Bcm2835Aux *aux, const char *access, uint64_t offset,
 
 /*
  * Whether an access can go on: it stops the machine when it is not a
- * 32-bit access to a mini UART register of an enabled mini UART, or to
- * AUX_IRQ or AUX_ENABLES.
+ * 32-bit or 1-byte access to a mini UART register of an enabled mini
+ * UART, or to AUX_IRQ or AUX_ENABLES.
  */
 static bool accessible(Bcm2835Aux *aux, const char *access, uint64_t offset,
                        unsigned size)
 {
-	if (size != 4 || (offset & 3) != 0 ||
+	if ((size != 4 && size != 1) || (offset & 3) != 0 ||
 	    (offset > REG_ENABLES && offset < REG_IO) ||
 	    (offset > REG_BAUD && offset < REG_SPI1) || offset >= REG_SPI_END) {
 		stop(aux, access, offset, size, "is not described by the datasheet");
@@ -405,10 +412,11 @@ static uint64_t aux_read(void *ctx, uint64_t offset, unsigned size)
 	}
 }
 
-static void write_cntl(Bcm2835Aux *aux, uint64_t offset, uint32_t value)
+static void write_cntl(Bcm2835Aux *aux, uint64_t offset, uint32_t value,
+                       unsigned size)
 {
 	if (value & CNTL_TX_FLOW) {
-		stop(aux, "write to", offset, 4,
+		stop(aux, "write to", offset, size,
 		     "is not implemented yet (transmit flow control with CTS)");
 		return;
 	}
@@ -461,9 +469,15 @@ static void aux_write(void *ctx, uint64_t offset, uint64_t value, unsigned size)
 		aux->scratch = v & 0xff;
 		break;
 	case REG_CNTL:
-		write_cntl(aux, offset, v);
+		write_cntl(aux, offset, v, size);
 		break;
 	case REG_BAUD:
+		if (size == 1) {
+			stop(aux, "write to", offset, size,
+			     "is not described by the datasheet (bits 15:8 of the "
+			     "baud rate)");
+			return;
+		}
 		aux->baud = v & 0xffff;
 		break;
 	default: /* AUX_IRQ, LSR, MSR and STAT are read-only */

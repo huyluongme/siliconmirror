@@ -160,6 +160,21 @@ static void reg_write(Setup *s, uint64_t offset, uint64_t value)
 	CHECK_EQ(bus_write(s->m->bus, BASE + offset, 4, value), BUS_OK);
 }
 
+static uint64_t byte_read(Setup *s, uint64_t offset)
+{
+	uint64_t value = 0;
+
+	CHECK_EQ(bus_read(s->m->bus, BASE + offset, 1, &value), BUS_OK);
+	CHECK_EQ(s->m->stop, MACHINE_STOP_NONE);
+	return value;
+}
+
+static void byte_write(Setup *s, uint64_t offset, uint64_t value)
+{
+	CHECK_EQ(bus_write(s->m->bus, BASE + offset, 1, value), BUS_OK);
+	CHECK_EQ(s->m->stop, MACHINE_STOP_NONE);
+}
+
 /* 115313 baud, 8 bits. */
 static void configure(Setup *s)
 {
@@ -590,6 +605,69 @@ static void test_rts(void)
 	teardown(&s);
 }
 
+/*
+ * 1-byte accesses, as Linux's driver makes them: they read bits 7:0 of a
+ * register, and write them as a 32-bit write with bits 31:8 clear does.
+ */
+static void test_byte_access(void)
+{
+	static const uint64_t offsets[] = {AUX_IRQ, AUX_ENABLES, IER,  IIR,
+	                                   LCR,     MCR,         LSR,  MSR,
+	                                   SCRATCH, CNTL,        STAT, BAUD};
+	Setup s;
+
+	setup(&s);
+	configure(&s);
+	reg_write(&s, IER, 2);
+	reg_write(&s, SCRATCH, 0xa5);
+	reg_write(&s, IO, 'a'); /* STAT bits 7:0 change while it is sent */
+	for (unsigned i = 0; i < ARRAY_SIZE(offsets); i++)
+		CHECK_EQ(byte_read(&s, offsets[i]), reg_read(&s, offsets[i]) & 0xff);
+	CHECK_EQ(byte_read(&s, BAUD), 0x0e);
+	CHECK_EQ(byte_read(&s, STAT), STAT_SPACE | STAT_RX_IDLE);
+	advance(&s, FRAME_8);
+	CHECK(strcmp(s.serial.data, "a") == 0);
+
+	/* The baud rate, through DLAB, then a byte each way. */
+	byte_write(&s, LCR, 0x83);
+	CHECK_EQ(byte_read(&s, IO), 0x0e);
+	CHECK_EQ(byte_read(&s, IER), 0x01);
+	byte_write(&s, IO, 0x34);
+	byte_write(&s, IER, 0x12);
+	CHECK_EQ(reg_read(&s, BAUD), 0x1234);
+	byte_write(&s, IO, 0x0e);
+	byte_write(&s, IER, 0x01);
+	CHECK_EQ(reg_read(&s, BAUD), 0x010e);
+	byte_write(&s, LCR, 0x03);
+	CHECK_EQ(reg_read(&s, LCR), 1); /* as a 32-bit write of 3 gives */
+	CHECK_EQ(reg_read(&s, IER), 2);
+	byte_write(&s, IO, 'b');
+	advance(&s, s.m->events.now + FRAME_8);
+	CHECK(strcmp(s.serial.data, "ab") == 0);
+	type(&s, "c", 1);
+	advance(&s, s.m->events.now + FRAME_8);
+	CHECK_EQ(byte_read(&s, IO), 'c');
+	CHECK_EQ(byte_read(&s, IO), 0);
+
+	/* The other registers that can be written. */
+	byte_write(&s, IER, 3);
+	CHECK_EQ(reg_read(&s, IER), 3);
+	byte_write(&s, MCR, 2);
+	CHECK_EQ(reg_read(&s, MCR), 2);
+	byte_write(&s, SCRATCH, 0x5a);
+	CHECK_EQ(reg_read(&s, SCRATCH), 0x5a);
+	byte_write(&s, CNTL, 0xf2);
+	CHECK_EQ(reg_read(&s, CNTL), 0xf2);
+	byte_write(&s, IO, 'x');
+	byte_write(&s, IO, 'y');
+	CHECK_EQ(reg_read(&s, STAT) >> 24, 1); /* x is being sent */
+	byte_write(&s, IIR, 4);
+	CHECK_EQ(reg_read(&s, STAT) >> 24, 0);
+	byte_write(&s, AUX_ENABLES, 6);
+	CHECK_EQ(reg_read(&s, AUX_ENABLES), 6);
+	teardown(&s);
+}
+
 /* What the documents do not describe, or the model lacks, stops it. */
 static void test_stops(void)
 {
@@ -600,8 +678,25 @@ static void test_stops(void)
 		bool disabled;
 		const char *message;
 	} stops[] = {
-		{false, IO, 1, false,
-	     "1-byte read from offset 0x40 is not described by the datasheet"},
+		{false, IO, 2, false,
+	     "2-byte read from offset 0x40 is not described by the datasheet"},
+		{true, IO, 8, false, "8-byte write to offset 0x40 is not described"},
+		{true, 0x41, 1, false, "1-byte write to offset 0x41 is not described"},
+		{false, 0x43, 1, false,
+	     "1-byte read from offset 0x43 is not described"},
+		{false, 0x08, 1, false,
+	     "1-byte read from offset 0x08 is not described"},
+		{true, BAUD, 1, false,
+	     "1-byte write to offset 0x68 is not described by the datasheet (bits "
+	     "15:8 of the baud rate)"},
+		{false, 0x80, 1, false,
+	     "1-byte read from offset 0x80 is not implemented yet"},
+		{false, IO, 1, true,
+	     "1-byte read from offset 0x40 is not possible: AUX_ENABLES"},
+		{true, STAT, 1, false,
+	     "1-byte write to offset 0x64 is not possible: it is read-only"},
+		{true, CNTL, 1, false,
+	     "1-byte write to offset 0x60 is not implemented yet (transmit flow"},
 		{false, 0x08, 4, false, "offset 0x08 is not described"},
 		{true, 0x3c, 4, false, "offset 0x3c is not described"},
 		{false, 0x6c, 4, false, "offset 0x6c is not described"},
@@ -725,6 +820,7 @@ int main(void)
 	RUN_TEST(test_line_low);
 	RUN_TEST(test_wait);
 	RUN_TEST(test_rts);
+	RUN_TEST(test_byte_access);
 	RUN_TEST(test_stops);
 	RUN_TEST(test_create);
 	RUN_TEST(test_extent);

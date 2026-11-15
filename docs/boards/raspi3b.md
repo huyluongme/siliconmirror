@@ -343,11 +343,16 @@ chooses:
   reads 1 while RTS is asserted.
 - A write to a full transmit FIFO is lost, and a disabled transmitter,
   receiver or mini UART finishes its byte.
+- A 1-byte access to the offset of a register reads or writes its bits
+  7:0. On the real chip, Linux's `8250_bcm2835aux` driver uses such
+  accesses, as the device tree gives it no `reg-io-width`. A 1-byte
+  write to `AUX_MU_BAUD_REG`, whose bits 15:8 nothing describes, stops
+  the machine.
 - The document says the registers of a disabled module cannot be read
   or written, but not what happens: such an access stops the machine.
-  So do accesses other than 32-bit ones, writes of the read-only
-  registers, offsets the document does not describe, the SPI masters,
-  and transmit flow control with CTS, which nothing connects.
+  So do other accesses that are not 32-bit ones, writes of the
+  read-only registers, offsets the document does not describe, the SPI
+  masters, and transmit flow control with CTS, which nothing connects.
 
 ## UART0
 
