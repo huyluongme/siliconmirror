@@ -12,6 +12,7 @@ add_library(hw STATIC
 	misc/bcm2835_mbox.c
 	misc/bcm2835_mphi.c
 	misc/bcm2835_cprman.c
+	misc/bcm2835_doorbell.c
 	misc/bcm2835_pm.c
 	misc/bcm2835_rng.c
 	misc/bcm2835_thermal.c
