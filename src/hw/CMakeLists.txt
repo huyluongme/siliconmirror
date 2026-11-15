@@ -10,6 +10,7 @@ add_library(hw STATIC
 	intc/bcm2835_ic.c
 	intc/bcm2836_local.c
 	misc/bcm2835_mbox.c
+	misc/bcm2835_mphi.c
 	misc/bcm2835_cprman.c
 	misc/bcm2835_pm.c
 	misc/bcm2835_rng.c
