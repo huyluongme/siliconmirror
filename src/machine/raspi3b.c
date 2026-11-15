@@ -27,6 +27,8 @@
 #include "hw/misc/bcm2835_cprman.h"
 #include "hw/misc/bcm2835_mbox.h"
 #include "hw/misc/bcm2835_pm.h"
+#include "hw/misc/bcm2835_rng.h"
+#include "hw/misc/bcm2835_thermal.h"
 #include "hw/net/lan95xx.h"
 #include "hw/sd/bcm2835_emmc.h"
 #include "hw/sd/bcm2835_sdhost.h"
@@ -189,6 +191,21 @@ static void reset_pm(void *ctx)
 static void destroy_pm(void *ctx)
 {
 	bcm2835_pm_destroy(ctx);
+}
+
+static void reset_rng(void *ctx)
+{
+	bcm2835_rng_reset(ctx);
+}
+
+static void destroy_rng(void *ctx)
+{
+	bcm2835_rng_destroy(ctx);
+}
+
+static void destroy_thermal(void *ctx)
+{
+	bcm2835_thermal_destroy(ctx);
 }
 
 static void reset_dma(void *ctx)
@@ -416,6 +433,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Mbox *mbox;
 	Bcm2835Pm *pm;
 	Bcm2835Cprman *cprman;
+	Bcm2835Rng *rng;
+	Bcm2835Thermal *thermal;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Dma *dma;
@@ -547,6 +566,33 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	status = bcm2835_cprman_map(cprman, m->bus, "cprman", RASPI3B_CPRMAN_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map the clock manager: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	rng = bcm2835_rng_create(m);
+	if (rng == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, rng, reset_rng, destroy_rng)) {
+		bcm2835_rng_destroy(rng);
+		goto out_of_memory;
+	}
+	status = bcm2835_rng_map(rng, m->bus, "rng", RASPI3B_RNG_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the random generator: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	thermal = bcm2835_thermal_create(m);
+	if (thermal == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, thermal, NULL, destroy_thermal)) {
+		bcm2835_thermal_destroy(thermal);
+		goto out_of_memory;
+	}
+	status =
+		bcm2835_thermal_map(thermal, m->bus, "thermal", RASPI3B_THERMAL_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the temperature sensor: %s",
 		         bus_status_str(status));
 		goto fail;
 	}

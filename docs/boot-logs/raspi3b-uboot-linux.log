@@ -195,7 +195,31 @@ Starting kernel ...
 [    1.911829] simple-framebuffer 3eef5000.framebuffer: framebuffer at 0x3eef5000, 0x10a800 bytes
 [    1.920434] simple-framebuffer 3eef5000.framebuffer: format=a8r8g8b8, mode=656x416x32, linelength=2624
 [    1.929827] simple-framebuffer 3eef5000.framebuffer: fb1: simplefb registered!
-smirror: error: firmware: tag 0x00010007 is not emulated
+[    1.940174] bcm2835-rng 3f104000.rng: hwrng registered
+[    1.945495] vc-mem: phys_addr:0x00000000 mem_base=0x00000000 mem_size:0x00000000(0 MiB)
+[    1.959631] brd: module loaded
+[    1.966291] loop: module loaded
+[    1.969819] Loading iSCSI transport class v2.0-870.
+[    1.977083] usbcore: registered new interface driver lan78xx
+[    1.982763] usbcore: registered new interface driver smsc95xx
+[    1.988636] dwc_otg: version 3.00a 10-AUG-2012 (platform bus)
+[    2.194520] Core Release: 2.80a
+[    2.197656] Setting default values for core params
+[    2.202440] Finished setting default values for core params
+[    2.218987] random: crng init done
+[    2.408129] Using Buffer DMA mode
+[    2.411435] Periodic Transfer Interrupt Enhancement - disabled
+[    2.417260] Multiprocessor Interrupt Enhancement - disabled
+[    2.422823] OTG VER PARAM: 0, OTG VER FLAG: 0
+[    2.427175] Dedicated Tx FIFOs mode
+[    2.431715] INFO:: FIQ DMA bounce buffers: virt = ffffffc08221a000 dma = 0x00000000f7490000 len=9024
+[    2.440843] FIQ FSM acceleration enabled for :
+[    2.440843] Non-periodic Split Transactions
+[    2.440843] Periodic Split Transactions
+[    2.440843] High-Speed Isochronous Endpoints
+[    2.440843] Interrupt/Control Split Transaction hack enabled
+[    2.463177] INFO:: MPHI regs_base at ffffffc081c85000
+smirror: error: cpu0: 4-byte write to 0x000000003f00604c (virtual 0xffffffc081c8504c) at 0xffffffc080aa7548 failed: no region at this address
 
 
 drive: no "linux-card: the initramfs runs" in time

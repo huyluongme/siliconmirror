@@ -120,9 +120,11 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
 | `0x3f100000` | 276 B   | Power manager: power domains, reset lines, watchdog      | The watchdog               |
 | `0x3f101000` | 8 KB    | Clock manager (CPRMAN): PLLs, clock generators           | What Linux's driver uses   |
+| `0x3f104000` | 16 B    | Random number generator                                  | Yes, but its interrupt     |
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes                        |
+| `0x3f212000` | 8 B     | Temperature sensor                                       | Read only                  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
 | `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host                  |
@@ -862,6 +864,31 @@ off, addresses where nothing is modelled or the VideoCore's part of the
 RAM (`0x3f000000` and up in each alias), and accesses that are not
 32-bit.
 
+## The random number generator
+
+The random number generator at `0x3f104000` is not in the datasheet;
+its registers behave as Linux's `bcm2835-rng.c` uses them. `CTRL` bit 0
+runs it; `STATUS`, written before, counts the first numbers to throw
+away, and read, counts in bits 31:24 the words in its FIFO of 4;
+`DATA` gives the next word. smirror chooses a word every 34 us, the
+rate the driver is tuned for, a warm-up that counts bits at 32 a word,
+and a generator that waits while its FIFO is full. Its numbers come
+from SplitMix64, from the same seed at each reset, so that a run
+repeats: a real board's are random. The other bits of `CTRL`, the
+register at `0xc`, reading an empty FIFO and a new warm-up while it
+runs stop the machine; its interrupt is not raised.
+
+## The temperature sensor
+
+The temperature sensor at `0x3f212000` is not in the datasheet either;
+Linux's `bcm2835_thermal.c` reads `TSENSSTAT`, at `0x4`: `VALID` in bit
+10 and the ADC's value in bits 9:0, which the device tree's
+coefficients turn into 412000 - 538 x ADC thousandths of a degree. The
+firmware sets the sensor up at boot, as the driver says; smirror's
+`TSENSCTL` holds what the driver would write itself, `0x07fa3106`, the
+critical temperature of 110 C among it. The board stays at 45.084 C,
+ADC 682, smirror's choice for a Pi 3 at rest. Writes stop the machine.
+
 ## Boot from the SD card
 
 On the real board, the VideoCore boots first: its boot ROM loads
@@ -1116,6 +1143,14 @@ to quit.
   [Pi 3 Model B+ thread](https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg566786.html)
   in which Linux turns V3D, ISP and the VEC off at boot; Raspberry Pi
   documentation, legacy video options: the highest mode before the Pi 4.
+- The random number generator and the temperature sensor: Linux's
+  [bcm2835-rng.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/char/hw_random/bcm2835-rng.c)
+  and
+  [bcm2835_thermal.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/thermal/broadcom/bcm2835_thermal.c);
+  the board's device tree, `bcm2710-rpi-3-b.dtb`, for their registers
+  and the thermal zone's coefficients; SplitMix64, from Steele, Lea and
+  Flood, "Fast splittable pseudorandom number generators" (OOPSLA 2014).
+
 - BCM2835 ARM Peripherals, chapter 4: the DMA controller. Linux's
   [bcm2835-dma.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/dma/bcm2835-dma.c)
   and [bcm2835.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/mmc/host/bcm2835.c):
