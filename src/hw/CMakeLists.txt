@@ -13,6 +13,7 @@ add_library(hw STATIC
 	misc/bcm2835_cprman.c
 	misc/bcm2835_pm.c
 	misc/bcm2835_rng.c
+	misc/bcm2835_thermal.c
 	net/lan95xx.c
 	sd/bcm2835_emmc.c
 	sd/bcm2835_sdhost.c
