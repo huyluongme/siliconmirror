@@ -15,7 +15,9 @@
 #   Image              the kernel, uncompressed, as booti wants it
 #   boot.cmd, boot.scr U-Boot's boot script, and its image
 #   card.img           the card: an MBR, and a FAT32 partition at 4 MiB
-# The card is made anew each time.
+# The card is made anew each time, the same each time: its disk
+# identifier, its file system's volume ID and its files' dates are
+# fixed, the dates at the firmware release, 2026-09-15 00:00 UTC.
 #
 # Needs what both scripts need, and gzip.
 
@@ -33,6 +35,10 @@ FIRMWARE=$LINUX_DIR/firmware-$FIRMWARE_TAG
 
 sh "$SCRIPTS/uboot-card.sh" "$UBOOT_DIR" > /dev/null
 sh "$SCRIPTS/linux-card.sh" "$LINUX_DIR" > /dev/null
+
+# The date that mkimage and mtools give what they make.
+SOURCE_DATE_EPOCH=1789430400
+export SOURCE_DATE_EPOCH
 
 mkdir -p "$DIR"
 gzip -dc "$FIRMWARE/kernel8.img" > "$DIR/Image"
@@ -53,9 +59,9 @@ card=$DIR/card.img.new
 part=$DIR/part.img.new
 rm -f "$card" "$part"
 truncate -s 128M "$card"
-echo 'start=8192, type=c' | sfdisk -q "$card"
+printf 'label-id: 0x736d6972\nstart=8192, type=c\n' | sfdisk -q "$card"
 truncate -s 124M "$part"
-mkfs.fat -F 32 -n BOOT "$part" > /dev/null
+mkfs.fat -F 32 --invariant -n BOOT "$part" > /dev/null
 printf 'arm_64bit=1\nenable_uart=1\nkernel=u-boot.bin\n' > "$DIR/config.txt"
 mcopy -i "$part" "$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" \
 	"$FIRMWARE/fixup.dat" "$FIRMWARE/bcm2710-rpi-3-b.dtb" \

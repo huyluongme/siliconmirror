@@ -16,7 +16,8 @@
 #   initramfs/         the initramfs's files, and initramfs.gz
 #   card.img           the card: an MBR, and a FAT32 partition at 4 MiB
 # The downloads and the build are kept and used again; the initramfs
-# and the card are made anew each time.
+# and the card are made anew each time, the initramfs the same each
+# time.
 #
 # Needs curl, sha256sum, tar, bzip2, make, a cross compiler
 # (CROSS_COMPILE, aarch64-linux-gnu- by default), cpio and gzip, and
@@ -111,8 +112,13 @@ echo "linux-card: the initramfs runs"
 exec setsid cttyhack sh
 EOF
 chmod 755 "$ROOT/files/init"
-(cd "$ROOT/files" && find . | LC_ALL=C sort |
-	cpio --quiet -o -H newc -R 0:0) | gzip -9 > "$ROOT/initramfs.gz"
+# The same initramfs each time: its files are dated with the firmware
+# release, 2026-09-15 00:00 UTC, and the archive numbers their inodes
+# in order.
+(cd "$ROOT/files" && find . -exec touch -h -d @1789430400 {} + &&
+	find . | LC_ALL=C sort |
+	cpio --quiet -o -H newc -R 0:0 --reproducible) |
+	gzip -9 -n > "$ROOT/initramfs.gz"
 
 # The card.
 need sfdisk mkfs.fat mcopy
