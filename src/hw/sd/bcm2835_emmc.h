@@ -7,11 +7,13 @@
  *
  * On the Raspberry Pi 3 Model B it drives the WiFi chip, a BCM43438 that
  * is an SDIO card only (bcm2710-rpi-3-b.dts: mmcnr, non-removable). The
- * chip is not modelled. It does not answer the commands that set up a
- * memory card, so neither does the slot here: such a command ends with a
- * command timeout, after its 48 bits and the 64 clocks of Ncr. An SDIO
- * command (CMD5, CMD52, CMD53), which the chip would answer, stops the
- * machine.
+ * chip is not modelled, and nothing answers in its place: a command with
+ * a response ends with a command timeout, after its 48 bits and the 64
+ * clocks of Ncr. The chip itself would not answer the commands that set
+ * up a memory card either, but it would answer the SDIO ones (CMD5,
+ * CMD52, CMD53): here they time out too, as for a board whose chip does
+ * not answer, and Linux's brcmfmac finds no WiFi. A model of the chip is
+ * left for later.
  *
  * The registers are 32 bits wide, and accessed so: other sizes stop the
  * machine. The datasheet does not list the capability registers at 0x40

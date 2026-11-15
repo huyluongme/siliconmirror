@@ -3,8 +3,8 @@
 
 /*
  * Unit tests for the BCM2835's EMMC controller (src/hw/sd/bcm2835_emmc.c),
- * from chapter 5 of the BCM2835 ARM Peripherals datasheet, with the WiFi
- * chip that does not answer memory card commands.
+ * from chapter 5 of the BCM2835 ARM Peripherals datasheet, with no WiFi
+ * chip: nothing answers a command.
  */
 
 #include <stdint.h>
@@ -172,6 +172,19 @@ static void test_commands(void)
 	CHECK_EQ(rd(&s, INTERRUPT), ERR | CTO_ERR);
 	wr(&s, INTERRUPT, CTO_ERR);
 	CHECK_EQ(rd(&s, INTERRUPT), 0);
+
+	/* The SDIO commands, which no chip answers here: CMD5, CMD52, CMD53. */
+	for (unsigned i = 0; i < 3; i++) {
+		static const unsigned index[] = {5, 52, 53};
+
+		t = s.m->events.now;
+		wr(&s, CMDTM, CMD(index[i], 2));
+		run_until(&s, t + clocks(112, 250) - 1);
+		CHECK_EQ(rd(&s, INTERRUPT), 0);
+		run_until(&s, t + clocks(112, 250));
+		CHECK_EQ(rd(&s, INTERRUPT), ERR | CTO_ERR);
+		wr(&s, INTERRUPT, CTO_ERR);
+	}
 
 	/* The base clock undivided; a long response. */
 	clock_on(&s, 0);
@@ -359,7 +372,7 @@ static void test_command_end(void)
 	machine_destroy(s.m);
 }
 
-/* What the controller or the WiFi chip would need stops the machine. */
+/* What the controller would need stops the machine. */
 static void test_stops(void)
 {
 	static const struct {
@@ -370,9 +383,6 @@ static void test_stops(void)
 		bool clock;
 		const char *message;
 	} stops[] = {
-		{true, CMDTM, 4, CMD(5, 2), true, "an SDIO command"},
-		{true, CMDTM, 4, CMD(52, 2), true, "an SDIO command"},
-		{true, CMDTM, 4, CMD(53, 2), true, "an SDIO command"},
 		{true, CMDTM, 4, CMD(0, 0), false, "a command without the SD clock"},
 		{false, 0x20, 4, 0, true, "no card sends data"},
 		{true, 0x20, 4, 0, true, "no card takes data"},

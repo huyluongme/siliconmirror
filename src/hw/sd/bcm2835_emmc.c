@@ -43,7 +43,6 @@ enum {
 };
 
 /* CMDTM */
-#define CMD_INDEX_SHIFT 24
 #define CMD_RSPNS_TYPE_SHIFT 16 /* 0: none; 136 bits; 48 bits; 48 with busy */
 
 /* STATUS: lines idle high (the card's pull-ups), no transfer. */
@@ -138,7 +137,6 @@ static uint64_t sd_clock(const Bcm2835Emmc *emmc)
 /* A command to the card, which does not answer (see the header). */
 static void start_command(Bcm2835Emmc *emmc, uint64_t offset, uint32_t v)
 {
-	unsigned index = v >> CMD_INDEX_SHIFT & 0x3f;
 	bool response = (v >> CMD_RSPNS_TYPE_SHIFT & 3) != 0;
 	uint64_t clocks;
 
@@ -150,12 +148,6 @@ static void start_command(Bcm2835Emmc *emmc, uint64_t offset, uint32_t v)
 	if ((emmc->control1 & (CLK_INTLEN | CLK_EN)) != (CLK_INTLEN | CLK_EN)) {
 		stop(emmc, "write to", offset, 4,
 		     "is not emulated: a command without the SD clock");
-		return;
-	}
-	if (index == 5 || index == 52 || index == 53) {
-		stop(emmc, "write to", offset, 4,
-		     "is not emulated: an SDIO command, which the WiFi chip "
-		     "would answer");
 		return;
 	}
 	emmc->cmdtm = v;

@@ -579,11 +579,14 @@ controller, is at `0x3f300000` with GPU interrupt 62, as chapter 5 of
 the BCM2835 datasheet describes it. On the Pi 3 Model B it goes to the
 WiFi chip, a BCM43438, which is an SDIO card only (`mmcnr`,
 `non-removable` in `bcm2710-rpi-3-b.dts`). smirror models the
-controller but not the chip: a command that sets up a memory card,
-which the chip does not answer, ends with a command timeout after its
-48 bits and the 64 clocks of Ncr, as on the real board; an SDIO command
-(`CMD5`, `CMD52`, `CMD53`), which the chip would answer, stops the
-machine. Its base clock is the firmware's EMMC clock, 200 MHz.
+controller but not the chip, and nothing answers in its place: a
+command with a response ends with a command timeout after its 48 bits
+and the 64 clocks of Ncr. For the commands that set up a memory card,
+which the chip does not answer, that is what the real board does. The
+chip would answer the SDIO commands (`CMD5`, `CMD52`, `CMD53`); here
+they time out too, as on a board whose WiFi chip does not answer, and
+Linux's `brcmfmac` finds no WiFi. A model of the chip is left for
+later. Its base clock is the firmware's EMMC clock, 200 MHz.
 
 The registers are those of the datasheet, accessed 32 bits wide. The
 datasheet leaves out the capability registers at `0x40` and `0x44`,
