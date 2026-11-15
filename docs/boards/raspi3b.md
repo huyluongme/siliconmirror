@@ -464,6 +464,9 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00038002` | Set a clock rate, kept within the clock's range                    |
 | `0x00030009` | Turbo, 0 at boot; `0x00038009` sets it                             |
 | `0x00038042` | Set SDHOST's clock: the fastest not above the one asked            |
+| `0x00010007` | The clocks that exist: 1 to 10 and 15, each a root                 |
+| `0x00030001` | A clock's state; `0x00038001` turns it on or off                   |
+| `0x00030030` | A power domain's state; `0x00038030` sets it                       |
 | `0x00040013` | Displays: 1, the composite output                                  |
 | `0x00040014` | A display's settings, as Linux's `bcm2708_fb` reads them           |
 | `0x00048013` | The display to act on: 0, the only one                             |
@@ -533,18 +536,38 @@ Arm runs at 600 to 1200 MHz, the core at 250 to 400 MHz (250 MHz with
 250 to 400 MHz, the SDRAM at 400 to 450 MHz, UART0's clock at 48 MHz,
 and the EMMC clock of the Arasan controller at 200 MHz, which the
 firmware sets from its commit 7fdcd00e on (U-Boot's
-`bcm2835_sdhci.c`). HEVC does not exist on the Pi 3: its rate is 0. A new rate for
-the Arm changes nothing in the emulation, whose time does not depend on
-it; a new rate for the core or for UART0's clock, or turbo while the
-core clock may rise, stops the machine, as the UARTs would change speed.
+`bcm2835_sdhci.c`). HDMI's pixel clock runs from 86.4 MHz, the
+firmware's minimum that a Pi 3 Model B+ measures when no HDMI mode is
+set (raspberrypi/linux issue #7564), up to 154 MHz, the pixel clock of
+the highest mode a Pi 3 supports, 1920 by 1200 at 60 Hz with reduced
+blanking; it starts at its minimum. The VEC, of the composite output,
+runs at the 108 MHz it needs (Linux's `vc4_vec.c`). HEVC does not exist
+on the Pi 3, nor EMMC2, M2MC and PIXEL_BVB, clocks of blocks of the Pi
+4's BCM2711, nor DISP: their rate is 0. A new rate for the Arm changes
+nothing in the emulation, whose time does not depend on it; a new rate
+for the core or for UART0's clock, or turbo while the core clock may
+rise, stops the machine, as the UARTs would change speed.
+
+The clocks that exist, 1 to 10 and 15, are each a root of parent 0:
+they come from PLLs that are not among them. They run at boot, but for
+H.264's and PWM's, whose state nothing documents: Linux finds V3D, ISP
+and the VEC on, and turns V3D off, as on a Pi 3 Model B+. Turning a
+clock on or off changes nothing else, but for the EMMC, UART, ARM, CORE
+and SDRAM clocks, which devices run on: turning one off stops the
+machine. The power domains of the newer tags, 0 (I2C0) to 22 (ARM), as
+Linux's `raspberrypi-power.h` numbers them, keep what the Arm sets; the
+ARM's is on, and Linux asks for it to learn that the firmware has them.
+Turning a domain on or off changes nothing else, but for the ARM's.
 
 The firmware knows many more tags (the wiki and
 `raspberrypi-firmware.h` list them, that of Raspberry Pi's Linux at
 commit cff533a, the kernel of firmware release 1.20260915): one that smirror does not answer
 stops the machine, and so do values that nothing documents for this
-board: the power state of a device before the Arm sets it, the time a
-device takes to power up, the rates of the PIXEL and PWM clocks, and
-the range of the UART and EMMC clocks. A reset of the board starts the firmware again: the clocks,
+board: the power state of a device or of a domain before the Arm sets
+it, the time a device takes to power up, the state of the H.264 and PWM
+clocks at boot, the rates of the PWM clock, and the range of the UART
+and EMMC clocks. `VCHIQ_INIT` (`0x00048010`), whose answer starts the
+VideoCore's services, is not emulated yet. A reset of the board starts the firmware again: the clocks,
 turbo and the power states are back to those of boot.
 
 ## The SD card
@@ -1080,6 +1103,19 @@ to quit.
 
 ## Sources
 
+- The firmware's clocks and power domains: Raspberry Pi's Linux,
+  [clk-raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/clk/bcm/clk-raspberrypi.c)
+  (`GET_CLOCKS`, the clocks' states and ranges),
+  [raspberrypi-power.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/pmdomain/bcm/raspberrypi-power.c)
+  and
+  [raspberrypi-power.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/include/dt-bindings/power/raspberrypi-power.h)
+  (the domains), [vc4_vec.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/gpu/drm/vc4/vc4_vec.c) (the
+  VEC's 108 MHz);
+  [raspberrypi/linux issue #7564](https://github.com/raspberrypi/linux/issues/7564)
+  (the pixel clock's minimum on a Pi 3 Model B+); the
+  [Pi 3 Model B+ thread](https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg566786.html)
+  in which Linux turns V3D, ISP and the VEC off at boot; Raspberry Pi
+  documentation, legacy video options: the highest mode before the Pi 4.
 - BCM2835 ARM Peripherals, chapter 4: the DMA controller. Linux's
   [bcm2835-dma.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/dma/bcm2835-dma.c)
   and [bcm2835.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/mmc/host/bcm2835.c):

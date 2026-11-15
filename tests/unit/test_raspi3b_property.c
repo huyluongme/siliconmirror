@@ -281,6 +281,18 @@ static void test_power(void)
 	teardown(&s);
 }
 
+/* Set clock id's rate, and check the rate that the firmware answers. */
+static void set_rate(Setup *s, uint32_t id, uint32_t asked, uint32_t got)
+{
+	uint32_t buf[] = {
+		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, id, asked, 0, 0};
+
+	send(s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(s, BUF + 20), id);
+	CHECK_EQ(word(s, BUF + 24), got);
+}
+
 /* The rates of the clocks of a Pi 3, by default and with enable_uart=1. */
 static void test_clock_rates(void)
 {
@@ -293,12 +305,18 @@ static void test_clock_rates(void)
 		{6, 400 * MHZ, 400 * MHZ, 250 * MHZ},   /* H264 */
 		{7, 400 * MHZ, 400 * MHZ, 250 * MHZ},   /* ISP */
 		{8, 450 * MHZ, 450 * MHZ, 400 * MHZ},   /* SDRAM */
+		{9, 86400000, 154 * MHZ, 86400000},     /* PIXEL */
+		{15, 108 * MHZ, 108 * MHZ, 108 * MHZ},  /* VEC */
 		{0, 0, 0, 0},                           /* reserved */
 		{11, 0, 0, 0},                          /* HEVC: not on the Pi 3 */
-		{15, 0, 0, 0},
+		{12, 0, 0, 0},                          /* EMMC2: the BCM2711's */
+		{13, 0, 0, 0},                          /* M2MC */
+		{14, 0, 0, 0},                          /* PIXEL_BVB */
+		{16, 0, 0, 0},                          /* DISP */
+		{17, 0, 0, 0},
 		{0xffffffff, 0, 0, 0},
 	};
-	static const uint32_t unknown[] = {9, 10, 12, 13, 14};
+	static const uint32_t unknown[] = {10};
 	Setup s;
 
 	setup(&s);
@@ -386,14 +404,23 @@ static void test_set_clock_rate(void)
 	uint32_t uart[] = {
 		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 2, 3 * MHZ, 0, 0};
 	uint32_t emmc[] = {
-		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 9, 3 * MHZ, 0, 0};
+		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 10, 3 * MHZ, 0, 0};
+	uint32_t vec[] = {
+		sizeof(uint32_t[9]), 0, 0x00038002, 12, 0, 15, 54 * MHZ, 0, 0};
 
 	send_stops(&s, core, ARRAY_SIZE(core),
 	           "changing the rate of clock 4 is not emulated");
 	send_stops(&s, uart, ARRAY_SIZE(uart),
 	           "changing the rate of clock 2 is not emulated");
 	send_stops(&s, emmc, ARRAY_SIZE(emmc),
-	           "the rates of clock 9 are not documented");
+	           "the rates of clock 10 are not documented");
+	send_stops(&s, vec, ARRAY_SIZE(vec),
+	           "changing the rate of clock 15 is not emulated");
+	/* The pixel clock, within its range. */
+	set_rate(&s, 9, 148500000, 148500000);
+	set_rate(&s, 9, 1, 86400000);
+	set_rate(&s, 9, 0xffffffffu, 154 * MHZ);
+	set_rate(&s, 15, 108 * MHZ, 108 * MHZ);
 
 	/* A reset brings back the rates of boot. */
 	raspi3b_property_reset(s.p);
@@ -403,6 +430,221 @@ static void test_set_clock_rate(void)
 }
 
 /* Turbo: off at boot; on only while the core clock stays at 250 MHz. */
+/*
+ * The clocks that exist, each a root: those of the Pi 3, which Linux's
+ * clk-raspberrypi.c reads into a buffer for 17 of them.
+ */
+static void test_clock_list(void)
+{
+	static const uint32_t ids[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15};
+	uint32_t buf[3 + 2 + 34 + 1] = {sizeof(buf), 0, 0x00010007, 136, 0};
+	Setup s;
+
+	for (unsigned i = 5; i < 5 + 34; i++)
+		buf[i] = 0x5a5a5a5a;
+	setup(&s);
+	send(&s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(&s, BUF + 4), OK);
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8 * ARRAY_SIZE(ids)));
+	for (unsigned i = 0; i < ARRAY_SIZE(ids); i++) {
+		CHECK_EQ(word(&s, BUF + 20 + 8 * i), 0);
+		CHECK_EQ(word(&s, BUF + 24 + 8 * i), ids[i]);
+	}
+	CHECK_EQ(word(&s, BUF + 20 + 8 * ARRAY_SIZE(ids)), 0x5a5a5a5a);
+	teardown(&s);
+}
+
+/* The state of clock id, as GET_CLOCK_STATE answers it. */
+static uint32_t clock_state(Setup *s, uint32_t id)
+{
+	uint32_t answer;
+
+	query(s, 0x00030001, id, &answer);
+	return answer;
+}
+
+/* Set the state of clock id, and check the answer. */
+static void set_clock_state(Setup *s, uint32_t id, uint32_t state, uint32_t got)
+{
+	uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00038001, 8, 0, id, state, 0};
+
+	send(s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(s, BUF + 20), id);
+	CHECK_EQ(word(s, BUF + 24), got);
+}
+
+/*
+ * Clocks are on at boot, but H.264's and PWM's, whose state nothing
+ * documents; those that do not exist answer bit 1. Linux turns V3D off.
+ */
+static void test_clock_state(void)
+{
+	static const uint32_t on[] = {1, 2, 3, 4, 5, 7, 8, 9, 15};
+	static const uint32_t absent[] = {0, 11, 12, 13, 14, 16, 17, 0xffffffffu};
+	static const uint32_t devices[] = {1, 2, 3, 4, 8};
+	Setup s;
+
+	setup(&s);
+	for (unsigned i = 0; i < ARRAY_SIZE(on); i++)
+		CHECK_EQ(clock_state(&s, on[i]), 1);
+	for (unsigned i = 0; i < ARRAY_SIZE(absent); i++) {
+		CHECK_EQ(clock_state(&s, absent[i]), 2);
+		set_clock_state(&s, absent[i], 1, 2);
+	}
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030001, 8, 0, 6, 0, 0},
+		8, "the state of clock 6 at boot is not documented");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030001, 8, 0, 10, 0, 0},
+		8, "the state of clock 10 at boot is not documented");
+
+	set_clock_state(&s, 5, 0, 0);
+	CHECK_EQ(clock_state(&s, 5), 0);
+	set_clock_state(&s, 5, 1, 1);
+	CHECK_EQ(clock_state(&s, 5), 1);
+	set_clock_state(&s, 6, 1, 1);
+	CHECK_EQ(clock_state(&s, 6), 1);
+	set_clock_state(&s, 10, 0, 0);
+	CHECK_EQ(clock_state(&s, 10), 0);
+	set_clock_state(&s, 1, 1, 1);
+	for (unsigned i = 0; i < ARRAY_SIZE(devices); i++) {
+		uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00038001, 8, 0,
+		                  devices[i],          0, 0};
+		char message[80];
+
+		snprintf(message, sizeof(message),
+		         "turning clock %u off is not emulated: devices run on it",
+		         (unsigned)devices[i]);
+		send_stops(&s, buf, ARRAY_SIZE(buf), message);
+	}
+	for (uint32_t state = 2; state <= 4; state += 2) {
+		uint32_t buf[] = {
+			sizeof(uint32_t[8]), 0, 0x00038001, 8, 0, 5, state, 0};
+		char message[64];
+
+		snprintf(message, sizeof(message),
+		         "clock state 0x%x: reserved bits are set", (unsigned)state);
+		send_stops(&s, buf, ARRAY_SIZE(buf), message);
+	}
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00038001, 7, 0, 5, 1, 0},
+		8, "tag 0x00038001: a value buffer too short");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030001, 3, 0, 5, 1, 0},
+		8, "tag 0x00030001: a value buffer too short");
+	/* A word of request is enough; the answer is cut to it. */
+	send(&s,
+	     (const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030001, 4, 0, 5, 7, 0},
+	     8);
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(&s, BUF + 24), 7);
+
+	/* A reset: the states of boot again. */
+	set_clock_state(&s, 7, 0, 0);
+	raspi3b_property_reset(s.p);
+	CHECK_EQ(clock_state(&s, 7), 1);
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030001, 8, 0, 6, 0, 0},
+		8, "the state of clock 6 at boot is not documented");
+	teardown(&s);
+}
+
+/* The state of power domain id, as GET_DOMAIN_STATE answers it. */
+static uint32_t domain_state(Setup *s, uint32_t id)
+{
+	uint32_t answer;
+
+	query(s, 0x00030030, id, &answer);
+	return answer;
+}
+
+static void set_domain(Setup *s, uint32_t id, uint32_t state)
+{
+	uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00038030, 8, 0, id, state, 0};
+
+	send(s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(s, BUF + 20), id);
+	CHECK_EQ(word(s, BUF + 24), state);
+}
+
+/*
+ * The power domains: Linux's raspberrypi-power.c asks for the ARM's,
+ * with ~0 in the state, to learn that the firmware has them.
+ */
+static void test_domains(void)
+{
+	uint32_t probe[] = {sizeof(uint32_t[8]), 0, 0x00030030, 8, 0, 22,
+	                    0xffffffffu,         0};
+	Setup s;
+
+	setup(&s);
+	send(&s, probe, ARRAY_SIZE(probe));
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(&s, BUF + 20), 22);
+	CHECK_EQ(word(&s, BUF + 24), 1);
+	for (uint32_t id = 0; id < 22; id++) {
+		uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00030030, 8, 0, id, 0, 0};
+		char message[64];
+
+		snprintf(message, sizeof(message),
+		         "the state of power domain %u at boot is not documented",
+		         (unsigned)id);
+		send_stops(&s, buf, ARRAY_SIZE(buf), message);
+	}
+	set_domain(&s, 10, 1);
+	CHECK_EQ(domain_state(&s, 10), 1);
+	set_domain(&s, 10, 0);
+	CHECK_EQ(domain_state(&s, 10), 0);
+	set_domain(&s, 0, 1);
+	CHECK_EQ(domain_state(&s, 0), 1);
+	set_domain(&s, 22, 1);
+	CHECK_EQ(domain_state(&s, 22), 1);
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00038030, 8, 0, 22, 0, 0},
+		8, "turning the ARM's power domain off is not emulated");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00038030, 8, 0, 3, 2, 0},
+		8, "power domain state 2 is not documented");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00038030, 8, 0, 23, 1, 0},
+		8, "power domain 23 is not documented");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030030, 8, 0, 23, 0, 0},
+		8, "power domain 23 is not documented");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00038030, 7, 0, 3, 1, 0},
+		8, "tag 0x00038030: a value buffer too short");
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030030, 3, 0, 3, 1, 0},
+		8, "tag 0x00030030: a value buffer too short");
+	send(&s,
+	     (const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030030, 4, 0, 22, 7, 0},
+	     8);
+	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8));
+	CHECK_EQ(word(&s, BUF + 20), 22);
+	/* A reset forgets what the Arm set. */
+	raspi3b_property_reset(s.p);
+	CHECK_EQ(domain_state(&s, 22), 1);
+	send_stops(
+		&s,
+		(const uint32_t[]){sizeof(uint32_t[8]), 0, 0x00030030, 8, 0, 10, 0, 0},
+		8, "the state of power domain 10 at boot is not documented");
+	teardown(&s);
+}
+
 static void test_turbo(void)
 {
 	Setup s;
@@ -1653,6 +1895,11 @@ static void test_known_tags(void)
 		0x00038009,
 		0x00038042,
 		0x00050001,
+		0x00010007,
+		0x00030001,
+		0x00038001,
+		0x00030030,
+		0x00038030,
 		/* The frame buffer's. */
 		0x00040001,
 		0x00040002,
@@ -1912,6 +2159,9 @@ int main(void)
 	RUN_TEST(test_power);
 	RUN_TEST(test_clock_rates);
 	RUN_TEST(test_set_clock_rate);
+	RUN_TEST(test_clock_list);
+	RUN_TEST(test_clock_state);
+	RUN_TEST(test_domains);
 	RUN_TEST(test_turbo);
 	RUN_TEST(test_format);
 	RUN_TEST(test_stops);

@@ -13,17 +13,20 @@
  * Raspberry Pi's Linux names are unknown to the firmware, and left
  * unanswered as the wiki says. A known tag that is not emulated stops
  * the machine, as do the values the wiki leaves to the firmware and
- * nothing documents for this board (the state of a clock or of a power
- * domain at boot, the rates of the EMMC, PIXEL and PWM clocks, ...).
+ * nothing documents for this board (the state of some clocks and power
+ * domains at boot, the rates of the PWM clock, ...).
  *
  * Answered: the firmware revision, the board revision, MAC address and
  * serial number, the memory split, the command line, power on and off,
- * the rates of the clocks and turbo, the display and its frame buffer.
- * Clock rates come from the Raspberry Pi documentation (config.txt,
- * overclocking options: the defaults of the Raspberry Pi 3). Turning a
- * power domain on or off and changing the Arm's clock change nothing
- * else in the emulation. The display is the composite output, as on a
- * board without an HDMI display; smirror shows no picture.
+ * the clocks, their rates and states, turbo, the power domains, the
+ * display and its frame buffer. Clock rates come from the Raspberry Pi
+ * documentation (config.txt, overclocking options: the defaults of the
+ * Raspberry Pi 3), and for the pixel clock, from what a Pi 3 Model B+
+ * shows. Turning a power domain or a clock on or off and changing the
+ * Arm's clock change nothing else in the emulation, but for the domain
+ * and the clocks that the Arm and the devices run on, which stop the
+ * machine. The display is the composite output, as on a board without
+ * an HDMI display; smirror shows no picture.
  */
 
 #ifndef MACHINE_RASPI3B_PROPERTY_H

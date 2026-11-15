@@ -71,6 +71,8 @@ enum {
 	CLOCK_EMMC2,
 	CLOCK_M2MC,
 	CLOCK_PIXEL_BVB,
+	CLOCK_VEC,
+	CLOCK_DISP,
 	NUM_CLOCKS
 };
 
@@ -86,6 +88,13 @@ typedef struct Clock {
 	ClockKind kind;
 	uint32_t rate, min, max; /* Hz */
 } Clock;
+
+/*
+ * The power domains of the firmware's newer tags, 0 (I2C0) to 22 (ARM),
+ * as Linux's dt-bindings/power/raspberrypi-power.h numbers them.
+ */
+#define NUM_DOMAINS 23
+#define DOMAIN_ARM 22
 
 /*
  * A tag being answered: the value the Arm sent, and the answer. Each
@@ -218,6 +227,10 @@ struct Raspi3bProperty {
 	bool power_known[NUM_DEVICES]; /* set by the Arm since boot */
 	ExpLine exp[EXP_LINES];
 	bool power_on[NUM_DEVICES];
+	bool clock_known[NUM_CLOCKS]; /* a clock's state: documented, or set */
+	bool clock_on[NUM_CLOCKS];
+	bool domain_known[NUM_DOMAINS]; /* set by the Arm, or documented */
+	bool domain_on[NUM_DOMAINS];
 	Display display;
 	FbTag fb_tags[FB_TAGS_MAX]; /* those of the buffer being answered */
 	unsigned num_fb_tags;
@@ -288,11 +301,13 @@ static void reset_clocks(Raspi3bProperty *p)
 	 * not documented.
 	 */
 	p->clocks[CLOCK_EMMC] = (Clock){CLOCK_FIXED, 200 * MB, 0, 0};
-	p->clocks[CLOCK_PIXEL].kind = CLOCK_UNKNOWN;
 	p->clocks[CLOCK_PWM].kind = CLOCK_UNKNOWN;
-	p->clocks[CLOCK_EMMC2].kind = CLOCK_UNKNOWN;
-	p->clocks[CLOCK_M2MC].kind = CLOCK_UNKNOWN;
-	p->clocks[CLOCK_PIXEL_BVB].kind = CLOCK_UNKNOWN;
+	/*
+	 * EMMC2, M2MC and PIXEL_BVB are clocks of blocks of the Pi 4's
+	 * BCM2711 (its second EMMC controller, its HDMI's pixel clock, its
+	 * M2MC), which the BCM2837 does not have: they stay absent, as
+	 * DISP, the BCM2712's.
+	 */
 	/* init_uart_clock; its range is not documented. */
 	p->clocks[CLOCK_UART] = (Clock){CLOCK_FIXED, 48 * MB, 0, 0};
 	p->clocks[CLOCK_ARM] =
@@ -305,6 +320,29 @@ static void reset_clocks(Raspi3bProperty *p)
 	p->clocks[CLOCK_SDRAM] =
 		(Clock){CLOCK_ADJUSTABLE, 450 * MB, 400 * MB, 450 * MB};
 	/* hevc_freq is "N/A" on the Pi 3: CLOCK_HEVC stays absent. */
+	/*
+	 * HDMI's pixel clock: 86.4 MHz, the firmware's minimum that a Pi 3
+	 * Model B+ measures when no HDMI mode is set (raspberrypi/linux
+	 * issue #7564), up to 154 MHz, that of the highest mode the Pi 3
+	 * supports, 1920 by 1200 at 60 Hz with reduced blanking (Raspberry
+	 * Pi documentation, legacy video options; VESA's CVT).
+	 */
+	p->clocks[CLOCK_PIXEL] =
+		(Clock){CLOCK_ADJUSTABLE, 86400000, 86400000, 154 * MB};
+	/*
+	 * The composite output's VEC runs at the one rate that it needs,
+	 * 108 MHz (Linux's vc4_vec.c).
+	 */
+	p->clocks[CLOCK_VEC] = (Clock){CLOCK_FIXED, 108 * MB, 108 * MB, 108 * MB};
+	/*
+	 * Running at boot: those of the firmware and of the devices it set
+	 * up, and V3D, ISP and the VEC, which Linux finds on and turns off
+	 * on a Pi 3 Model B+. Nothing documents H.264's and PWM's state.
+	 */
+	for (unsigned i = 0; i < NUM_CLOCKS; i++) {
+		p->clock_on[i] = p->clocks[i].kind != CLOCK_ABSENT;
+		p->clock_known[i] = i != CLOCK_H264 && i != CLOCK_PWM;
+	}
 }
 
 static void reset_display(Display *d);
@@ -316,6 +354,10 @@ void raspi3b_property_reset(Raspi3bProperty *p)
 	p->turbo = 0;
 	memset(p->power_known, 0, sizeof(p->power_known));
 	memset(p->power_on, 0, sizeof(p->power_on));
+	/* A domain's state counts once known. */
+	memset(p->domain_known, 0, sizeof(p->domain_known));
+	p->domain_known[DOMAIN_ARM] = true; /* the Arm runs */
+	p->domain_on[DOMAIN_ARM] = true;
 	memcpy(p->exp, exp_boot, sizeof(p->exp));
 }
 
@@ -730,6 +772,148 @@ static bool set_clock_rate(Raspi3bProperty *p, Value *v)
 	}
 	answer(v, 0, arg(v, 0));
 	answer(v, 1, clock->rate);
+	return true;
+}
+
+/*
+ * Every clock that exists, as the wiki asks: its parent, then its id.
+ * The firmware's clocks come from PLLs that are not among them: each is
+ * a root, of parent 0.
+ */
+static bool get_clocks(Raspi3bProperty *p, Value *v)
+{
+	unsigned n = 0;
+
+	for (uint32_t id = 1; id < NUM_CLOCKS; id++) {
+		if (p->clocks[id].kind == CLOCK_ABSENT)
+			continue;
+		answer(v, n++, 0);
+		answer(v, n++, id);
+	}
+	return true;
+}
+
+/*
+ * The clock of a state's request, 0 for one that does not exist; the
+ * answer gives its id, and bit 1 of the state, 'absent', for clock 0.
+ */
+static uint32_t clock_state_of(Raspi3bProperty *p, Value *v)
+{
+	uint32_t id = arg(v, 0);
+
+	answer(v, 0, id);
+	if (id >= NUM_CLOCKS || p->clocks[id].kind == CLOCK_ABSENT) {
+		answer(v, 1, STATE_ABSENT);
+		return 0;
+	}
+	return id;
+}
+
+static bool get_clock_state(Raspi3bProperty *p, Value *v)
+{
+	uint32_t id;
+
+	if (!needs(p, v, 4))
+		return false;
+	if ((id = clock_state_of(p, v)) == 0)
+		return true;
+	if (!p->clock_known[id]) {
+		stop(p, "the state of clock %" PRIu32 " at boot is not documented", id);
+		return false;
+	}
+	answer(v, 1, p->clock_on[id]);
+	return true;
+}
+
+/*
+ * The clocks that smirror's devices run on keep running: turning one of
+ * them off stops the machine. The others change nothing else.
+ */
+static bool set_clock_state(Raspi3bProperty *p, Value *v)
+{
+	uint32_t id, state;
+
+	if (!needs(p, v, 8))
+		return false;
+	state = arg(v, 1);
+	if (state & ~STATE_ON) {
+		stop(p, "clock state 0x%" PRIx32 ": reserved bits are set", state);
+		return false;
+	}
+	if ((id = clock_state_of(p, v)) == 0)
+		return true;
+	if (state == 0 &&
+	    (id == CLOCK_EMMC || id == CLOCK_UART || id == CLOCK_ARM ||
+	     id == CLOCK_CORE || id == CLOCK_SDRAM)) {
+		stop(p,
+		     "turning clock %" PRIu32 " off is not emulated: devices run on "
+		     "it",
+		     id);
+		return false;
+	}
+	p->clock_on[id] = state;
+	p->clock_known[id] = true;
+	answer(v, 1, state);
+	return true;
+}
+
+/* The domain of the request, or false when it stopped the machine. */
+static bool domain_of(Raspi3bProperty *p, const Value *v, uint32_t len)
+{
+	if (!needs(p, v, len))
+		return false;
+	if (arg(v, 0) >= NUM_DOMAINS) {
+		stop(p, "power domain %" PRIu32 " is not documented", arg(v, 0));
+		return false;
+	}
+	return true;
+}
+
+/*
+ * The power domains of the newer tags. Linux asks for the ARM's, which is
+ * on, to learn whether the firmware has them. Turning a domain on or off
+ * changes nothing else in the emulation, but for the ARM's, which stops
+ * the machine.
+ */
+static bool get_domain_state(Raspi3bProperty *p, Value *v)
+{
+	uint32_t id;
+
+	if (!domain_of(p, v, 4))
+		return false;
+	id = arg(v, 0);
+	if (!p->domain_known[id]) {
+		stop(p,
+		     "the state of power domain %" PRIu32 " at boot is not "
+		     "documented",
+		     id);
+		return false;
+	}
+	answer(v, 0, id);
+	answer(v, 1, p->domain_on[id]);
+	return true;
+}
+
+static bool set_domain_state(Raspi3bProperty *p, Value *v)
+{
+	uint32_t id, state;
+
+	if (!domain_of(p, v, 8))
+		return false;
+	id = arg(v, 0);
+	state = arg(v, 1);
+	if (state > 1) {
+		stop(p, "power domain state %" PRIu32 " is not documented", state);
+		return false;
+	}
+	if (id == DOMAIN_ARM && state == 0) {
+		stop(p, "turning the ARM's power domain off is not emulated");
+		return false;
+	}
+	p->domain_known[id] = true;
+	p->domain_on[id] = state;
+	answer(v, 0, id);
+	answer(v, 1, state);
 	return true;
 }
 
@@ -1279,6 +1463,11 @@ static const Handler handlers[] = {
 	{0x00030009, get_turbo},
 	{0x00038009, set_turbo},
 	{0x00038042, set_sdhost_clock},
+	{0x00010007, get_clocks},
+	{0x00030001, get_clock_state},
+	{0x00038001, set_clock_state},
+	{0x00030030, get_domain_state},
+	{0x00038030, set_domain_state},
 };
 
 /*
