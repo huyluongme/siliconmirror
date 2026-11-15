@@ -46,10 +46,13 @@ gzip -dc "$FIRMWARE/kernel8.img" > "$DIR/Image"
 # The console is the mini UART, ttyS0: U-Boot does not replace serial0
 # in the command line as the firmware does. earlycon, on the device
 # tree's stdout-path, shows the kernel's messages before ttyS0 is up.
+# 8250.nr_uarts=1 is what the firmware adds with enable_uart=1, as a real
+# Pi's command line shows: without it, the 8250 driver has no port for
+# the mini UART, and turns it off.
 cat > "$DIR/boot.cmd" << 'EOF'
 fatload mmc 0:1 ${kernel_addr_r} Image
 fatload mmc 0:1 ${ramdisk_addr_r} initramfs.gz
-setenv bootargs console=ttyS0,115200 earlycon
+setenv bootargs 8250.nr_uarts=1 console=ttyS0,115200 earlycon
 booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdt_addr}
 EOF
 "$BUILD/tools/mkimage" -A arm64 -T script -C none -d "$DIR/boot.cmd" \
