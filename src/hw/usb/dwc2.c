@@ -34,6 +34,8 @@ enum {
 	GHWCFG2 = 0x048,
 	GHWCFG3 = 0x04c,
 	GHWCFG4 = 0x050,
+	GLPMCFG = 0x054,
+	GPWRDN = 0x058,
 	GDFIFOCFG = 0x05c,
 	HPTXFSIZ = 0x100,
 	DIEPTXF1 = 0x104, /* DIEPTXFn at DIEPTXF1 + 4 (n - 1), n = 1 to 15 */
@@ -449,6 +451,9 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 		return d->config.hwcfg3;
 	case GHWCFG4:
 		return d->config.hwcfg4;
+	case GLPMCFG:
+	case GPWRDN:
+		return 0; /* no LPM, no power optimization: see dwc2.h */
 	case GDFIFOCFG:
 		return d->gdfifocfg;
 	case HPTXFSIZ:

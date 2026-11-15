@@ -40,6 +40,8 @@ enum {
 	GHWCFG2 = 0x048,
 	GHWCFG3 = 0x04c,
 	GHWCFG4 = 0x050,
+	GLPMCFG = 0x054,
+	GPWRDN = 0x058,
 	GDFIFOCFG = 0x05c,
 	HPTXFSIZ = 0x100,
 	DIEPTXF1 = 0x104,
@@ -119,6 +121,9 @@ static void test_identity(void)
 	CHECK_EQ(rd(&s, GHWCFG2), 0x228ddd50);
 	CHECK_EQ(rd(&s, GHWCFG3), 0x0ff000e8);
 	CHECK_EQ(rd(&s, GHWCFG4), 0x1ff00020);
+	/* No LPM (GHWCFG3 bit 15), no power optimization (GHWCFG4 bit 4). */
+	CHECK_EQ(rd(&s, GLPMCFG), 0);
+	CHECK_EQ(rd(&s, GPWRDN), 0);
 	CHECK_EQ(rd(&s, GUID), 0x2708a000);
 	wr(&s, GUID, 0x1234);
 	CHECK_EQ(rd(&s, GUID), 0x1234);
@@ -318,6 +323,9 @@ static void test_stops(void)
 		{false, DIEPTXF1 + 4 * 15, 4, 0, "is not emulated (device mode"},
 		{true, DIEPTXF1 + 4 * 15, 4, 0, "is not emulated (device mode"},
 		{false, GDFIFOCFG + 4, 4, 0, "is not emulated (device mode"},
+		{true, GPWRDN, 4, 0, "is not emulated (device mode"},
+		{true, GLPMCFG, 4, 0, "is not emulated (device mode"},
+		{true, GPWRDN, 4, 1u << 5, "is not emulated (device mode"},
 		{false, 0x1000, 4, 0, "is not emulated (device mode"},
 		{false, HCCHAR0 + 0x20 * 8, 4, 0, "is not emulated (device mode"},
 		{false, HCCHAR0 + 0x18, 4, 0, "is not emulated (device mode"},

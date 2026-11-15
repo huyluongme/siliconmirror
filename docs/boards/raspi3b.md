@@ -703,7 +703,11 @@ mode too: `GDFIFOCFG`, the FIFO sizes of the IN endpoints `DIEPTXF1` to
 values on the BCM2837 are not documented: smirror resets the FIFO ones
 like the other FIFO size registers, to `0x0ff00ff0` (both fields the
 depth that `GHWCFG3` gives), and `DCFG` to 0. The other registers of
-device mode stop the machine.
+device mode stop the machine. `GLPMCFG` and `GPWRDN` belong to cores
+with Link Power Management and with power optimization, which bit 15 of
+`GHWCFG3` and bit 4 of `GHWCFG4` would announce; `dwc_otg` reads them
+anyway, and acts on them only when a port sleeps or it hibernates: they
+read 0, smirror's choice, and writing them stops the machine.
 
 The USB devices follow chapter 9 of the USB 2.0 specification (device
 states, control transfers, the standard requests), and the hub chapter

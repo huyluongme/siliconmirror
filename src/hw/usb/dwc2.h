@@ -28,6 +28,13 @@
  * documented: smirror resets the FIFO ones like the other FIFO size
  * registers, to the depth that GHWCFG3 gives for both fields, and DCFG to
  * 0. The other registers of device mode stop the machine.
+ *
+ * GLPMCFG and GPWRDN belong to cores with Link Power Management and
+ * with power optimization, which bit 15 of GHWCFG3 and bit 4 of GHWCFG4
+ * announce; the BCM2837's sets neither. dwc_otg reads them anyway, GPWRDN
+ * at each interrupt and GLPMCFG when a port resumes, and acts on them
+ * only when it hibernates or a port sleeps: they read 0 here, smirror's
+ * choice, and a write stops the machine.
  */
 
 #ifndef HW_USB_DWC2_H
