@@ -118,6 +118,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
 | `0x3f100000` | 276 B   | Power manager: power domains, reset lines, watchdog      | The watchdog               |
+| `0x3f101000` | 8 KB    | Clock manager (CPRMAN): PLLs, clock generators           | What Linux's driver uses   |
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
@@ -708,6 +709,48 @@ other bits of `RSTS` after a reset, are not documented: smirror starts
 them at 0 and sets nothing in `RSTS`. The power domains and reset lines,
 and the other kinds of watchdog reset (`WRCFG` `0b01` and `0b11`), stop
 the machine.
+
+## The clock manager
+
+The clock manager, CPRMAN, at `0x3f101000` multiplies the 19.2 MHz
+crystal with five PLLs (A, B, C, D and H), divides each PLL's output in
+its channels, and divides those again in the clock generators of the
+peripherals. BCM2835 ARM Peripherals documents only the general purpose
+clocks (section 6.3); the other registers are those Linux's
+`clk-bcm2835.c` uses on the real chip, and the other generators are
+taken to work as the general purpose ones do:
+
+- Every write carries the password `0x5a` in bits 31:24; a write
+  without it does nothing.
+- A PLL runs while it is powered (`A2W_PLLx_CTRL` bit 16 clear) and out
+  of analog reset (`CM_PLLx` bit 8 clear), and `CM_LOCK` then shows it
+  locked, at once: no document gives the time it takes. Its rate is the
+  crystal × (`NDIV` + `FRAC` / 2^20), twice that with the feedback
+  pre-divider of `A2W_PLLx_ANA1`, divided by `PDIV`. A channel divides
+  it by bits 7:0 of its register (256 for 0), unless bit 8 disables it
+  or its `HOLD` bit in `CM_PLLx` holds it.
+- A generator runs while `ENAB` is set and `KILL` clear, and `BUSY`
+  follows them at once. It divides by `DIVI`, or with `MASH` by `DIVI` +
+  `DIVF` / 4096, as many of those bits as the generator has. Control
+  registers keep bits 10:0, the others bits 23:0.
+
+What the Arm sees at boot is what the firmware leaves. A Raspberry Pi 3
+Model B shows, in Linux's `clk_summary`, PLLC and PLLD at 2 GHz,
+`pllc_core0` at 1 GHz, `plld_per` and `plld_core` at 500 MHz, the UART
+clock at 47999625 Hz, GP1 at 25 MHz, SDRAM at 166.7 MHz and GP2 at
+32768 Hz from the crystal; smirror sets those divisors. The rest is its
+choice, from config.txt's defaults: the ARM at 1.2 GHz from PLLB at
+2.4 GHz, the VPU at 250 MHz (as `enable_uart` sets it), H264 and ISP at
+400 MHz, and EMMC at 200 MHz from `plld_per`. As Linux sets them, PLLs
+above 1.75 GHz use the pre-divider. PLLA and PLLH are powered down and
+in reset; the other channels and clocks are off.
+
+The devices that run from these clocks keep their rates: UART0 at 48
+MHz, the EMMC at 200 MHz and the mini UART and SDHOST at 250 MHz, all
+within 10 ppm of what the registers give. A write that would change the
+rate of the UART, EMMC or VPU clock stops the machine, and so do the
+frequency counter (`CM_OSCCOUNT`, `CM_TCNTCTL`, `CM_TCNTCNT`) and the
+offsets Linux's driver does not use.
 
 ## Boot from the SD card
 

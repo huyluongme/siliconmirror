@@ -733,6 +733,30 @@ static void test_mini_uart_clock(void)
 	remove(KERNEL);
 }
 
+/*
+ * The clock manager at 0x3f101000, as the firmware leaves it: PLLB, PLLC
+ * and PLLD locked; a reset brings that state back.
+ */
+static void test_clock_manager(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_read(m->bus, 0x3f101114, 4, &v), BUS_OK); /* CM_LOCK */
+	CHECK_EQ(v, 0xe00);
+	CHECK_EQ(bus_read(m->bus, 0x3f1010f0, 4, &v), BUS_OK); /* CM_UARTCTL */
+	CHECK_EQ(v, 0x296);
+	CHECK_EQ(bus_write(m->bus, 0x3f101120, 4, 0x5a000001), BUS_OK);
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, 0x3f101120, 4, &v), BUS_OK); /* DSI0HSCK */
+	CHECK_EQ(v, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -949,6 +973,7 @@ int main(void)
 	RUN_TEST(test_sd_card);
 	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_mini_uart_clock);
+	RUN_TEST(test_clock_manager);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);

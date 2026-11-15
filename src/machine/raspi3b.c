@@ -23,6 +23,7 @@
 #include "hw/gpio/bcm2835_gpio.h"
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
+#include "hw/misc/bcm2835_cprman.h"
 #include "hw/misc/bcm2835_mbox.h"
 #include "hw/misc/bcm2835_pm.h"
 #include "hw/net/lan95xx.h"
@@ -187,6 +188,16 @@ static void reset_pm(void *ctx)
 static void destroy_pm(void *ctx)
 {
 	bcm2835_pm_destroy(ctx);
+}
+
+static void reset_cprman(void *ctx)
+{
+	bcm2835_cprman_reset(ctx);
+}
+
+static void destroy_cprman(void *ctx)
+{
+	bcm2835_cprman_destroy(ctx);
 }
 
 static void reset_gpio(void *ctx)
@@ -393,6 +404,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Raspi3bProperty *property;
 	Bcm2835Mbox *mbox;
 	Bcm2835Pm *pm;
+	Bcm2835Cprman *cprman;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Emmc *emmc;
@@ -509,6 +521,19 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	status = bcm2835_pm_map(pm, m->bus, "pm", RASPI3B_PM_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map the watchdog: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	cprman = bcm2835_cprman_create(m);
+	if (cprman == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, cprman, reset_cprman, destroy_cprman)) {
+		bcm2835_cprman_destroy(cprman);
+		goto out_of_memory;
+	}
+	status = bcm2835_cprman_map(cprman, m->bus, "cprman", RASPI3B_CPRMAN_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the clock manager: %s",
 		         bus_status_str(status));
 		goto fail;
 	}
