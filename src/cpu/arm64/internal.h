@@ -322,6 +322,27 @@ Arm64Exec arm64_simd_not_yet(Arm64Cpu *c, const char *class_name);
 Arm64Exec arm64_simd_shift_imm(Arm64Cpu *c, uint32_t insn, bool scalar);
 
 /*
+ * Advanced SIMD three same and its scalar form, simd_same.c, which also
+ * has SQDMULH and SQRDMULH of one element of size bytes for simd_long.c:
+ * the high half of twice a * b, rounded when round is set, saturated.
+ */
+Arm64Exec arm64_simd_three_same(Arm64Cpu *c, uint32_t insn, bool scalar);
+uint64_t arm64_simd_doubling_mul_high(Arm64Cpu *c, uint64_t a, uint64_t b,
+                                      unsigned size, bool round);
+
+/*
+ * Advanced SIMD three different and x indexed element, and their scalar
+ * forms, simd_long.c.
+ */
+Arm64Exec arm64_simd_three_different(Arm64Cpu *c, uint32_t insn, bool scalar);
+Arm64Exec arm64_simd_by_element(Arm64Cpu *c, uint32_t insn, bool scalar);
+
+/* TBL and TBX, the permutes and EXT, simd_perm.c. */
+Arm64Exec arm64_simd_table_lookup(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_permute(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_extract(Arm64Cpu *c, uint32_t insn);
+
+/*
  * The Advanced SIMD load/store structure classes, from simd_ldst.c:
  * LD1-LD4 and ST1-ST4 of multiple structures and of a single structure,
  * and LD1R-LD4R. The caller has checked that insn is in one of them.

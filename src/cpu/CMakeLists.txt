@@ -21,8 +21,11 @@ add_library(cpu STATIC
 	arm64/pmu.c
 	arm64/simd.c
 	arm64/simd_int.c
+	arm64/simd_same.c
 	arm64/simd_shift.c
 	arm64/simd_ldst.c
+	arm64/simd_long.c
+	arm64/simd_perm.c
 	arm64/timer.c)
 
 target_link_libraries(cpu PUBLIC core)

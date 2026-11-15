@@ -93,12 +93,11 @@ architecture says. All the SIMD and FP loads and stores work, including
 `LD1` to `LD4` and `ST1` to `ST4`, with the alignment rules of the
 architecture's pseudocode; so do the instructions that move data without
 computing: `DUP`, `INS`, `UMOV`, `SMOV`, `MOVI`, `MVNI`, `ORR` and `BIC`
-with an immediate, and `FMOV`. The integer instructions of Advanced
-SIMD with one source register work, vector and scalar, the saturating
-ones setting `FPSR.QC`: those of the two-register miscellaneous, across
-lanes and shift by immediate classes, and scalar `ADDP`. The other
-Advanced SIMD and floating-point instructions are not implemented yet:
-such an instruction stops the machine and names its class. Those that the core lacks, the
+with an immediate, and `FMOV`. Every integer instruction of Advanced
+SIMD works, vector and scalar, the saturating ones setting `FPSR.QC`.
+The floating-point arithmetic is not implemented yet, nor the
+conversions between floating point and integers: such an instruction
+stops the machine and names its class. Those that the core lacks, the
 Cryptographic Extension and the half-precision arithmetic of Armv8.2, are
 UNDEFINED.
 

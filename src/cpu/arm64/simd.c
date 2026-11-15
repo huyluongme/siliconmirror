@@ -11,10 +11,11 @@
  * INS, SMOV, UMOV (Advanced SIMD copy and scalar copy), MOVI, MVNI, ORR
  * and BIC (vector, immediate) and FMOV (vector, immediate) (Advanced SIMD
  * modified immediate), FMOV (general), FMOV (register) and FMOV (scalar,
- * immediate). It gives some integer classes of Advanced SIMD to the files
- * that implement them: simd_int.c and simd_shift.c. The other classes,
- * and the floating-point instructions of those files, stop the machine as
- * not implemented yet, naming the class.
+ * immediate). It gives the integer classes of Advanced SIMD to the files
+ * that implement them: simd_int.c, simd_shift.c, simd_same.c, simd_perm.c
+ * and simd_long.c. The floating-point classes, and the floating-point
+ * instructions of those files, stop the machine as not implemented yet,
+ * naming the class.
  *
  * The Cortex-A53 of the BCM2837 has no Cryptographic Extension: the AES
  * and SHA classes are UNDEFINED, as are those that only hold instructions
@@ -392,8 +393,7 @@ static Arm64Exec simd_scalar(Arm64Cpu *c, uint32_t insn)
 
 	if (op1 & 2) {
 		if (!(op3 & 1))
-			return arm64_simd_not_yet(c,
-			                          "Advanced SIMD scalar x indexed element");
+			return arm64_simd_by_element(c, insn, true);
 		if (op1 == 3)
 			return ARM64_EXEC_UNDEFINED;
 		return arm64_simd_shift_imm(c, insn, true);
@@ -404,13 +404,13 @@ static Arm64Exec simd_scalar(Arm64Cpu *c, uint32_t insn)
 			return op1 == 0 ? copy(c, insn, true) : ARM64_EXEC_UNDEFINED;
 		if (!(op2 & 4))
 			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(c, "Advanced SIMD scalar three same");
+		return arm64_simd_three_same(c, insn, true);
 	}
 	/* op2 = x0xx: the SHA classes and UNALLOCATED. */
 	if (!(op2 & 4))
 		return ARM64_EXEC_UNDEFINED;
 	if (!(op3 & 2))
-		return arm64_simd_not_yet(c, "Advanced SIMD scalar three different");
+		return arm64_simd_three_different(c, insn, true);
 	if (op3 >> 7 != 0)
 		return ARM64_EXEC_UNDEFINED;
 	if ((op2 & 7) == 4)
@@ -431,8 +431,7 @@ static Arm64Exec simd_vector(Arm64Cpu *c, uint32_t insn)
 
 	if (op1 & 2) {
 		if (!(op3 & 1))
-			return arm64_simd_not_yet(c,
-			                          "Advanced SIMD vector x indexed element");
+			return arm64_simd_by_element(c, insn, false);
 		if (op1 == 3)
 			return ARM64_EXEC_UNDEFINED;
 		if (op2 == 0)
@@ -445,19 +444,19 @@ static Arm64Exec simd_vector(Arm64Cpu *c, uint32_t insn)
 			return op1 == 0 ? copy(c, insn, false) : ARM64_EXEC_UNDEFINED;
 		if (!(op2 & 4))
 			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(c, "Advanced SIMD three same");
+		return arm64_simd_three_same(c, insn, false);
 	}
 	if (!(op2 & 4)) {
 		if (op3 & 0x20)
 			return ARM64_EXEC_UNDEFINED;
 		if (bit32(insn, 29))
-			return arm64_simd_not_yet(c, "Advanced SIMD extract");
+			return arm64_simd_extract(c, insn);
 		if (op3 & 2)
-			return arm64_simd_not_yet(c, "Advanced SIMD permute");
-		return arm64_simd_not_yet(c, "Advanced SIMD table lookup");
+			return arm64_simd_permute(c, insn);
+		return arm64_simd_table_lookup(c, insn);
 	}
 	if (!(op3 & 2))
-		return arm64_simd_not_yet(c, "Advanced SIMD three different");
+		return arm64_simd_three_different(c, insn, false);
 	if (op3 >> 7 != 0)
 		return ARM64_EXEC_UNDEFINED;
 	if ((op2 & 7) == 4)

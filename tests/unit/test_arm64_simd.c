@@ -1288,29 +1288,22 @@ static void test_not_implemented_yet(void)
 		const char *name;
 	} cases[] = {
 		{0x1e622820, "Floating-point data-processing (2 source)"},
-		{0x4ea28420, "Advanced SIMD three same"},
-		{0x4ea21c20, "Advanced SIMD three same"}, /* ORR, MOV (vector) */
-		{0x4e020020, "Advanced SIMD table lookup"},
-		{0x4e0a0020, "Advanced SIMD table lookup"}, /* with V10 */
+		{0x4e22d420, "Advanced SIMD three same"}, /* FADD */
 		{0x1e620020, "Conversion between floating-point and integer"},
 		/* SCVTF D0, W1 */
-		{0x4e823820, "Advanced SIMD permute"},
-		{0x6e021820, "Advanced SIMD extract"},
 		{0x6e30f820, "Advanced SIMD across lanes"}, /* FMAXV */
 		{0x4ea0f820, "Advanced SIMD two-register miscellaneous"},
 		/* FABS V0.4S, V1.4S */
 		{0x4f3de420, "Advanced SIMD shift by immediate"},
 		/* SCVTF V0.4S, V1.4S, #3 */
-		{0x4fa28020, "Advanced SIMD vector x indexed element"},
-		{0x0e620020, "Advanced SIMD three different"},
-		{0x5ee28420, "Advanced SIMD scalar three same"},
-		{0x7e30d820, "Advanced SIMD scalar pairwise"}, /* FADDP */
+		{0x4fa21020, "Advanced SIMD vector x indexed element"}, /* FMLA */
+		{0x7ea2d420, "Advanced SIMD scalar three same"},        /* FABD */
+		{0x7e30d820, "Advanced SIMD scalar pairwise"},          /* FADDP */
 		{0x5ea1d820, "Advanced SIMD scalar two-register miscellaneous"},
 		/* FRECPE S0, S1 */
 		{0x5f3de420, "Advanced SIMD scalar shift by immediate"},
 		/* SCVTF S0, S1, #3 */
-		{0x5e62d020, "Advanced SIMD scalar three different"},
-		{0x5f52c020, "Advanced SIMD scalar x indexed element"},
+		{0x5fa21020, "Advanced SIMD scalar x indexed element"}, /* FMLA */
 		{0x1e212000, "Floating-point compare"},
 		{0x1e210400, "Floating-point conditional compare"},
 		{0x1e220c20, "Floating-point conditional select"},
