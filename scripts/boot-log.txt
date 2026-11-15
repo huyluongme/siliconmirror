@@ -1,0 +1,11 @@
+# The boot that scripts/boot-log.sh records, on the card of
+# scripts/uboot-linux-card.sh: the firmware, U-Boot, which boots Linux by
+# itself, and Linux, to the shell of its initramfs. tests/uboot/drive.c
+# runs it; see its comment for the commands.
+timeout 3600
+expect U-Boot 2026.07
+expect Hit any key to stop autoboot
+expect Starting kernel
+expect linux-card: the initramfs runs
+expect ~ #
+quit

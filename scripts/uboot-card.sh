@@ -54,6 +54,10 @@ if [ ! -f "$BUILD/u-boot.bin" ]; then
 		git clone --quiet --depth 1 --branch "$UBOOT_VERSION" "$UBOOT_REPO" \
 			"$SRC"
 	fi
+	# A reproducible build: U-Boot's banner shows the date of the
+	# release's commit, in UTC, not when and where it was built.
+	SOURCE_DATE_EPOCH=$(git -C "$SRC" log -1 --format=%ct)
+	export SOURCE_DATE_EPOCH
 	make -s -C "$SRC" O="$BUILD" CROSS_COMPILE="$CROSS_COMPILE" \
 		rpi_3_defconfig
 	# Host tools that need the OpenSSL or GnuTLS headers, which a

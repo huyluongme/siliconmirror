@@ -65,6 +65,13 @@ of the same release, and an initramfs of BusyBox 1.38.0 (built with an
 `aarch64-linux-gnu-` GCC), whose `/init` starts a shell on the serial
 console. smirror does not boot it to that shell yet: see the roadmap.
 
+`scripts/uboot-linux-card.sh` puts both together, as a card that boots
+with U-Boot would: the firmware starts U-Boot, whose `boot.scr` loads
+that kernel and initramfs and starts Linux. `scripts/boot-log.sh` boots
+it and keeps what the console shows in
+[docs/boot-logs/raspi3b-uboot-linux.log](docs/boot-logs/raspi3b-uboot-linux.log),
+which each change updates: its history shows how far the boot gets.
+
 `scripts/fuzz.sh [SECONDS]` fuzzes, with clang's libFuzzer, what
 smirror reads from an SD card: the MBR, FAT, `config.txt`, device
 trees and gzip kernels, each for SECONDS (60 by default).
