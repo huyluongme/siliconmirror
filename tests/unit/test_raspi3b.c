@@ -759,6 +759,28 @@ static void test_clock_manager(void)
 }
 
 /*
+ * The doorbells at 0x3f00b840: none rung at boot; the Arm ringing the
+ * VideoCore's reaches its end of VCHIQ, which handles no messages yet.
+ */
+static void test_doorbells(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 1;
+
+	CHECK_EQ(bus_read(m->bus, 0x3f00b840, 4, &v), BUS_OK); /* BELL0 */
+	CHECK_EQ(v, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	CHECK_EQ(bus_write(m->bus, 0x3f00b848, 4, 0), BUS_OK); /* BELL2 */
+	CHECK_EQ(m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(m->stop_message, "firmware: VCHIQ: the Arm rang the "
+	                              "VideoCore's doorbell") != NULL);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
  * The MPHI at 0x3f006000: dwc_otg's kick is GPU interrupt 32, bit 0 of
  * the second pending register.
  */
@@ -1091,6 +1113,7 @@ int main(void)
 	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_clock_manager);
+	RUN_TEST(test_doorbells);
 	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
 	RUN_TEST(test_dma);

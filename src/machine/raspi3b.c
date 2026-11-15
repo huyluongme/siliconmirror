@@ -25,6 +25,7 @@
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_cprman.h"
+#include "hw/misc/bcm2835_doorbell.h"
 #include "hw/misc/bcm2835_mbox.h"
 #include "hw/misc/bcm2835_mphi.h"
 #include "hw/misc/bcm2835_pm.h"
@@ -182,6 +183,16 @@ static void reset_mbox(void *ctx)
 static void destroy_mbox(void *ctx)
 {
 	bcm2835_mbox_destroy(ctx);
+}
+
+static void reset_doorbell(void *ctx)
+{
+	bcm2835_doorbell_reset(ctx);
+}
+
+static void destroy_doorbell(void *ctx)
+{
+	bcm2835_doorbell_destroy(ctx);
 }
 
 static void reset_pm(void *ctx)
@@ -443,6 +454,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Raspi3bProperty *property;
 	Bcm2835Mbox *mbox;
 	Bcm2835Pm *pm;
+	Bcm2835Doorbell *doorbell;
 	Bcm2835Cprman *cprman;
 	Bcm2835Rng *rng;
 	Bcm2835Thermal *thermal;
@@ -552,6 +564,23 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	status = bcm2835_mbox_map(mbox, m->bus, "mbox", RASPI3B_MBOX_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map the mailboxes: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	doorbell = bcm2835_doorbell_create(
+		m, bcm2835_ic_arm_input(ic, BCM2835_IC_ARM_DOORBELL0),
+		&(Bcm2835DoorbellVc){raspi3b_vchiq_doorbell,
+	                         raspi3b_property_vchiq(property)});
+	if (doorbell == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, doorbell, reset_doorbell, destroy_doorbell)) {
+		bcm2835_doorbell_destroy(doorbell);
+		goto out_of_memory;
+	}
+	status =
+		bcm2835_doorbell_map(doorbell, m->bus, "doorbell", RASPI3B_BELL_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the doorbells: %s",
 		         bus_status_str(status));
 		goto fail;
 	}

@@ -118,6 +118,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f006000` | 4 KB    | MPHI, the parallel host interface: dwc_otg's interrupt   | What dwc_otg uses          |
 | `0x3f007000` | 4 KB    | DMA controller, channels 0 to 14                         | Yes, but 2D and ignore     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
+| `0x3f00b840` | 60 B    | Doorbells between the Arm and the VideoCore (VCHIQ)      | What VCHIQ uses            |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
 | `0x3f100000` | 276 B   | Power manager: power domains, reset lines, watchdog      | The watchdog               |
 | `0x3f101000` | 8 KB    | Clock manager (CPRMAN): PLLs, clock generators           | What Linux's driver uses   |
@@ -570,9 +571,35 @@ stops the machine, and so do values that nothing documents for this
 board: the power state of a device or of a domain before the Arm sets
 it, the time a device takes to power up, the state of the H.264 and PWM
 clocks at boot, the rates of the PWM clock, and the range of the UART
-and EMMC clocks. `VCHIQ_INIT` (`0x00048010`), whose answer starts the
-VideoCore's services, is not emulated yet. A reset of the board starts the firmware again: the clocks,
-turbo and the power states are back to those of boot.
+and EMMC clocks. A reset of the board starts the firmware again: the
+clocks, turbo, the power states and VCHIQ are back to those of boot.
+
+## VCHIQ
+
+VCHIQ carries messages between the Arm and the VideoCore's services
+(audio, the camera, the codecs) in memory that both share. Linux's
+`vchiq_arm` allocates it, 65 slots of 4 KB: "slot zero", which describes
+the queues, and the slots of both sides. It fills in slot zero and its
+own half, the slave's, and gives the memory's bus address to the
+firmware with `VCHIQ_INIT` (`0x00048010`), which answers 0. Nothing
+documents the VideoCore's side, the master: smirror's does for its half
+what Linux's `vchiq_init_state` does for the Arm's. It queues its slots
+for sending, starts at the first, marks its synchronous slot empty and
+free, arms its events as it waits for the Arm's messages, and is
+initialised. smirror's choices: the VideoCore speaks VCHIQ version 8 and
+accepts 3 and up, those of Linux of the same release, and slot zero must
+start the memory, at a 4 KB boundary, as Linux's always does. A slot
+zero the VideoCore does not know and a second `VCHIQ_INIT` stop the
+machine.
+
+The two sides ring each other's doorbell, at `0x3f00b840`, which the
+device tree gives the vchiq node with ARM interrupt 2, the Arm's
+doorbell 0. Reading `BELL0` gives in bit 2 whether the VideoCore rang
+the Arm since the last read, and clears it and the interrupt; writing
+`BELL2` rings the VideoCore. The VideoCore does not handle messages
+yet: when the Arm rings it, to connect or to open a service, the
+machine stops. Linux only does so when a client of VCHIQ starts: its
+audio, camera and codec drivers are modules, and `vcgencmd` a program.
 
 ## The SD card
 
@@ -1149,6 +1176,15 @@ to quit.
   before sending.
 
 ## Sources
+
+- VCHIQ: Raspberry Pi's Linux,
+  [vchiq_core.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_core.c) and
+  [vchiq_core.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_core.h) (slot zero, its halves, the events,
+  `vchiq_init_slots`, `vchiq_init_state`),
+  [vchiq_cfg.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_cfg.h) (the magic, the versions, the slots'
+  sizes) and [vchiq_arm.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_arm.c) (the slots' memory,
+  `VCHIQ_INIT`, the doorbells); the board's device tree (the vchiq
+  node's registers and interrupt).
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

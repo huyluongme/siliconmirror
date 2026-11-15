@@ -12,6 +12,7 @@
 #define RASPI3B_RAM_SIZE 0x3f000000 /* RAM from 0 up to the peripherals */
 #define RASPI3B_PERIPHERAL_BASE 0x3f000000 /* bus address 0x7e000000 */
 #define RASPI3B_IC_BASE (RASPI3B_PERIPHERAL_BASE + 0xb200)   /* interrupts */
+#define RASPI3B_BELL_BASE (RASPI3B_PERIPHERAL_BASE + 0xb840) /* doorbells */
 #define RASPI3B_MBOX_BASE (RASPI3B_PERIPHERAL_BASE + 0xb880) /* mailboxes */
 #define RASPI3B_PM_BASE (RASPI3B_PERIPHERAL_BASE + 0x100000) /* watchdog */
 #define RASPI3B_CPRMAN_BASE (RASPI3B_PERIPHERAL_BASE + 0x101000)  /* clocks */
