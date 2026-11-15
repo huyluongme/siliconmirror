@@ -106,25 +106,38 @@ static inline void set_scalar(Arm64Cpu *c, unsigned n, unsigned size,
 }
 
 /*
- * Element index of size bytes (1, 2, 4 or 8) of the 128 bits of Vn, the
- * Elem accessor of J1.2.3. The index must lie within the register.
+ * Element index of size bytes (1, 2, 4 or 8) of a 128-bit vector, the
+ * Elem accessor of J1.2.3. The index must lie within the vector.
  */
-static inline uint64_t get_elem(const Arm64Cpu *c, unsigned n, unsigned index,
-                                unsigned size)
+static inline uint64_t vreg_elem(const Arm64Vreg *v, unsigned index,
+                                 unsigned size)
 {
 	unsigned bit = index * size * 8;
 
-	return (c->v[n].d[bit / 64] >> (bit % 64)) & bytes_mask(size);
+	return (v->d[bit / 64] >> (bit % 64)) & bytes_mask(size);
+}
+
+static inline void vreg_set_elem(Arm64Vreg *v, unsigned index, unsigned size,
+                                 uint64_t value)
+{
+	unsigned bit = index * size * 8;
+	uint64_t mask = bytes_mask(size) << (bit % 64);
+	uint64_t *d = &v->d[bit / 64];
+
+	*d = (*d & ~mask) | ((value << (bit % 64)) & mask);
+}
+
+/* The same for Vn. */
+static inline uint64_t get_elem(const Arm64Cpu *c, unsigned n, unsigned index,
+                                unsigned size)
+{
+	return vreg_elem(&c->v[n], index, size);
 }
 
 static inline void set_elem(Arm64Cpu *c, unsigned n, unsigned index,
                             unsigned size, uint64_t value)
 {
-	unsigned bit = index * size * 8;
-	uint64_t mask = bytes_mask(size) << (bit % 64);
-	uint64_t *d = &c->v[n].d[bit / 64];
-
-	*d = (*d & ~mask) | ((value << (bit % 64)) & mask);
+	vreg_set_elem(&c->v[n], index, size, value);
 }
 
 /*
@@ -292,6 +305,21 @@ Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_dp_reg(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_simd_fp(Arm64Cpu *c, uint32_t insn);
+
+/*
+ * The integer classes of the SIMD&FP group, from simd_int.c, for simd.c:
+ * Advanced SIMD two-register miscellaneous and across lanes, and their
+ * scalar forms, with scalar pairwise. scalar picks the scalar class.
+ * arm64_simd_not_yet(), from simd.c, stops the machine on an instruction
+ * of a class not implemented yet, naming the class.
+ */
+Arm64Exec arm64_simd_two_reg_misc(Arm64Cpu *c, uint32_t insn, bool scalar);
+Arm64Exec arm64_simd_across_lanes(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_scalar_pairwise(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_not_yet(Arm64Cpu *c, const char *class_name);
+
+/* Advanced SIMD shift by immediate and its scalar form, simd_shift.c. */
+Arm64Exec arm64_simd_shift_imm(Arm64Cpu *c, uint32_t insn, bool scalar);
 
 /*
  * The Advanced SIMD load/store structure classes, from simd_ldst.c:

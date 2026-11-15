@@ -7,11 +7,13 @@
  * down to the instruction classes, each instruction after its description
  * in C7.2.
  *
- * Implemented so far: the instructions that move data without computing,
- * DUP, INS, SMOV, UMOV (Advanced SIMD copy and scalar copy), MOVI, MVNI,
- * ORR and BIC (vector, immediate) and FMOV (vector, immediate) (Advanced
- * SIMD modified immediate), FMOV (general), FMOV (register) and FMOV
- * (scalar, immediate). The other classes of Armv8.0 stop the machine as
+ * This file has the instructions that move data without computing, DUP,
+ * INS, SMOV, UMOV (Advanced SIMD copy and scalar copy), MOVI, MVNI, ORR
+ * and BIC (vector, immediate) and FMOV (vector, immediate) (Advanced SIMD
+ * modified immediate), FMOV (general), FMOV (register) and FMOV (scalar,
+ * immediate). It gives some integer classes of Advanced SIMD to the files
+ * that implement them: simd_int.c and simd_shift.c. The other classes,
+ * and the floating-point instructions of those files, stop the machine as
  * not implemented yet, naming the class.
  *
  * The Cortex-A53 of the BCM2837 has no Cryptographic Extension: the AES
@@ -24,8 +26,7 @@
 #include "cpu/arm64/internal.h"
 #include "util/bits.h"
 
-/* Stop the machine on an instruction of a class not implemented yet. */
-static Arm64Exec not_yet(Arm64Cpu *c, const char *class_name)
+Arm64Exec arm64_simd_not_yet(Arm64Cpu *c, const char *class_name)
 {
 	snprintf(c->detail, sizeof(c->detail), "%s", class_name);
 	return ARM64_EXEC_UNIMPLEMENTED;
@@ -263,7 +264,8 @@ static Arm64Exec fp_int_conversion(Arm64Cpu *c, uint32_t insn)
 		/* ftype 11 needs FEAT_FP16; 10 is UNALLOCATED. */
 		if (ftype >= 2)
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Conversion between floating-point and integer");
+		return arm64_simd_not_yet(
+			c, "Conversion between floating-point and integer");
 	}
 	/*
 	 * FMOV: rmode 00 between a register and S (sf = 0, ftype = 00) or D
@@ -305,7 +307,8 @@ static Arm64Exec fp_one_source(Arm64Cpu *c, uint32_t insn)
 	if (opcode != 0) {
 		if (size == 0 && !(field32(insn, 23, 22) == 3 && opcode >> 1 == 2))
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Floating-point data-processing (1 source)");
+		return arm64_simd_not_yet(c,
+		                          "Floating-point data-processing (1 source)");
 	}
 	if (size == 0)
 		return ARM64_EXEC_UNDEFINED;
@@ -349,8 +352,8 @@ static Arm64Exec fp_scalar(Arm64Cpu *c, uint32_t insn)
 	if (!bit32(insn, 24) && !bit32(insn, 21)) {
 		if (bit32(insn, 29) || wide)
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Conversion between floating-point and "
-		                  "fixed-point");
+		return arm64_simd_not_yet(c, "Conversion between floating-point and "
+		                             "fixed-point");
 	}
 	if (!bit32(insn, 24) && (op3 & 0x3f) == 0x00)
 		return fp_int_conversion(c, insn);
@@ -363,16 +366,18 @@ static Arm64Exec fp_scalar(Arm64Cpu *c, uint32_t insn)
 	if (wide)
 		return ARM64_EXEC_UNDEFINED;
 	if (bit32(insn, 24))
-		return not_yet(c, "Floating-point data-processing (3 source)");
+		return arm64_simd_not_yet(c,
+		                          "Floating-point data-processing (3 source)");
 	if ((op3 & 0xf) == 0x8)
-		return not_yet(c, "Floating-point compare");
+		return arm64_simd_not_yet(c, "Floating-point compare");
 	switch (op3 & 3) {
 	case 1:
-		return not_yet(c, "Floating-point conditional compare");
+		return arm64_simd_not_yet(c, "Floating-point conditional compare");
 	case 2:
-		return not_yet(c, "Floating-point data-processing (2 source)");
+		return arm64_simd_not_yet(c,
+		                          "Floating-point data-processing (2 source)");
 	default:
-		return not_yet(c, "Floating-point conditional select");
+		return arm64_simd_not_yet(c, "Floating-point conditional select");
 	}
 }
 
@@ -387,10 +392,11 @@ static Arm64Exec simd_scalar(Arm64Cpu *c, uint32_t insn)
 
 	if (op1 & 2) {
 		if (!(op3 & 1))
-			return not_yet(c, "Advanced SIMD scalar x indexed element");
+			return arm64_simd_not_yet(c,
+			                          "Advanced SIMD scalar x indexed element");
 		if (op1 == 3)
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Advanced SIMD scalar shift by immediate");
+		return arm64_simd_shift_imm(c, insn, true);
 	}
 	if (op3 & 1) {
 		/* op2 = 10xx: FEAT_FP16; op3[5]: FEAT_RDM. */
@@ -398,19 +404,19 @@ static Arm64Exec simd_scalar(Arm64Cpu *c, uint32_t insn)
 			return op1 == 0 ? copy(c, insn, true) : ARM64_EXEC_UNDEFINED;
 		if (!(op2 & 4))
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Advanced SIMD scalar three same");
+		return arm64_simd_not_yet(c, "Advanced SIMD scalar three same");
 	}
 	/* op2 = x0xx: the SHA classes and UNALLOCATED. */
 	if (!(op2 & 4))
 		return ARM64_EXEC_UNDEFINED;
 	if (!(op3 & 2))
-		return not_yet(c, "Advanced SIMD scalar three different");
+		return arm64_simd_not_yet(c, "Advanced SIMD scalar three different");
 	if (op3 >> 7 != 0)
 		return ARM64_EXEC_UNDEFINED;
 	if ((op2 & 7) == 4)
-		return not_yet(c, "Advanced SIMD scalar two-register miscellaneous");
+		return arm64_simd_two_reg_misc(c, insn, true);
 	if ((op2 & 7) == 6)
-		return not_yet(c, "Advanced SIMD scalar pairwise");
+		return arm64_simd_scalar_pairwise(c, insn);
 	return ARM64_EXEC_UNDEFINED; /* SHA, FEAT_FP16, UNALLOCATED */
 }
 
@@ -425,12 +431,13 @@ static Arm64Exec simd_vector(Arm64Cpu *c, uint32_t insn)
 
 	if (op1 & 2) {
 		if (!(op3 & 1))
-			return not_yet(c, "Advanced SIMD vector x indexed element");
+			return arm64_simd_not_yet(c,
+			                          "Advanced SIMD vector x indexed element");
 		if (op1 == 3)
 			return ARM64_EXEC_UNDEFINED;
 		if (op2 == 0)
 			return modified_immediate(c, insn);
-		return not_yet(c, "Advanced SIMD shift by immediate");
+		return arm64_simd_shift_imm(c, insn, false);
 	}
 	if (op3 & 1) {
 		/* op2 = 10xx: FEAT_FP16; op3[5]: three-register extension. */
@@ -438,25 +445,25 @@ static Arm64Exec simd_vector(Arm64Cpu *c, uint32_t insn)
 			return op1 == 0 ? copy(c, insn, false) : ARM64_EXEC_UNDEFINED;
 		if (!(op2 & 4))
 			return ARM64_EXEC_UNDEFINED;
-		return not_yet(c, "Advanced SIMD three same");
+		return arm64_simd_not_yet(c, "Advanced SIMD three same");
 	}
 	if (!(op2 & 4)) {
 		if (op3 & 0x20)
 			return ARM64_EXEC_UNDEFINED;
 		if (bit32(insn, 29))
-			return not_yet(c, "Advanced SIMD extract");
+			return arm64_simd_not_yet(c, "Advanced SIMD extract");
 		if (op3 & 2)
-			return not_yet(c, "Advanced SIMD permute");
-		return not_yet(c, "Advanced SIMD table lookup");
+			return arm64_simd_not_yet(c, "Advanced SIMD permute");
+		return arm64_simd_not_yet(c, "Advanced SIMD table lookup");
 	}
 	if (!(op3 & 2))
-		return not_yet(c, "Advanced SIMD three different");
+		return arm64_simd_not_yet(c, "Advanced SIMD three different");
 	if (op3 >> 7 != 0)
 		return ARM64_EXEC_UNDEFINED;
 	if ((op2 & 7) == 4)
-		return not_yet(c, "Advanced SIMD two-register miscellaneous");
+		return arm64_simd_two_reg_misc(c, insn, false);
 	if ((op2 & 7) == 6)
-		return not_yet(c, "Advanced SIMD across lanes");
+		return arm64_simd_across_lanes(c, insn);
 	return ARM64_EXEC_UNDEFINED; /* AES, FEAT_FP16, UNALLOCATED */
 }
 

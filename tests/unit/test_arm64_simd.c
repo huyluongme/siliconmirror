@@ -1296,15 +1296,19 @@ static void test_not_implemented_yet(void)
 		/* SCVTF D0, W1 */
 		{0x4e823820, "Advanced SIMD permute"},
 		{0x6e021820, "Advanced SIMD extract"},
-		{0x4e31b820, "Advanced SIMD across lanes"},
-		{0x4ea0b820, "Advanced SIMD two-register miscellaneous"},
-		{0x4f235420, "Advanced SIMD shift by immediate"},
+		{0x6e30f820, "Advanced SIMD across lanes"}, /* FMAXV */
+		{0x4ea0f820, "Advanced SIMD two-register miscellaneous"},
+		/* FABS V0.4S, V1.4S */
+		{0x4f3de420, "Advanced SIMD shift by immediate"},
+		/* SCVTF V0.4S, V1.4S, #3 */
 		{0x4fa28020, "Advanced SIMD vector x indexed element"},
 		{0x0e620020, "Advanced SIMD three different"},
 		{0x5ee28420, "Advanced SIMD scalar three same"},
-		{0x5ef1b820, "Advanced SIMD scalar pairwise"},
-		{0x5ee0b820, "Advanced SIMD scalar two-register miscellaneous"},
-		{0x5f435420, "Advanced SIMD scalar shift by immediate"},
+		{0x7e30d820, "Advanced SIMD scalar pairwise"}, /* FADDP */
+		{0x5ea1d820, "Advanced SIMD scalar two-register miscellaneous"},
+		/* FRECPE S0, S1 */
+		{0x5f3de420, "Advanced SIMD scalar shift by immediate"},
+		/* SCVTF S0, S1, #3 */
 		{0x5e62d020, "Advanced SIMD scalar three different"},
 		{0x5f52c020, "Advanced SIMD scalar x indexed element"},
 		{0x1e212000, "Floating-point compare"},
@@ -1318,8 +1322,6 @@ static void test_not_implemented_yet(void)
 		/* FCVT S0, H1 */
 		{0x1ee2c020, "Floating-point data-processing (1 source)"},
 		/* FCVT D0, H1 */
-		{0x4f400420, "Advanced SIMD shift by immediate"},
-		/* SSHR V0.2D, V1.2D, #64 */
 		{0x1e218400, "Floating-point conditional compare"}, /* HI */
 		{0x1e214400, "Floating-point conditional compare"}, /* MI */
 		{0x1e211400, "Floating-point conditional compare"}, /* NE */
