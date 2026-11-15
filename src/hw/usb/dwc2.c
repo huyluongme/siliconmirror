@@ -34,7 +34,9 @@ enum {
 	GHWCFG2 = 0x048,
 	GHWCFG3 = 0x04c,
 	GHWCFG4 = 0x050,
+	GDFIFOCFG = 0x05c,
 	HPTXFSIZ = 0x100,
+	DIEPTXF1 = 0x104, /* DIEPTXFn at DIEPTXF1 + 4 (n - 1), n = 1 to 15 */
 	HCFG = 0x400,
 	HFIR = 0x404,
 	HFNUM = 0x408,
@@ -43,8 +45,11 @@ enum {
 	HAINTMSK = 0x418,
 	HPRT0 = 0x440,
 	HC_BASE = 0x500, /* channel n at HC_BASE + 0x20 n */
+	DCFG = 0x800,
 	PCGCCTL = 0xe00,
 };
+
+#define NUM_DIEPTXF 15
 
 /* Registers of a host channel, from its base. */
 enum { HCCHAR, HCSPLT = 4, HCINT = 8, HCINTMSK = 12, HCTSIZ = 16, HCDMA = 20 };
@@ -105,6 +110,7 @@ struct Dwc2 {
 	uint32_t gotgctl, gahbcfg, gusbcfg, grstctl, gintmsk;
 	uint32_t grxfsiz, gnptxfsiz, hptxfsiz, gi2cctl, gpvndctl, ggpio, guid;
 	uint32_t hcfg, hfir, haintmsk, pcgcctl;
+	uint32_t gdfifocfg, dieptxf[NUM_DIEPTXF], dcfg;
 	uint32_t hprt0;      /* the RW bits and the change bits */
 	UsbDevice *port_dev; /* on the root port, or NULL */
 	bool port_enabled;
@@ -401,6 +407,8 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 	n = channel_of(d, offset, &reg);
 	if (n >= 0)
 		return channel_read(d, (unsigned)n, reg);
+	if (offset >= DIEPTXF1 && offset < DIEPTXF1 + 4 * NUM_DIEPTXF)
+		return d->dieptxf[(offset - DIEPTXF1) / 4];
 	switch (offset) {
 	case GOTGCTL:
 		return d->gotgctl & ~GOTGCTL_CONIDSTS;
@@ -441,6 +449,8 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 		return d->config.hwcfg3;
 	case GHWCFG4:
 		return d->config.hwcfg4;
+	case GDFIFOCFG:
+		return d->gdfifocfg;
 	case HPTXFSIZ:
 		return d->hptxfsiz;
 	case HCFG:
@@ -457,6 +467,8 @@ static uint64_t dwc2_read(void *ctx, uint64_t offset, unsigned size)
 		return d->haintmsk;
 	case HPRT0:
 		return hprt0(d);
+	case DCFG:
+		return d->dcfg;
 	case PCGCCTL:
 		return d->pcgcctl;
 	default:
@@ -477,6 +489,14 @@ static void reset_registers(Dwc2 *d)
 	d->grxfsiz = d->config.hwcfg3 >> 16;
 	d->gnptxfsiz = (d->config.hwcfg3 >> 16) << 16 | (d->config.hwcfg3 >> 16);
 	d->hptxfsiz = d->gnptxfsiz;
+	/*
+	 * Not documented for the BCM2837, see dwc2.h: GDFIFOCFG and the
+	 * FIFOs of the IN endpoints like the others, DCFG 0.
+	 */
+	d->gdfifocfg = d->gnptxfsiz;
+	for (unsigned i = 0; i < NUM_DIEPTXF; i++)
+		d->dieptxf[i] = d->gnptxfsiz;
+	d->dcfg = 0;
 	d->gi2cctl = d->gpvndctl = d->ggpio = 0;
 	d->guid = d->config.guid;
 	d->hcfg = d->hfir = d->haintmsk = d->pcgcctl = 0;
@@ -508,6 +528,10 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 	if (n >= 0) {
 		channel_write(d, offset, (unsigned)n, reg, v);
 		update_irq(d);
+		return;
+	}
+	if (offset >= DIEPTXF1 && offset < DIEPTXF1 + 4 * NUM_DIEPTXF) {
+		d->dieptxf[(offset - DIEPTXF1) / 4] = v;
 		return;
 	}
 	switch (offset) {
@@ -555,6 +579,9 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 	case GUID:
 		d->guid = v;
 		break;
+	case GDFIFOCFG:
+		d->gdfifocfg = v;
+		break;
 	case HPTXFSIZ:
 		d->hptxfsiz = v;
 		break;
@@ -569,6 +596,9 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 		break;
 	case HPRT0:
 		write_hprt0(d, v);
+		break;
+	case DCFG:
+		d->dcfg = v;
 		break;
 	case PCGCCTL:
 		d->pcgcctl = v;

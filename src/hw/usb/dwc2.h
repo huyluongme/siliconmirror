@@ -20,6 +20,14 @@
  * transaction error, as the drivers expect, after the time its packets
  * take at 480 Mb/s. Device mode, the data FIFOs (slave mode), split
  * transactions and isochronous endpoints stop the machine.
+ *
+ * Some registers of the dedicated FIFOs and of device mode hold what is
+ * written to them, as the Raspberry Pi's dwc_otg driver reads them in
+ * host mode too: GDFIFOCFG, the FIFO sizes of the IN endpoints DIEPTXF1
+ * to DIEPTXF15, and DCFG. Their reset values on the BCM2837 are not
+ * documented: smirror resets the FIFO ones like the other FIFO size
+ * registers, to the depth that GHWCFG3 gives for both fields, and DCFG to
+ * 0. The other registers of device mode stop the machine.
  */
 
 #ifndef HW_USB_DWC2_H

@@ -40,7 +40,10 @@ enum {
 	GHWCFG2 = 0x048,
 	GHWCFG3 = 0x04c,
 	GHWCFG4 = 0x050,
+	GDFIFOCFG = 0x05c,
 	HPTXFSIZ = 0x100,
+	DIEPTXF1 = 0x104,
+	DCFG = 0x800,
 	HCFG = 0x400,
 	HFIR = 0x404,
 	HPTXSTS = 0x410,
@@ -236,6 +239,11 @@ static void test_register_values(void)
 		{HFIR, 0x0001ea61, 0x0000ea61},
 		{HAINTMSK, 0xffffffff, 0x000000ff},
 		{PCGCCTL, 0x00000001, 0x00000001},
+		{GDFIFOCFG, 0x06060ff0, 0x06060ff0},
+		{DIEPTXF1, 0x02000600, 0x02000600},
+		{DIEPTXF1 + 4 * 6, 0x01000800, 0x01000800},  /* DIEPTXF7 */
+		{DIEPTXF1 + 4 * 14, 0x00400a00, 0x00400a00}, /* DIEPTXF15 */
+		{DCFG, 0x08200003, 0x08200003},
 		{HCCHAR0 + 0xa0, 0x00d8a200, 0x00d8a200}, /* channel 5 */
 		{HCCHAR0 + 0xa4, 0x80000123, 0x80000123},
 		{HCINT0 + 0xa0, 0xffffffff, 0},
@@ -253,13 +261,15 @@ static void test_register_values(void)
 
 		reset[i] = rd(&s, o);
 		/* All 0 at reset but these (GRXFSIZ from GHWCFG3). */
-		CHECK_EQ(reset[i], o == GRSTCTL     ? 1u << 31
-		                   : o == GINTSTS   ? 1
-		                   : o == GRXFSIZ   ? 0x0ff0
-		                   : o == GNPTXFSIZ ? 0x0ff00ff0
-		                   : o == GUID      ? 0x2708a000
-		                   : o == HPTXFSIZ  ? 0x0ff00ff0
-		                                    : 0);
+		CHECK_EQ(reset[i], o == GRSTCTL                         ? 1u << 31
+		                   : o == GINTSTS                       ? 1
+		                   : o == GRXFSIZ                       ? 0x0ff0
+		                   : o == GNPTXFSIZ                     ? 0x0ff00ff0
+		                   : o == GUID                          ? 0x2708a000
+		                   : o == HPTXFSIZ                      ? 0x0ff00ff0
+		                   : o == GDFIFOCFG                     ? 0x0ff00ff0
+		                   : o >= DIEPTXF1 && o < DIEPTXF1 + 60 ? 0x0ff00ff0
+		                                                        : 0);
 	}
 	for (size_t i = 0; i < n; i++)
 		wr(&s, regs[i].offset, 0);
@@ -303,7 +313,11 @@ static void test_stops(void)
 	} stops[] = {
 		{true, HCCHAR0, 4, CHENA, "a transfer with the port disabled"},
 		{true, GUSBCFG, 4, 1u << 30, "device mode"},
-		{false, 0x800, 4, 0, "is not emulated (device mode"},
+		{false, 0x804, 4, 0, "is not emulated (device mode"},
+		{true, 0x804, 4, 0, "is not emulated (device mode"},
+		{false, DIEPTXF1 + 4 * 15, 4, 0, "is not emulated (device mode"},
+		{true, DIEPTXF1 + 4 * 15, 4, 0, "is not emulated (device mode"},
+		{false, GDFIFOCFG + 4, 4, 0, "is not emulated (device mode"},
 		{false, 0x1000, 4, 0, "is not emulated (device mode"},
 		{false, HCCHAR0 + 0x20 * 8, 4, 0, "is not emulated (device mode"},
 		{false, HCCHAR0 + 0x18, 4, 0, "is not emulated (device mode"},

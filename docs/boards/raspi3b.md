@@ -611,6 +611,15 @@ transaction error when no device answers, as the drivers expect. Device
 mode, the data FIFOs, split transactions and isochronous endpoints stop
 the machine.
 
+The Raspberry Pi's own `dwc_otg` driver, which Raspberry Pi OS uses,
+reads a few registers of the dedicated FIFOs and of device mode in host
+mode too: `GDFIFOCFG`, the FIFO sizes of the IN endpoints `DIEPTXF1` to
+`DIEPTXF15`, and `DCFG`. They hold what software writes. Their reset
+values on the BCM2837 are not documented: smirror resets the FIFO ones
+like the other FIFO size registers, to `0x0ff00ff0` (both fields the
+depth that `GHWCFG3` gives), and `DCFG` to 0. The other registers of
+device mode stop the machine.
+
 The USB devices follow chapter 9 of the USB 2.0 specification (device
 states, control transfers, the standard requests), and the hub chapter
 11 (the hub descriptor and class requests, port power and a 10 ms port
