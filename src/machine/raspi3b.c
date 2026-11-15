@@ -20,6 +20,7 @@
 #include "cpu/arm64/cpu.h"
 #include "hw/char/bcm2835_aux.h"
 #include "hw/char/pl011.h"
+#include "hw/dma/bcm2835_dma.h"
 #include "hw/gpio/bcm2835_gpio.h"
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
@@ -188,6 +189,16 @@ static void reset_pm(void *ctx)
 static void destroy_pm(void *ctx)
 {
 	bcm2835_pm_destroy(ctx);
+}
+
+static void reset_dma(void *ctx)
+{
+	bcm2835_dma_reset(ctx);
+}
+
+static void destroy_dma(void *ctx)
+{
+	bcm2835_dma_destroy(ctx);
 }
 
 static void reset_cprman(void *ctx)
@@ -407,6 +418,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Cprman *cprman;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
+	Bcm2835Dma *dma;
+	IrqLine *dma_irqs[BCM2835_DMA_NUM_IRQS];
 	Bcm2835Emmc *emmc;
 	Dwc2 *usb;
 	UsbHub *hub;
@@ -606,11 +619,29 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		}
 		sd_card_power(sd_card, true);
 	}
+	/* The DMA channels' lines, GPU interrupts 16 to 27 (the device tree). */
+	for (unsigned i = 0; i < BCM2835_DMA_NUM_IRQS; i++)
+		dma_irqs[i] = bcm2835_ic_gpu_input(ic, BCM2835_IC_DMA0 + i);
+	dma = bcm2835_dma_create(m, dma_irqs);
+	if (dma == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, dma, reset_dma, destroy_dma)) {
+		bcm2835_dma_destroy(dma);
+		goto out_of_memory;
+	}
+	status = bcm2835_dma_map(dma, m->bus, "dma", RASPI3B_DMA_BASE,
+	                         RASPI3B_DMA15_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the DMA controller: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
 	sdhost = bcm2835_sdhost_create(
 		m, CORE_CLOCK_HZ,
 		&(Bcm2835SdhostSlot){
 			.card = sd_card, .connected = slot_connected, .ctx = gpio},
-		bcm2835_ic_gpu_input(ic, BCM2835_IC_SDHOST), NULL);
+		bcm2835_ic_gpu_input(ic, BCM2835_IC_SDHOST),
+		bcm2835_dma_dreq(dma, BCM2835_DMA_DREQ_SDHOST));
 	if (sdhost == NULL)
 		goto out_of_memory;
 	if (!machine_add_device(m, sdhost, reset_sdhost, destroy_sdhost)) {

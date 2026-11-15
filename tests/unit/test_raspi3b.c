@@ -19,6 +19,7 @@
 #include "machine/board.h"
 #include "machine/raspi3b.h"
 #include "test.h"
+#include "util/byteorder.h"
 #include "util/macros.h"
 
 /* Test files go to the current directory: the build tree under CTest. */
@@ -757,6 +758,63 @@ static void test_clock_manager(void)
 	remove(KERNEL);
 }
 
+/*
+ * The DMA controller at 0x3f007000: a copy through a bus alias of the
+ * RAM, whose end is GPU interrupt 16 for channel 0 and 27 for channel
+ * 11; channel 15 at 0x3fe05000.
+ */
+static void test_dma(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint32_t cb[8] = {0x111, 0xc0200000, 0x40300000, 8, 0, 0, 0, 0};
+	uint8_t bytes[32];
+	uint64_t v = 0;
+
+	for (unsigned i = 0; i < 8; i++)
+		store_le32(bytes + 4 * i, cb[i]);
+	CHECK_EQ(bus_write_block(m->bus, 0x100000, bytes, sizeof(bytes)), BUS_OK);
+	CHECK_EQ(bus_write_block(m->bus, 0x100020, bytes, sizeof(bytes)), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x200000, 8, 0x0123456789abcdefu), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f00b210, 4, 1u << 16 | 1u << 27), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007004, 4, 0xc0100000), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007000, 4, 1), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007b04, 4, 0x100020), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007b00, 4, 1), BUS_OK);
+	event_queue_run_until(&m->events, m->events.now + 1000);
+	CHECK_EQ(bus_read(m->bus, 0x300000, 8, &v), BUS_OK);
+	CHECK_EQ(v, 0x0123456789abcdefu);
+	CHECK_EQ(bus_read(m->bus, 0x3f00b204, 4, &v), BUS_OK); /* pending 1 */
+	CHECK_EQ(v, 1u << 16 | 1u << 27);
+	CHECK_EQ(bus_read(m->bus, 0x3f007b20, 4, &v), BUS_OK); /* LITE */
+	CHECK_EQ(v, 0x14000000);
+	CHECK_EQ(bus_read(m->bus, 0x3fe05020, 4, &v), BUS_OK); /* 15: full */
+	CHECK_EQ(v, 0x04000000);
+	CHECK_EQ(bus_read(m->bus, 0x3f007fe0, 4, &v), BUS_OK); /* INT_STATUS */
+	CHECK_EQ(v, 1u << 0 | 1u << 11);
+
+	/* SDHOST's DREQ is DREQ 13: a read waits for it. */
+	cb[0] = 13u << 16 | 1u << 10 | 1u << 4; /* PERMAP 13, SRC_DREQ */
+	cb[1] = 0x7e202040;                     /* SDDATA */
+	for (unsigned i = 0; i < 8; i++)
+		store_le32(bytes + 4 * i, cb[i]);
+	CHECK_EQ(bus_write_block(m->bus, 0x100040, bytes, sizeof(bytes)), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007204, 4, 0x100040), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f007200, 4, 1), BUS_OK);
+	event_queue_run_until(&m->events, m->events.now + 1000);
+	CHECK_EQ(bus_read(m->bus, 0x3f007200, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0x21); /* DREQ_STOPS_DMA, ACTIVE */
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+
+	/* A reset of the board resets the channels. */
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, 0x3f007200, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 static void test_reset_resets_uart(void)
 {
 	FILE *out;
@@ -974,6 +1032,7 @@ int main(void)
 	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_clock_manager);
+	RUN_TEST(test_dma);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);
 	RUN_TEST(test_reset_resets_uart);

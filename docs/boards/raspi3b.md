@@ -115,16 +115,18 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 |--------------|---------|----------------------------------------------------------|----------------------------|
 | `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
+| `0x3f007000` | 4 KB    | DMA controller, channels 0 to 14                         | Yes, but 2D and ignore     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
 | `0x3f100000` | 276 B   | Power manager: power domains, reset lines, watchdog      | The watchdog               |
 | `0x3f101000` | 8 KB    | Clock manager (CPRMAN): PLLs, clock generators           | What Linux's driver uses   |
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
-| `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes, but its DMA requests  |
+| `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes                        |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
 | `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host                  |
+| `0x3fe05000` | 256 B   | DMA channel 15                                           | Yes, but 2D and ignore     |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
 
 Accessing an address where nothing is modelled stops the machine with
@@ -567,7 +569,14 @@ length than `LONG` asks for ends with `CRC7_ERROR`. What the drivers do
 not show stops the machine: other offsets, accesses that are not
 32-bit, reading an empty FIFO or writing a full one, a command while
 another runs or, but for `CMD12`, while data moves, and bits the
-drivers never set. The DMA request (DREQ 13) is not modelled yet.
+drivers never set.
+
+Its DMA request, DREQ 13, is high on a read while the FIFO holds the
+read threshold of `SDEDM`, and on a write while it has room for the
+write threshold. It does not rise for the rest of a block: Linux's
+`bcm2835.c` reads the last words of a multi-block read itself, as "the
+block doesn't manage the FIFO DREQs properly", and smirror follows
+that.
 
 The firmware leaves SDHOST at its reset values, with the card in the
 idle state; drivers set it up again anyway.
@@ -755,6 +764,39 @@ rate of the UART, EMMC or VPU clock stops the machine, and so do the
 frequency counter (`CM_OSCCOUNT`, `CM_TCNTCTL`, `CM_TCNTCNT`) and the
 offsets Linux's driver does not use.
 
+## The DMA controller
+
+The DMA controller (BCM2835 ARM Peripherals, chapter 4) has 16
+channels: 0 to 14 at `0x3f007000`, `0x100` apart, with `INT_STATUS` at
+`0x3f007fe0` and `ENABLE` at `0x3f007ff0`, and 15 at `0x3fe05000`.
+Channels 7 to 14 are LITE engines, as their `DEBUG` register says: no
+2D mode and no ignore modes, a 16-bit length, half the bandwidth. Each
+channel loads a control block of 8 words from memory, moves
+`TXFR_LEN` bytes from `SOURCE_AD` to `DEST_AD`, sets `END`, and `INT`
+with `INTEN`, then goes on with `NEXTCONBK` until it is 0. With
+`SRC_DREQ` or `DEST_DREQ` it moves a 32-bit word each time it finds the
+DREQ of `PERMAP` high; SDHOST drives DREQ 13. The channels see the
+VideoCore's bus addresses: the peripherals at `0x7e000000` and the RAM
+in its four aliases. Their interrupts are those of the device tree,
+GPU interrupts 16 to 26 for channels 0 to 10 and 27 for 11 to 14;
+channel 15 has none there.
+
+The datasheet gives no rates, so smirror chooses: a 32-bit word in a
+cycle of the 250 MHz core clock, two for a LITE engine, and the time of
+8 words to load a control block. The data of a transfer that no DREQ
+paces moves at once, and the transfer ends after the time of its
+words. Bursts, wait cycles, the widths and the priorities change
+nothing else. `RESET` clears the channel; `ABORT` drops the transfer
+without `END` or `INT` and goes on with `NEXTCONBK`. What the datasheet
+leaves open stops the machine: 2D mode and the ignore modes, which
+Linux does not use, a transfer of 0 bytes, a 128-bit width on a side
+that does not increment, a control block that is not 256-bit aligned,
+a DREQ that no modelled peripheral drives, writes of the registers the
+control block loads and of `INT_STATUS`, a channel that `ENABLE` turns
+off, addresses where nothing is modelled or the VideoCore's part of the
+RAM (`0x3f000000` and up in each alias), and accesses that are not
+32-bit.
+
 ## Boot from the SD card
 
 On the real board, the VideoCore boots first: its boot ROM loads
@@ -931,8 +973,6 @@ to quit.
 - After a watchdog reset the firmware boots again at once: the time the
   real bootcode.bin and start.elf take is not modelled, as at power on.
   Only partition 0 boots; 63 halts.
-- SDHOST's DMA requests, which Linux uses, are not modelled yet, nor is
-  the DMA controller.
 - The WiFi chip behind the EMMC controller is not modelled. Full- and
   low-speed devices, which need the hub's transaction translators,
   cannot be attached yet.
@@ -998,6 +1038,10 @@ to quit.
 
 ## Sources
 
+- BCM2835 ARM Peripherals, chapter 4: the DMA controller. Linux's
+  [bcm2835-dma.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/dma/bcm2835-dma.c)
+  and [bcm2835.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/mmc/host/bcm2835.c):
+  how the channels are started and aborted, and SDHOST's DREQ.
 - BCM2835 ARM Peripherals, chapter 5: the EMMC controller's registers.
   Linux,
   [sdhci-iproc.c](https://github.com/torvalds/linux/blob/master/drivers/mmc/host/sdhci-iproc.c):

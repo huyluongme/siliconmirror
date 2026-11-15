@@ -31,6 +31,7 @@
 
 /* A GPU interrupt, from the table of section 7.5. */
 #define BCM2835_IC_USB 9     /* the USB controller (bcm283x.dtsi) */
+#define BCM2835_IC_DMA0 16   /* DMA channels 0 to 10, then 11 to 14 (27) */
 #define BCM2835_IC_AUX 29    /* the mini UART and the SPI masters */
 #define BCM2835_IC_GPIO0 49  /* GPIO bank 0; 50 and 51 for 1 and 2, 52 all */
 #define BCM2835_IC_SDHOST 56 /* the SD card controller */
