@@ -533,7 +533,7 @@ static void test_format(void)
 static void test_stops(void)
 {
 	Setup s;
-	uint32_t known[] = {sizeof(uint32_t[6]), 0, 0x00040001, 0, 0, 0};
+	uint32_t known[] = {sizeof(uint32_t[6]), 0, 0x00048010, 0, 0, 0};
 	uint32_t tag_code[] = {sizeof(uint32_t[7]), 0, 0x00010002, 4,
 	                       0x80000004,          0, 0};
 	uint32_t buf_code[] = {sizeof(uint32_t[3]), 1, 0};
@@ -545,7 +545,7 @@ static void test_stops(void)
 	uint32_t reply = 0x5a5a;
 
 	setup(&s);
-	send_stops(&s, known, ARRAY_SIZE(known), "tag 0x00040001 is not emulated");
+	send_stops(&s, known, ARRAY_SIZE(known), "tag 0x00048010 is not emulated");
 	send_stops(&s, tag_code, ARRAY_SIZE(tag_code),
 	           "a tag request code of 0x80000004 is not documented");
 	send_stops(&s, buf_code, ARRAY_SIZE(buf_code),
@@ -648,18 +648,707 @@ static void test_sdhost_clock(void)
 	teardown(&s);
 }
 
-/* No display is connected: its size is 0 by 0. */
-static void test_display(void)
+/* --- The display ---------------------------------------------------------- */
+
+#define FB_W 656 /* 720 by 480, less 32 pixels of overscan on each edge */
+#define FB_H 416
+#define VC_TOP 0x3f000000u  /* the VideoCore's memory, up to the peripherals */
+#define ARM_END 0x3b400000u /* 948 MB: the Arm's memory, 1024 MB less 76 */
+#define TAGS_MAX 300        /* words of tags in a buffer of the tests */
+
+/* Put tags, n words, in a buffer with its header and end tag. */
+static size_t wrap(uint32_t *buf, const uint32_t *tags, size_t n)
 {
+	CHECK(n + 3 <= TAGS_MAX);
+	buf[0] = (uint32_t)(4 * (n + 3));
+	buf[1] = 0;
+	memcpy(buf + 2, tags, 4 * n);
+	buf[n + 2] = 0;
+	return n + 3;
+}
+
+/* Send tags, n words, in a buffer. */
+static void send_tags(Setup *s, const uint32_t *tags, size_t n)
+{
+	uint32_t buf[TAGS_MAX];
+
+	send(s, buf, wrap(buf, tags, n));
+	CHECK_EQ(word(s, BUF + 4), OK);
+}
+
+/* Send tags that must stop the machine with message. */
+static void tags_stop(Setup *s, const uint32_t *tags, size_t n,
+                      const char *message)
+{
+	uint32_t buf[TAGS_MAX];
+
+	send_stops(s, buf, wrap(buf, tags, n), message);
+}
+
+/* Word i of the tags that send_tags sent. */
+static uint32_t at(Setup *s, unsigned i)
+{
+	return word(s, BUF + 8 + 4 * i);
+}
+
+/* The answer of one get tag of count words. */
+static void get(Setup *s, uint32_t tag, unsigned count, uint32_t *values)
+{
+	uint32_t tags[3 + 4] = {tag, 4 * count, 0};
+
+	CHECK(count <= 4);
+	send_tags(s, tags, 3 + count);
+	CHECK_EQ(at(s, 2), RESPONSE(4 * count));
+	for (unsigned i = 0; i < count; i++)
+		values[i] = at(s, 3 + i);
+}
+
+static uint32_t get1(Setup *s, uint32_t tag)
+{
+	uint32_t value;
+
+	get(s, tag, 1, &value);
+	return value;
+}
+
+/* Check the answer of Linux's GET_DISPLAY_SETTINGS for display 0. */
+static void check_settings(Setup *s, const uint32_t expected[10])
+{
+	uint32_t tags[3 + 16] = {0x00040014, 64, 4, 0};
+
+	for (unsigned i = 4; i < ARRAY_SIZE(tags); i++)
+		tags[i] = 0x5a5a5a5a;
+	send_tags(s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(at(s, 2), RESPONSE(40));
+	for (unsigned i = 0; i < 10; i++)
+		CHECK_EQ(at(s, 3 + i), expected[i]);
+	CHECK_EQ(at(s, 13), 0x5a5a5a5a);
+}
+
+/*
+ * The display at boot: composite NTSC, its frame buffer 656 by 416 of 16
+ * bits per pixel, not yet allocated; one display. The pixel order and
+ * the alpha mode at boot are not documented.
+ */
+static void test_display_boot(void)
+{
+	static const uint32_t settings[10] = {0,    FB_W, FB_H, 16, FB_W * 2,
+	                                      FB_W, FB_H, 0,    0,  0};
 	Setup s;
-	uint32_t buf[] = {sizeof(uint32_t[8]), 0, 0x00040003, 8, 0, 7, 7, 0};
+	uint32_t v[4];
 
 	setup(&s);
+	CHECK_EQ(get1(&s, 0x00040013), 1);
+	get(&s, 0x00040003, 2, v);
+	CHECK_EQ(v[0], FB_W);
+	CHECK_EQ(v[1], FB_H);
+	get(&s, 0x00040004, 2, v);
+	CHECK_EQ(v[0], FB_W);
+	CHECK_EQ(v[1], FB_H);
+	CHECK_EQ(get1(&s, 0x00040005), 16);
+	CHECK_EQ(get1(&s, 0x00040008), FB_W * 2);
+	get(&s, 0x00040009, 2, v);
+	CHECK_EQ(v[0], 0);
+	CHECK_EQ(v[1], 0);
+	get(&s, 0x0004000a, 4, v);
+	for (unsigned i = 0; i < 4; i++)
+		CHECK_EQ(v[i], 32);
+	check_settings(&s, settings);
+	tags_stop(&s, (const uint32_t[]){0x00040006, 4, 0, 0}, 4,
+	          "the pixel order at boot is not documented");
+	tags_stop(&s, (const uint32_t[]){0x00040007, 4, 0, 0}, 4,
+	          "the alpha mode at boot is not documented");
+	teardown(&s);
+}
+
+/*
+ * U-Boot 2026.07's bcm2835_set_video_params (arch/arm/mach-bcm283x/
+ * msg.c): its tags, whose request codes give the requests' lengths. The
+ * firmware allocates the buffer at the top of its memory.
+ */
+static void test_display_uboot(void)
+{
+	static const uint32_t tags[] = {
+		0x00048003, 8,  8,  FB_W,  FB_H,       /* 0: physical size */
+		0x00048004, 8,  8,  FB_W,  FB_H,       /* 5: virtual size */
+		0x00048005, 4,  4,  32,                /* 10: depth */
+		0x00048006, 4,  4,  1,                 /* 14: RGB */
+		0x00048007, 4,  4,  2,                 /* 18: alpha ignored */
+		0x00048009, 8,  8,  0,     0,          /* 22: virtual offset */
+		0x0004800a, 16, 16, 0,     0,    0, 0, /* 27: no overscan */
+		0x00040001, 8,  4,  0x100, 0,          /* 34: allocate */
+		0x00040008, 4,  0,  0,                 /* 39: pitch */
+	};
+	uint32_t size = FB_W * 4 * FB_H;
+	uint32_t base = 0xc0000000u | ((VC_TOP - size) & ~0xfffu);
+	const uint32_t settings[10] = {0,    FB_W, FB_H, 32, FB_W * 4,
+	                               FB_W, FB_H, 0,    0,  base};
+	Setup s;
+	uint32_t v[4];
+
+	setup(&s);
+	send_tags(&s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(base, 0xfeef5000u);
+	CHECK_EQ(at(&s, 2), RESPONSE(8));
+	CHECK_EQ(at(&s, 3), FB_W);
+	CHECK_EQ(at(&s, 4), FB_H);
+	CHECK_EQ(at(&s, 7), RESPONSE(8));
+	CHECK_EQ(at(&s, 8), FB_W);
+	CHECK_EQ(at(&s, 9), FB_H);
+	CHECK_EQ(at(&s, 12), RESPONSE(4));
+	CHECK_EQ(at(&s, 13), 32);
+	CHECK_EQ(at(&s, 16), RESPONSE(4));
+	CHECK_EQ(at(&s, 17), 1);
+	CHECK_EQ(at(&s, 20), RESPONSE(4));
+	CHECK_EQ(at(&s, 21), 2);
+	CHECK_EQ(at(&s, 24), RESPONSE(8));
+	CHECK_EQ(at(&s, 25), 0);
+	CHECK_EQ(at(&s, 26), 0);
+	CHECK_EQ(at(&s, 29), RESPONSE(16));
+	for (unsigned i = 30; i < 34; i++)
+		CHECK_EQ(at(&s, i), 0);
+	CHECK_EQ(at(&s, 36), RESPONSE(8));
+	CHECK_EQ(at(&s, 37), base);
+	CHECK_EQ(at(&s, 38), size);
+	CHECK_EQ(at(&s, 41), RESPONSE(4));
+	CHECK_EQ(at(&s, 42), FB_W * 4);
+
+	CHECK_EQ(get1(&s, 0x00040006), 1);
+	CHECK_EQ(get1(&s, 0x00040007), 2);
+	get(&s, 0x0004000a, 4, v);
+	for (unsigned i = 0; i < 4; i++)
+		CHECK_EQ(v[i], 0);
+	check_settings(&s, settings);
+
+	/* The board starts again: the display is as at boot. */
+	raspi3b_property_reset(s.p);
+	CHECK_EQ(get1(&s, 0x00040005), 16);
+	CHECK_EQ(get1(&s, 0x00040008), FB_W * 2);
+	get(&s, 0x0004000a, 4, v);
+	CHECK_EQ(v[0], 32);
+	tags_stop(&s, (const uint32_t[]){0x00040006, 4, 0, 0}, 4,
+	          "the pixel order at boot is not documented");
+	teardown(&s);
+}
+
+/*
+ * Linux's bcm2708_fb at commit cff533a: the display to act on, then a
+ * buffer of the Arm's own; the old way when the firmware would not take
+ * it.
+ */
+static void test_display_linux(void)
+{
+	uint32_t size = FB_W * FB_H * 2;
+	uint32_t vc = 0xc0000000u | ((VC_TOP - size) & ~0xfffu);
+	uint32_t tags[] = {
+		0x00048003, 8, 0, FB_W,        FB_H, /* 0 */
+		0x00048004, 8, 0, FB_W,        FB_H, /* 5 */
+		0x00048005, 4, 0, 16,                /* 10 */
+		0x00048009, 8, 0, 0,           0,    /* 14 */
+		0x00040001, 8, 0, 0xc0100000u, size, /* 19 */
+		0x00048008, 4, 0, FB_W * 2,          /* 24 */
+	};
+	Setup s;
+
+	setup(&s);
+	send_tags(&s, (const uint32_t[]){0x00048013, 4, 0, 0}, 4);
+	CHECK_EQ(at(&s, 2), RESPONSE(4));
+	CHECK_EQ(at(&s, 3), 0);
+
+	send_tags(&s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(at(&s, 21), RESPONSE(8));
+	CHECK_EQ(at(&s, 22), 0xc0100000u);
+	CHECK_EQ(at(&s, 23), size);
+	CHECK_EQ(at(&s, 26), RESPONSE(4));
+	CHECK_EQ(at(&s, 27), FB_W * 2);
+	check_settings(&s, (const uint32_t[10]){0, FB_W, FB_H, 16, FB_W * 2, FB_W,
+	                                        FB_H, 0, 0, 0xc0100000u});
+
+	/* The old way: the firmware allocates, Linux asks for the pitch. */
+	tags[22] = 0;
+	tags[23] = 0;
+	tags[24] = 0x00040008;
+	tags[27] = 0;
+	send_tags(&s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(at(&s, 22), vc);
+	CHECK_EQ(at(&s, 23), size);
+	CHECK_EQ(at(&s, 27), FB_W * 2);
+	CHECK_EQ(vc, 0xfef7a000u);
+
+	/* A buffer of the Arm's: any alias, up to the end of its memory. */
+	tags[22] = ARM_END - size;
+	tags[23] = size;
+	send_tags(&s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(at(&s, 22), ARM_END - size);
+	CHECK_EQ(at(&s, 23), size);
+	tags[23] = size + 1;
+	tags_stop(&s, tags, ARRAY_SIZE(tags),
+	          "a frame buffer of 545793 bytes at 0x3b37ac00 is not emulated: "
+	          "it must hold 545792 bytes, in the Arm's memory");
+	tags[22] = 0xc0000000u | ARM_END;
+	tags[23] = 1;
+	tags_stop(&s, tags, ARRAY_SIZE(tags), "1 bytes at 0xfb400000 is not");
+	tags[22] = ARM_END + 1;
+	tags[23] = size;
+	tags_stop(&s, tags, ARRAY_SIZE(tags), "at 0x3b400001 is not emulated");
+	tags[22] = 0x00100000;
+	tags[23] = size - 1;
+	tags_stop(&s, tags, ARRAY_SIZE(tags), "at 0x00100000 is not emulated");
+	teardown(&s);
+}
+
+/* Blank the screen, and the palette: only their answers. */
+static void test_display_blank_palette(void)
+{
+	static const struct {
+		uint32_t offset, length, answer; /* 0: valid */
+	} palettes[] = {
+		{0, 1, 0},           {0, 256, 0},         {255, 1, 0}, {255, 2, 1},
+		{256, 1, 1},         {0, 0, 1},           {0, 257, 1}, {1, 256, 1},
+		{0xffffffffu, 2, 1}, {2, 0xffffffffu, 1},
+	};
+	Setup s;
+
+	setup(&s);
+	for (uint32_t state = 0; state <= 1; state++) {
+		send_tags(&s, (const uint32_t[]){0x00040002, 4, 4, state}, 4);
+		CHECK_EQ(at(&s, 2), RESPONSE(4));
+		CHECK_EQ(at(&s, 3), state);
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(palettes); i++) {
+		uint32_t tags[5 + 256] = {0x0004800b, 8, 0, palettes[i].offset,
+		                          palettes[i].length};
+		size_t n = 5;
+
+		/* A valid palette needs its values; an invalid one does not. */
+		if (palettes[i].answer == 0) {
+			tags[1] = 4 * (2 + palettes[i].length);
+			n += palettes[i].length;
+		}
+		send_tags(&s, tags, n);
+		CHECK_EQ(at(&s, 2), RESPONSE(4));
+		CHECK_EQ(at(&s, 3), palettes[i].answer);
+	}
+	tags_stop(&s, (const uint32_t[]){0x0004800b, 8, 0, 0, 1}, 5,
+	          "tag 0x0004800b: a value buffer too short");
+	teardown(&s);
+}
+
+/*
+ * The wiki: the tags of a buffer are one operation. Get tags are
+ * answered after the set tags; test tags change nothing; without an
+ * allocation, settings that need a larger buffer change nothing.
+ */
+static void test_display_operation(void)
+{
+	Setup s;
+	uint32_t v[2];
+
+	setup(&s);
+	/* Get after set, and the pitch of the new depth. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00040005, 4, 0, 0, 0x00040008, 4, 0, 0,
+	                             0x00048005, 4, 4, 32},
+	          12);
+	CHECK_EQ(at(&s, 3), 32);
+	CHECK_EQ(at(&s, 7), FB_W * 4);
+	CHECK_EQ(at(&s, 11), 32);
+
+	/* Tests answer, in combination with the settings, and change nothing. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00044003, 8, 8, 800, 600, 0x00044004, 8, 8,
+	                             800, 600, 0x00044005, 4, 4, 8},
+	          14);
+	CHECK_EQ(at(&s, 2), RESPONSE(8));
+	CHECK_EQ(at(&s, 3), 800);
+	CHECK_EQ(at(&s, 4), 600);
+	CHECK_EQ(at(&s, 13), 8);
+	get(&s, 0x00040003, 2, v);
+	CHECK_EQ(v[0], FB_W);
+	CHECK_EQ(get1(&s, 0x00040005), 32);
+	tags_stop(&s, (const uint32_t[]){0x00044003, 8, 8, 800, 600}, 5,
+	          "a virtual offset of (0, 0) is not emulated: the display "
+	          "leaves the buffer");
+
+	/* Other tags among them are answered too. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00048005, 4, 4, 16, 0x00010002, 4, 0, 0,
+	                             0x00040008, 4, 0, 0},
+	          12);
+	CHECK_EQ(at(&s, 7), RASPI3B_BOARD_REVISION);
+	CHECK_EQ(at(&s, 11), FB_W * 2);
+
+	/* A buffer of 656 by 416 by 2: 32 bits need a larger one. */
+	send_tags(&s, (const uint32_t[]){0x00040001, 8, 4, 0, 0}, 5);
+	CHECK_EQ(at(&s, 3), 0xfef7a000u);
+	send_tags(&s,
+	          (const uint32_t[]){0x00048005, 4, 4, 32, 0x00048009, 8, 8, 0, 0},
+	          9);
+	CHECK_EQ(at(&s, 2), RESPONSE(4));
+	CHECK_EQ(at(&s, 3), 16);
+	CHECK_EQ(get1(&s, 0x00040005), 16);
+	/* 8 bits fit in it. */
+	send_tags(&s, (const uint32_t[]){0x00048005, 4, 4, 8}, 4);
+	CHECK_EQ(at(&s, 3), 8);
+	CHECK_EQ(get1(&s, 0x00040008), FB_W);
+	CHECK_EQ(get1(&s, 0x00040005), 8);
+	/* So does a buffer of the same size: 16 bits again. */
+	send_tags(&s, (const uint32_t[]){0x00048005, 4, 4, 16}, 4);
+	CHECK_EQ(at(&s, 3), 16);
+
+	/* An alignment that is not a power of 2: the buffer stays. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00048005, 4, 4, 32, 0x00040001, 8, 4, 3, 0},
+	          9);
+	CHECK_EQ(at(&s, 3), 16);
+	CHECK_EQ(at(&s, 7), 0xfef7a000u);
+	CHECK_EQ(at(&s, 8), FB_W * FB_H * 2);
+
+	/* Released: no buffer, and settings change without one. */
+	send_tags(&s, (const uint32_t[]){0x00048001, 0, 0}, 3);
+	CHECK_EQ(at(&s, 2), RESPONSE(0));
+	check_settings(&s, (const uint32_t[10]){0, FB_W, FB_H, 16, FB_W * 2, FB_W,
+	                                        FB_H, 0, 0, 0});
+	send_tags(&s,
+	          (const uint32_t[]){0x00048005, 4, 4, 32, 0x00040001, 8, 4, 6, 0},
+	          9);
+	CHECK_EQ(at(&s, 3), 32);
+	CHECK_EQ(at(&s, 7), 0);
+	CHECK_EQ(at(&s, 8), 0);
+	teardown(&s);
+}
+
+/* Where the firmware puts its buffer, for alignments and memory splits. */
+static void test_display_allocate(void)
+{
+	static const struct {
+		uint32_t total_mb, gpu_mb, align, base;
+	} cases[] = {
+		{1024, 76, 0, 0xfef7a000u},         {1024, 76, 1, 0xfef7a000u},
+		{1024, 76, 0x1000, 0xfef7a000u},    {1024, 76, 0x2000, 0xfef7a000u},
+		{1024, 76, 0x4000, 0xfef78000u},    {1024, 76, 0x100000, 0xfef00000u},
+		{1024, 76, 0x2000000, 0xfe000000u}, {1024, 76, 0x4000000, 0xfc000000u},
+		{512, 64, 0, 0xdff7a000u},          {1024, 17, 0, 0xfef7a000u},
+		{32, 32, 0, 0xc1f7a000u},
+	};
+	uint32_t size = FB_W * FB_H * 2;
+	Setup s;
+
+	setup(&s);
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		CHECK(raspi3b_property_configure(
+			s.p, &(Raspi3bVcSettings){.total_mem_mb = cases[i].total_mb,
+		                              .gpu_mem_mb = cases[i].gpu_mb,
+		                              .cmdline = ""}));
+		send_tags(&s, (const uint32_t[]){0x00040001, 8, 4, cases[i].align, 0},
+		          5);
+		CHECK_EQ(at(&s, 3), cases[i].base);
+		CHECK_EQ(at(&s, 4), size);
+	}
+	CHECK(raspi3b_property_configure(
+		s.p, &(Raspi3bVcSettings){
+				 .total_mem_mb = 1024, .gpu_mem_mb = 76, .cmdline = ""}));
+	/* A value buffer of one word: the next tag is no size. */
+	send_tags(&s, (const uint32_t[]){0x00040001, 4, 4, 0, 0x00040013, 4, 0, 0},
+	          8);
+	CHECK_EQ(at(&s, 2), RESPONSE(8));
+	CHECK_EQ(at(&s, 3), 0xfef7a000u);
+	CHECK_EQ(at(&s, 4), 0x00040013);
+	CHECK_EQ(at(&s, 7), 1);
+
+	tags_stop(&s, (const uint32_t[]){0x00040001, 8, 4, 0x80000000u, 0}, 5,
+	          "a frame buffer of 545792 bytes is not emulated: it does not "
+	          "fit in the VideoCore's memory");
+	tags_stop(&s, (const uint32_t[]){0x00040001, 8, 4, 0x08000000u, 0}, 5,
+	          "does not fit");
+	CHECK(raspi3b_property_configure(
+		s.p, &(Raspi3bVcSettings){
+				 .total_mem_mb = 1024, .gpu_mem_mb = 16, .cmdline = ""}));
+	tags_stop(&s, (const uint32_t[]){0x00040001, 8, 4, 0, 0}, 5,
+	          "does not fit");
+	/* 32 MB, all the VideoCore's: 64 MB do not fit. */
+	CHECK(raspi3b_property_configure(
+		s.p, &(Raspi3bVcSettings){
+				 .total_mem_mb = 32, .gpu_mem_mb = 32, .cmdline = ""}));
+	tags_stop(&s,
+	          (const uint32_t[]){0x00048003, 8, 8, 4096, 4096, 0x00048004, 8, 8,
+	                             4096, 4096, 0x00048005, 4, 4, 32, 0x00040001,
+	                             8, 4, 0, 0},
+	          19, "a frame buffer of 67108864 bytes is not emulated");
+	/* 4096 by 4096 at 32 bits: 64 MB, more than the VideoCore's memory. */
+	CHECK(raspi3b_property_configure(
+		s.p, &(Raspi3bVcSettings){
+				 .total_mem_mb = 1024, .gpu_mem_mb = 76, .cmdline = ""}));
+	tags_stop(&s,
+	          (const uint32_t[]){0x00048003, 8, 8, 4096, 4096, 0x00048004, 8, 8,
+	                             4096, 4096, 0x00048005, 4, 4, 32, 0x00040001,
+	                             8, 4, 0, 0},
+	          19, "a frame buffer of 67108864 bytes is not emulated");
+	/* At 8 bits, 16 MB: it fits. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00048003, 8, 8, 4096, 4096, 0x00048004, 8, 8,
+	                             4096, 4096, 0x00048005, 4, 4, 8, 0x00040001, 8,
+	                             4, 0, 0},
+	          19);
+	CHECK_EQ(at(&s, 17), 0xfe000000u);
+	CHECK_EQ(at(&s, 18), 4096 * 4096);
+	teardown(&s);
+}
+
+/* Every test tag, and depths of 24 bits. */
+static void test_display_tests(void)
+{
+	static const uint32_t tags[] = {
+		0x00044003, 8,  8,  FB_W, FB_H,       /* 0 */
+		0x00044004, 8,  8,  FB_W, FB_H,       /* 5 */
+		0x00044005, 4,  4,  24,               /* 10 */
+		0x00044006, 4,  4,  0,                /* 14 */
+		0x00044007, 4,  4,  1,                /* 18 */
+		0x00044009, 8,  8,  0,    0,          /* 22 */
+		0x0004400a, 16, 16, 1,    2,    3, 4, /* 27 */
+	};
+	Setup s;
+	uint32_t v[4];
+
+	setup(&s);
+	send_tags(&s, tags, ARRAY_SIZE(tags));
+	CHECK_EQ(at(&s, 3), FB_W);
+	CHECK_EQ(at(&s, 8), FB_W);
+	CHECK_EQ(at(&s, 13), 24);
+	CHECK_EQ(at(&s, 16), RESPONSE(4));
+	CHECK_EQ(at(&s, 17), 0);
+	CHECK_EQ(at(&s, 20), RESPONSE(4));
+	CHECK_EQ(at(&s, 21), 1);
+	CHECK_EQ(at(&s, 24), RESPONSE(8));
+	CHECK_EQ(at(&s, 29), RESPONSE(16));
+	CHECK_EQ(at(&s, 33), 4);
+	CHECK_EQ(get1(&s, 0x00040005), 16);
+	get(&s, 0x0004000a, 4, v);
+	CHECK_EQ(v[3], 32);
+
+	send_tags(&s,
+	          (const uint32_t[]){0x00048005, 4, 4, 24, 0x00040001, 8, 4, 0, 0,
+	                             0x00040008, 4, 0, 0},
+	          13);
+	CHECK_EQ(at(&s, 3), 24);
+	CHECK_EQ(at(&s, 8), FB_W * 3 * FB_H);
+	CHECK_EQ(at(&s, 12), FB_W * 3);
+	teardown(&s);
+}
+
+/* The pitch that Linux sets, and the pitch of a new virtual width. */
+static void test_display_pitch(void)
+{
+	Setup s;
+	uint32_t vc = 0xc0000000u | ((VC_TOP - 16384 * FB_H) & ~0xfffu);
+
+	setup(&s);
+	send_tags(
+		&s, (const uint32_t[]){0x00048008, 4, 4, 16384, 0x00040001, 8, 4, 0, 0},
+		9);
+	CHECK_EQ(at(&s, 3), 16384);
+	CHECK_EQ(at(&s, 7), vc);
+	CHECK_EQ(at(&s, 8), 16384 * FB_H);
+	/* Other settings keep it. */
+	send_tags(&s, (const uint32_t[]){0x00048006, 4, 4, 1}, 4);
+	CHECK_EQ(get1(&s, 0x00040008), 16384);
+	/* A new virtual width, of the same depth: a line of its pixels. */
+	send_tags(
+		&s,
+		(const uint32_t[]){0x00048004, 8, 8, 700, FB_H, 0x00040001, 8, 4, 0, 0},
+		10);
+	CHECK_EQ(get1(&s, 0x00040008), 1400);
+	teardown(&s);
+}
+
+/*
+ * A buffer that leaves the display at an offset; buffers that end where
+ * they must; an odd size. The board starts again with the boot display.
+ */
+static void test_display_offset(void)
+{
+	static const uint32_t boot[10] = {0,    FB_W, FB_H, 16, FB_W * 2,
+	                                  FB_W, FB_H, 0,    0,  0};
+	uint32_t base = 0xc0000000u | ((VC_TOP - 1400 * 450) & ~0xfffu);
+	Setup s;
+
+	setup(&s);
+	send_tags(&s,
+	          (const uint32_t[]){0x00048004, 8, 8, 700, 450, 0x00048009, 8, 8,
+	                             3, 4, 0x00040001, 8, 4, 0, 0},
+	          15);
+	CHECK_EQ(at(&s, 8), 3);
+	CHECK_EQ(at(&s, 9), 4);
+	check_settings(&s, (const uint32_t[10]){0, FB_W, FB_H, 16, 1400, 700, 450,
+	                                        3, 4, base});
+	raspi3b_property_reset(s.p);
+	check_settings(&s, boot);
+
+	/* 4096 by 3840 by 4: 60 MB, all the VideoCore's memory. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00048003, 8, 8, 4096, 3840, 0x00048004, 8, 8,
+	                             4096, 3840, 0x00048005, 4, 4, 32, 0x00040001,
+	                             8, 4, 0, 0},
+	          19);
+	CHECK_EQ(at(&s, 17), 0xc0000000u | ARM_END);
+	CHECK_EQ(at(&s, 18), VC_TOP - ARM_END);
+
+	/* 655 by 415 by 1: an odd size, the base still aligned. */
+	send_tags(&s,
+	          (const uint32_t[]){0x00048003, 8, 8, 655, 415, 0x00048004, 8, 8,
+	                             655, 415, 0x00048005, 4, 4, 8, 0x00040001, 8,
+	                             4, 0, 0},
+	          19);
+	CHECK_EQ(at(&s, 17), 0xfefbd000u);
+	CHECK_EQ(at(&s, 18), 655 * 415);
+	send_tags(&s, (const uint32_t[]){0x00040001, 8, 4, 0x100000, 0}, 5);
+	CHECK_EQ(at(&s, 3), 0xfef00000u);
+	teardown(&s);
+}
+
+/* What tells an alignment from a buffer of the Arm's. */
+static void test_display_alignment(void)
+{
+	Setup s;
+
+	setup(&s);
+	/* A value buffer of 7 bytes: one word of request, no size. */
+	send_tags(&s, (const uint32_t[]){0x00040001, 7, 4, 3, 0x1234}, 5);
+	CHECK_EQ(at(&s, 2), RESPONSE(8));
+	CHECK_EQ(at(&s, 3), 0);
+	/* The word after the request is another tag's. */
+	send_tags(
+		&s, (const uint32_t[]){0x00040001, 8, 4, 3, 0, 0x00040013, 4, 0, 0}, 9);
+	CHECK_EQ(at(&s, 3), 0);
+	CHECK_EQ(at(&s, 4), 0);
+	CHECK_EQ(at(&s, 8), 1);
+	/* 7 bytes again, and an alignment: the firmware allocates. */
+	send_tags(&s, (const uint32_t[]){0x00040001, 7, 4, 0, 0x1234}, 5);
+	CHECK_EQ(at(&s, 3), 0xfef7a000u);
+	teardown(&s);
+}
+
+/* What nothing documents stops the machine. */
+static void test_display_stops(void)
+{
+	static const struct {
+		uint32_t words[12];
+		size_t n;
+		const char *message;
+	} stops[] = {
+		{{0x00048003, 8, 8, 0, FB_H},
+	     5,
+	     "a frame buffer of 0 by 416, 656 by 416 virtual, is not emulated"},
+		{{0x00048003, 8, 8, FB_W, 0}, 5, "of 656 by 0, 656 by 416 virtual"},
+		{{0x00048004, 8, 8, 0, FB_H}, 5, "of 656 by 416, 0 by 416 virtual"},
+		{{0x00048004, 8, 8, FB_W, 0}, 5, "of 656 by 416, 656 by 0 virtual"},
+		{{0x00048004, 8, 8, 4097, FB_H}, 5, "656 by 416, 4097 by 416 virtual"},
+		{{0x00048004, 8, 8, FB_W, 4097}, 5, "656 by 416, 656 by 4097 virtual"},
+		{{0x00048005, 4, 4, 0}, 4, "a depth of 0 bits per pixel is not"},
+		{{0x00048005, 4, 4, 15}, 4, "a depth of 15 bits"},
+		{{0x00048005, 4, 4, 33}, 4, "a depth of 33 bits"},
+		{{0x00048005, 4, 4, 4}, 4, "a depth of 4 bits"},
+		{{0x00048006, 4, 4, 2}, 4, "pixel order 2 is not in the wiki"},
+		{{0x00048006, 4, 4, 0xfffffffe}, 4, "pixel order 4294967294 is not"},
+		{{0x00048007, 4, 4, 3}, 4, "alpha mode 3 is not in the wiki"},
+		{{0x00048009, 8, 8, 1, 0},
+	     5,
+	     "a virtual offset of (1, 0) is not emulated: the display leaves "
+	     "the buffer"},
+		{{0x00048009, 8, 8, 0, 1}, 5, "a virtual offset of (0, 1)"},
+		{{0x00048003, 8, 8, FB_W + 1, FB_H}, 5, "a virtual offset of (0, 0)"},
+		{{0x00048003, 8, 8, FB_W, FB_H + 1}, 5, "a virtual offset of (0, 0)"},
+		{{0x00048004, 8, 8, FB_W + 1, FB_H, 0x00048009, 8, 8, 2, 0},
+	     10,
+	     "a virtual offset of (2, 0)"},
+		{{0x00048004, 8, 8, FB_W, FB_H + 1, 0x00048009, 8, 8, 0, 2},
+	     10,
+	     "a virtual offset of (0, 2)"},
+		{{0x0004800a, 16, 16, 240, 240, 0, 0},
+	     7,
+	     "an overscan of 240, 240, 0, 0 is not emulated: nothing is left of "
+	     "the display"},
+		{{0x0004800a, 16, 16, 0, 0, 360, 360}, 7, "an overscan of 0, 0, 360"},
+		{{0x0004800a, 16, 16, 0xffffffffu, 2, 0, 0}, 7, "an overscan of 4294"},
+		{{0x0004800a, 16, 16, 0, 0, 2, 0xffffffffu},
+	     7,
+	     "an overscan of 0, 0, 2"},
+		{{0x00048008, 4, 4, FB_W * 2 - 1},
+	     4,
+	     "a pitch of 1311 bytes is not emulated"},
+		{{0x00048008, 4, 4, 16385}, 4, "a pitch of 16385 bytes"},
+		{{0x00040002, 4, 4, 2}, 4, "blank state 0x2: reserved bits are set"},
+		{{0x00040014, 4, 4, 1},
+	     4,
+	     "tag 0x00040014: display 1 is not emulated: smirror has one "
+	     "display, 0"},
+		{{0x00048013, 4, 4, 1}, 4, "tag 0x00048013: display 1 is not"},
+		{{0x00048003, 4, 4, 1},
+	     4,
+	     "tag 0x00048003: a value buffer too short for the request"},
+		{{0x0004800a, 12, 12, 0, 0, 0}, 6, "tag 0x0004800a: a value buffer"},
+		{{0x00044005, 0, 0}, 3, "tag 0x00044005: a value buffer"},
+		{{0x00040002, 0, 0}, 3, "tag 0x00040002: a value buffer"},
+		{{0x0004800b, 4, 4, 0}, 4, "tag 0x0004800b: a value buffer"},
+		{{0x0004800b, 12, 12, 0, 2, 0}, 6, "tag 0x0004800b: a value buffer"},
+		{{0x00040001, 0, 0}, 3, "tag 0x00040001: a value buffer"},
+		{{0x00040014, 0, 0}, 3, "tag 0x00040014: a value buffer"},
+		{{0x00048013, 0, 0}, 3, "tag 0x00048013: a value buffer"},
+		{{0x00048003, 7, 7, FB_W, FB_H}, 5, "tag 0x00048003: a value buffer"},
+		{{0x00040002, 3, 3, 0}, 4, "tag 0x00040002: a value buffer"},
+		{{0x0004800b, 7, 7, 0, 0}, 5, "tag 0x0004800b: a value buffer"},
+		{{0x00040001, 3, 3, 0}, 4, "tag 0x00040001: a value buffer"},
+		{{0x00040014, 3, 3, 0}, 4, "tag 0x00040014: a value buffer"},
+		{{0x00048013, 3, 3, 0}, 4, "tag 0x00048013: a value buffer"},
+		{{0x00040013, 4, 0, 0, 0x00040005, 4, 0, 0, 0x00040005, 4, 0, 0},
+	     12,
+	     "tag 0x00040005 twice in a buffer"},
+		{{0x00040005, 4, 0, 0, 0x00040005, 4, 0, 0},
+	     8,
+	     "tag 0x00040005 twice in a buffer is not emulated"},
+		{{0x00044005, 4, 4, 8, 0x00040005, 4, 0, 0},
+	     8,
+	     "test tags with get or set tags in a buffer are not emulated"},
+		{{0x00040013, 4, 0, 0, 0x00044005, 4, 4, 8}, 8, "test tags with get"},
+		{{0x00040001, 8, 4, 0, 0, 0x00048001, 0, 0},
+	     8,
+	     "allocating and releasing the frame buffer at once is not emulated"},
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(stops); i++) {
+		Setup s;
+
+		setup(&s);
+		tags_stop(&s, stops[i].words, stops[i].n, stops[i].message);
+		/* Nothing changed. */
+		CHECK_EQ(get1(&s, 0x00040005), 16);
+		CHECK_EQ(get1(&s, 0x00040008), FB_W * 2);
+		teardown(&s);
+	}
+}
+
+/* Many tags, a buffer without an end tag. */
+static void test_display_limits(void)
+{
+	uint32_t tags[4 * 33];
+	uint32_t buf[] = {sizeof(uint32_t[7]), 0, 0x00048005, 4, 4, 32, 0x12345};
+	Setup s;
+
+	setup(&s);
+	for (unsigned i = 0; i < 33; i++) {
+		tags[4 * i] = 0x00040003 + (i % 8);
+		tags[4 * i + 1] = 4;
+		tags[4 * i + 2] = 0;
+		tags[4 * i + 3] = 0;
+	}
+	tags_stop(&s, tags, ARRAY_SIZE(tags),
+	          "more than 32 frame buffer tags in a buffer are not emulated");
+	tags_stop(&s, tags, 4 * 32, "tag 0x00040003 twice in a buffer");
+
 	send(&s, buf, ARRAY_SIZE(buf));
-	CHECK_EQ(word(&s, BUF + 4), OK);
-	CHECK_EQ(word(&s, BUF + 16), RESPONSE(8));
-	CHECK_EQ(word(&s, BUF + 20), 0);
-	CHECK_EQ(word(&s, BUF + 24), 0);
+	CHECK_EQ(word(&s, BUF + 4), PARSE_ERROR);
+	CHECK_EQ(word(&s, BUF + 16), 4);
+	CHECK_EQ(get1(&s, 0x00040005), 16);
 	teardown(&s);
 }
 
@@ -922,24 +1611,79 @@ static void test_known_tags(void)
 		0x00030003, 0x00030004, 0x00030005, 0x00030006, 0x00030007, 0x00030008,
 		0x00030009, 0x0003000a, 0x0003000b, 0x0003000c, 0x0003000d, 0x0003000e,
 		0x0003000f, 0x00030010, 0x00030011, 0x00030012, 0x00030014, 0x00030020,
-		0x00030021, 0x00030030, 0x00030041, 0x00030043, 0x00030045, 0x00030046,
-		0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058, 0x00030066,
-		0x00030087, 0x00034041, 0x00038001, 0x00038002, 0x00038003, 0x00038009,
-		0x00038021, 0x00038030, 0x00038041, 0x00038042, 0x00038043, 0x00038045,
-		0x00038087, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
+		0x00030021, 0x00030023, 0x00030030, 0x00030041, 0x00030043, 0x00030045,
+		0x00030046, 0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058,
+		0x00030064, 0x00030066, 0x00030087, 0x0003008a, 0x00034041, 0x00038001,
+		0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030, 0x00038041,
+		0x00038042, 0x00038043, 0x00038045, 0x00038049, 0x00038064, 0x00038087,
+		0x0003808a, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
 		0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a, 0x0004000b,
-		0x0004000f, 0x00040010, 0x00044003, 0x00044004, 0x00044005, 0x00044006,
-		0x00044007, 0x00044009, 0x0004400a, 0x0004400b, 0x0004400e, 0x00048001,
-		0x00048003, 0x00048004, 0x00048005, 0x00048006, 0x00048007, 0x00048009,
-		0x0004800a, 0x0004800b, 0x0004800e, 0x0004800f, 0x00048010, 0x0004801f,
-		0x00048020, 0x00050001, 0x00060001,
+		0x0004000c, 0x0004000d, 0x0004000e, 0x0004000f, 0x00040010, 0x00040013,
+		0x00040014, 0x00040016, 0x00040017, 0x00040018, 0x00044003, 0x00044004,
+		0x00044005, 0x00044006, 0x00044007, 0x00044009, 0x0004400a, 0x0004400b,
+		0x0004400c, 0x0004400d, 0x0004400e, 0x00048001, 0x00048003, 0x00048004,
+		0x00048005, 0x00048006, 0x00048007, 0x00048008, 0x00048009, 0x0004800a,
+		0x0004800b, 0x0004800c, 0x0004800d, 0x0004800e, 0x0004800f, 0x00048010,
+		0x00048013, 0x00048015, 0x00048017, 0x00048019, 0x0004801f, 0x00048020,
+		0x00050001, 0x00060001,
 	};
 	static const uint32_t answered[] = {
-		0x00000001, 0x00000002, 0x00000003, 0x00030046, 0x00048020, 0x00030041,
-		0x00038041, 0x00030043, 0x00038043, 0x00010002, 0x00010003, 0x00010004,
-		0x00010005, 0x00010006, 0x00020001, 0x00020002, 0x00028001, 0x00030002,
-		0x00030004, 0x00030007, 0x00030009, 0x00038002, 0x00038009, 0x00038042,
-		0x00040003, 0x00050001,
+		0x00000001,
+		0x00000002,
+		0x00000003,
+		0x00030046,
+		0x00048020,
+		0x00030041,
+		0x00038041,
+		0x00030043,
+		0x00038043,
+		0x00010002,
+		0x00010003,
+		0x00010004,
+		0x00010005,
+		0x00010006,
+		0x00020001,
+		0x00020002,
+		0x00028001,
+		0x00030002,
+		0x00030004,
+		0x00030007,
+		0x00030009,
+		0x00038002,
+		0x00038009,
+		0x00038042,
+		0x00050001,
+		/* The frame buffer's. */
+		0x00040001,
+		0x00040002,
+		0x00040003,
+		0x00040004,
+		0x00040005,
+		0x00040006,
+		0x00040007,
+		0x00040008,
+		0x00040009,
+		0x0004000a,
+		0x00040013,
+		0x00040014,
+		0x00044003,
+		0x00044004,
+		0x00044005,
+		0x00044006,
+		0x00044007,
+		0x00044009,
+		0x0004400a,
+		0x00048001,
+		0x00048003,
+		0x00048004,
+		0x00048005,
+		0x00048006,
+		0x00048007,
+		0x00048008,
+		0x00048009,
+		0x0004800a,
+		0x0004800b,
+		0x00048013,
 	};
 	Setup s;
 
@@ -1172,7 +1916,18 @@ int main(void)
 	RUN_TEST(test_format);
 	RUN_TEST(test_stops);
 	RUN_TEST(test_mac);
-	RUN_TEST(test_display);
+	RUN_TEST(test_display_boot);
+	RUN_TEST(test_display_uboot);
+	RUN_TEST(test_display_linux);
+	RUN_TEST(test_display_blank_palette);
+	RUN_TEST(test_display_operation);
+	RUN_TEST(test_display_allocate);
+	RUN_TEST(test_display_tests);
+	RUN_TEST(test_display_pitch);
+	RUN_TEST(test_display_offset);
+	RUN_TEST(test_display_alignment);
+	RUN_TEST(test_display_stops);
+	RUN_TEST(test_display_limits);
 	RUN_TEST(test_sdhost_clock);
 	RUN_TEST(test_known_tags);
 	RUN_TEST(test_short_values);

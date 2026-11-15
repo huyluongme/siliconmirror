@@ -464,7 +464,15 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00038002` | Set a clock rate, kept within the clock's range                    |
 | `0x00030009` | Turbo, 0 at boot; `0x00038009` sets it                             |
 | `0x00038042` | Set SDHOST's clock: the fastest not above the one asked            |
-| `0x00040003` | Display size: 0 by 0, as no display is connected                   |
+| `0x00040013` | Displays: 1, the composite output                                  |
+| `0x00040014` | A display's settings, as Linux's `bcm2708_fb` reads them           |
+| `0x00048013` | The display to act on: 0, the only one                             |
+| `0x0004x003` | Physical size: get, test `0x44003`, set `0x48003`                  |
+| `0x0004x004` | Virtual size; `x005` depth, `x006` pixel order, `x007` alpha mode  |
+| `0x0004x009` | Virtual offset; `x00a` overscan                                    |
+| `0x00040008` | Pitch; `0x00048008` sets it, as `bcm2708_fb` does                  |
+| `0x00040001` | Allocate the frame buffer; `0x00048001` releases it                |
+| `0x00040002` | Blank the screen; `0x0004800b` sets the palette                    |
 | `0x00030046` | Throttled: 0, as the power supply is good and the board never hot  |
 | `0x00048020` | The virtual GPIOs' buffer: 0, success; nothing reads it            |
 | `0x00030043` | The GPIO expander: a line's direction; `0x00038043` sets it        |
@@ -482,6 +490,39 @@ and the LAN9514 powered, the activity LED and the camera off, no
 display, a good power supply. A reset brings them back. Other GPIOs, a
 polarity or termination, and setting an input stop the machine.
 
+The display is the composite output of the AV jack: on a Pi 3 Model B
+without an HDMI display, the firmware turns HDMI off and composite on
+(`enable_tvout` is 1 on it), in NTSC, 480 lines of 720 pixels. The
+firmware's overscan for that SD mode is 32 pixels on each edge, and the
+console's frame buffer is the display less the overscan: 656 by 416, of
+16 bits per pixel, as the defaults of `framebuffer_width`,
+`framebuffer_height` and `framebuffer_depth` say and as a real Pi 3
+Model B+ without a display shows in its boot log ("Registered
+framebuffer for display 0, size 656x416"). `max_framebuffers` is 1:
+one display. smirror shows no picture; it keeps the settings and where
+the buffer is.
+
+The frame buffer's tags of a buffer are one operation, as the wiki
+says: the values of set and test tags replace the settings in a copy,
+which is checked; get tags are answered after the set tags, test tags
+change nothing, and without an allocation, settings that need a larger
+buffer than the one allocated change nothing. An alignment that is not
+a power of 2 or 0 is unsupported: the buffer stays. The firmware puts a
+buffer at the top of its memory that the Arm sees, below the
+peripherals, 4 KiB aligned at least, and gives its address in the
+alias `0xC0000000` of the device tree's `dma-ranges`. A request whose
+second word is not 0 gives a buffer of the Arm's own memory, its
+address and size: Linux's `bcm2708_fb` tries that first, and takes the
+old way when the firmware answers another buffer; smirror takes it when
+it holds the frame. smirror's choices, where nothing documents the
+firmware's: a pitch of the virtual width's pixels, without padding;
+sizes from 1 to 4096 pixels; depths of 8, 16, 24 and 32 bits, those of
+`framebuffer_depth`. The pixel order and the alpha mode at boot, a
+second display, a display that leaves the buffer or that the overscan
+covers, twice the same tag in a buffer and test tags with other ones
+stop the machine. The palette and blanking change only the picture:
+they are answered, and nothing is kept.
+
 The firmware smirror plays is the `start.elf` of raspberrypi/firmware
 commit 896fc67: its revision, variant and hash are those its strings
 give (`VC_BUILD_ID_TIME`, `VC_BUILD_ID_VARIANT`, `VC_BUILD_ID_VERSION`).
@@ -497,8 +538,9 @@ the Arm changes nothing in the emulation, whose time does not depend on
 it; a new rate for the core or for UART0's clock, or turbo while the
 core clock may rise, stops the machine, as the UARTs would change speed.
 
-The firmware knows many more tags (the wiki and Linux's
-`raspberrypi-firmware.h` list them): one that smirror does not answer
+The firmware knows many more tags (the wiki and
+`raspberrypi-firmware.h` list them, that of Raspberry Pi's Linux at
+commit cff533a, the kernel of firmware release 1.20260915): one that smirror does not answer
 stops the machine, and so do values that nothing documents for this
 board: the power state of a device before the Arm sets it, the time a
 device takes to power up, the rates of the PIXEL and PWM clocks, and
@@ -1085,9 +1127,19 @@ to quit.
   the controller's registers as they use them; TinyUSB's
   [dwc2_info.md](https://github.com/hathach/tinyusb/blob/master/src/portable/synopsys/dwc2/dwc2_info.md):
   the identity registers of the BCM2711's controller.
-- The display: the firmware reports none when none is connected
-  ([raspberrypi/firmware issue #1157](https://github.com/raspberrypi/firmware/issues/1157)),
-  which U-Boot's commit 970baf16 follows.
+- The display: Raspberry Pi documentation,
+  [config.txt, video](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/config_txt/video.adoc)
+  ("Composite video mode", `enable_tvout`), and
+  [legacy video options](https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/legacy_config_txt/video.adoc)
+  (`sdtv_mode`, `disable_overscan`, `framebuffer_width`,
+  `framebuffer_height`, `framebuffer_depth`, `max_framebuffers`); the
+  [boot log of a Pi 3 Model B+](https://www.earth.org.uk/img/site/Pi3B+/20200613T1346Z-dmesg.txt)
+  without a display: one display of 656 by 416; Raspberry Pi's Linux,
+  [bcm2708_fb.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/video/fbdev/bcm2708_fb.c)
+  and
+  [raspberrypi-firmware.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/include/soc/bcm2835/raspberrypi-firmware.h):
+  the tags it sends, a buffer of its own, `GET_DISPLAY_SETTINGS`;
+  U-Boot's `bcm2835_set_video_params` (`arch/arm/mach-bcm283x/msg.c`).
 
 - Linux device trees
   [bcm2837.dtsi](https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2837.dtsi)

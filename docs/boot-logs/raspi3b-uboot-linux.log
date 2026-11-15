@@ -24,13 +24,13 @@ Loading Boot0000 'mmc 0' failed
 EFI boot manager: Cannot load any image
 Boot failed (err=-14)
 ** Booting bootflow 'mmc@7e202000.bootdev.part_1' with script
-28916224 bytes read in 1193 ms (23.1 MiB/s)
-1223837 bytes read in 51 ms (22.9 MiB/s)
+28916224 bytes read in 1192 ms (23.1 MiB/s)
+1223292 bytes read in 51 ms (22.9 MiB/s)
 Moving Image from 0x80000 to 0x200000, end=0x1e20000
 ## Flattened Device Tree blob at 3af475e0
    Booting using the fdt blob at 0x3af475e0
 Working FDT set to 3af475e0
-   Loading Ramdisk to 1fed5000, end 1ffffc9d ... OK
+   Loading Ramdisk to 1fed5000, end 1ffffa7c ... OK
    Loading Device Tree to 000000001fec9000, end 000000001fed4803 ... OK
 Working FDT set to 1fec9000
 
@@ -47,7 +47,7 @@ Starting kernel ...
 [    0.000000] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
 [    0.000000] OF: reserved mem: 0x0000000037400000..0x000000003b3fffff (65536 KiB) map reusable linux,cma
 [    0.000000] NUMA: Faking a node at [mem 0x0000000000000000-0x000000003b3fffff]
-[    0.000000] NODE_DATA(0) allocated [mem 0x371fee80-0x37201bff]
+[    0.000000] NODE_DATA(0) allocated [mem 0x371fec40-0x372019bf]
 [    0.000000] Zone ranges:
 [    0.000000]   DMA      [mem 0x0000000000000000-0x000000003b3fffff]
 [    0.000000]   DMA32    empty
@@ -89,109 +89,113 @@ Starting kernel ...
 [    0.000000] arch_timer: cp15 timer running at 19.20MHz (phys).
 [    0.000000] clocksource: arch_sys_counter: mask: 0xffffffffffffff max_cycles: 0x46d987e47, max_idle_ns: 440795202767 ns
 [    0.000000] sched_clock: 56 bits at 19MHz, resolution 52ns, wraps every 4398046511078ns
-[    0.008140] Console: colour dummy device 80x25
-[    0.012603] Calibrating delay loop (skipped), value calculated using timer frequency.. 38.40 BogoMIPS (lpj=76800)
-[    0.022856] pid_max: default: 32768 minimum: 301
-[    0.027513] LSM: initializing lsm=capability
-[    0.031864] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
-[    0.039253] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
-[    0.048289] rcu: Hierarchical SRCU implementation.
-[    0.053075] rcu: 	Max phase no-delay instances is 1000.
-[    0.058426] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
-[    0.067365] EFI services will not be available.
-[    0.072031] smp: Bringing up secondary CPUs ...
-[    0.076818] Detected VIPT I-cache on CPU1
-[    0.076897] CPU1: Booted secondary processor 0x0000000001 [0x410fd034]
-[    0.077328] Detected VIPT I-cache on CPU2
-[    0.077409] CPU2: Booted secondary processor 0x0000000002 [0x410fd034]
-[    0.077838] Detected VIPT I-cache on CPU3
-[    0.077920] CPU3: Booted secondary processor 0x0000000003 [0x410fd034]
-[    0.078083] smp: Brought up 1 node, 4 CPUs
-[    0.113702] SMP: Total of 4 processors activated.
-[    0.118398] CPU: All CPU(s) started at EL2
-[    0.122506] CPU features: detected: 32-bit EL0 Support
-[    0.127635] CPU features: detected: 32-bit EL1 Support
-[    0.132771] CPU features: detected: CRC32 instructions
-[    0.137905] CPU features: detected: PMUv3
-[    0.141927] alternatives: applying system-wide alternatives
-[    0.148188] Memory: 849160K/970752K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 50616K reserved, 65536K cma-reserved)
-[    0.162182] devtmpfs: initialized
-[    0.171983] Enabled cp15_barrier support
-[    0.175900] Enabled setend support
-[    0.179491] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
-[    0.186900] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
-[    0.195896] 25568 pages in range for non-PLT usage
-[    0.195899] 517088 pages in range for PLT usage
-[    0.200789] pinctrl core: initialized pinctrl subsystem
-[    0.210805] DMI not present or invalid.
-[    0.217359] NET: Registered PF_NETLINK/PF_ROUTE protocol family
-[    0.226946] DMA: preallocated 128 KiB GFP_KERNEL pool for atomic allocations
-[    0.234660] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
-[    0.243350] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
-[    0.251277] audit: initializing netlink subsys (disabled)
-[    0.256822] audit: type=2000 audit(0.172:1): state=initialized audit_enabled=0 res=1
-[    0.257101] thermal_sys: Registered thermal governor 'step_wise'
-[    0.264572] cpuidle: using governor menu
-[    0.274521] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
-[    0.281331] ASID allocator initialised with 65536 entries
-[    0.287237] Serial: AMBA PL011 UART driver
-[    0.293849] bcm2835-mbox 3f00b880.mailbox: mailbox enabled
-[    0.307338] raspberrypi-firmware soc:firmware: Attached to firmware from 2026-11-02T13:42:00, variant start
-[    0.321079] raspberrypi-firmware soc:firmware: Firmware hash is 13c4219f16dbe58c5b9946086b474baf572512bb
-[    0.337227] bcm2835-dma 3f007000.dma-controller: DMA legacy API manager, dmachans=0x1
-[    0.345678] iommu: Default domain type: Translated
-[    0.350460] iommu: DMA domain TLB invalidation policy: strict mode
-[    0.363184] SCSI subsystem initialized
-[    0.367040] usbcore: registered new interface driver usbfs
-[    0.372538] usbcore: registered new interface driver hub
-[    0.377859] usbcore: registered new device driver usb
-[    0.383058] pps_core: LinuxPPS API ver. 1 registered
-[    0.388015] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
-[    0.397144] PTP clock support registered
-[    0.401845] vgaarb: loaded
-[    0.404630] clocksource: Switched to clocksource arch_sys_counter
-[    1.642585] VFS: Disk quotas dquot_6.6.0
-[    1.646509] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
-[    1.658149] NET: Registered PF_INET protocol family
-[    1.663103] IP idents hash table entries: 16384 (order: 5, 131072 bytes, linear)
-[    1.671989] tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes, linear)
-[    1.680353] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
-[    1.688093] TCP established hash table entries: 8192 (order: 4, 65536 bytes, linear)
-[    1.695895] TCP bind hash table entries: 8192 (order: 6, 262144 bytes, linear)
-[    1.703234] TCP: Hash tables configured (established 8192 bind 8192)
-[    1.709645] MPTCP token hash table entries: 1024 (order: 3, 24576 bytes, linear)
-[    1.717056] UDP hash table entries: 512 (order: 3, 32768 bytes, linear)
-[    1.723688] UDP-Lite hash table entries: 512 (order: 3, 32768 bytes, linear)
-[    1.730824] NET: Registered PF_UNIX/PF_LOCAL protocol family
-[    1.736639] RPC: Registered named UNIX socket transport module.
-[    1.742549] RPC: Registered udp transport module.
-[    1.747245] RPC: Registered tcp transport module.
-[    1.751940] RPC: Registered tcp-with-tls transport module.
-[    1.757425] RPC: Registered tcp NFSv4.1 backchannel transport module.
-[    1.763857] PCI: CLS 0 bytes, default 64
-[    1.767878] Trying to unpack rootfs image as initramfs...
-[    1.776684] kvm [1]: nv: 568 coarse grained trap handlers
-[    1.782528] kvm [1]: IPA Size Limit: 40 bits
-[    1.787946] kvm [1]: Hyp nVHE mode initialized successfully
-[    1.797863] Initialise system trusted keyrings
-[    1.802386] workingset: timestamp_bits=42 max_order=18 bucket_order=0
-[    1.809134] NFS: Registering the id_resolver key type
-[    1.814192] Key type id_resolver registered
-[    1.818367] Key type id_legacy registered
-[    1.822381] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
-[    1.827471] Freeing initrd memory: 1192K
-[    1.829077] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
-[    1.840705] Key type asymmetric registered
-[    1.844794] Asymmetric key parser 'x509' registered
-[    1.849684] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 246)
-[    1.857127] io scheduler mq-deadline registered
-[    1.861651] io scheduler kyber registered
-[    1.865667] io scheduler bfq registered
-[    1.870477] pinctrl-bcm2835 3f200000.gpio: GPIO_OUT persistence: yes
-[    1.879576] ledtrig-cpu: registered to indicate activity on CPUs
-[    1.886143] bcm2708_fb soc:fb: More displays reported from firmware than supported in driver (4294967232 vs 3)
-[    1.896141] bcm2708_fb soc:fb: FB found 3 display(s)
-smirror: error: firmware: tag 0x00048003 is not emulated
+[    0.008142] Console: colour dummy device 80x25
+[    0.012605] Calibrating delay loop (skipped), value calculated using timer frequency.. 38.40 BogoMIPS (lpj=76800)
+[    0.022858] pid_max: default: 32768 minimum: 301
+[    0.027515] LSM: initializing lsm=capability
+[    0.031866] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.039255] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.048291] rcu: Hierarchical SRCU implementation.
+[    0.053076] rcu: 	Max phase no-delay instances is 1000.
+[    0.058428] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[    0.067399] EFI services will not be available.
+[    0.072064] smp: Bringing up secondary CPUs ...
+[    0.076850] Detected VIPT I-cache on CPU1
+[    0.076928] CPU1: Booted secondary processor 0x0000000001 [0x410fd034]
+[    0.077359] Detected VIPT I-cache on CPU2
+[    0.077439] CPU2: Booted secondary processor 0x0000000002 [0x410fd034]
+[    0.077867] Detected VIPT I-cache on CPU3
+[    0.077948] CPU3: Booted secondary processor 0x0000000003 [0x410fd034]
+[    0.078111] smp: Brought up 1 node, 4 CPUs
+[    0.113731] SMP: Total of 4 processors activated.
+[    0.118426] CPU: All CPU(s) started at EL2
+[    0.122534] CPU features: detected: 32-bit EL0 Support
+[    0.127663] CPU features: detected: 32-bit EL1 Support
+[    0.132799] CPU features: detected: CRC32 instructions
+[    0.137933] CPU features: detected: PMUv3
+[    0.141955] alternatives: applying system-wide alternatives
+[    0.148216] Memory: 849160K/970752K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 50616K reserved, 65536K cma-reserved)
+[    0.162212] devtmpfs: initialized
+[    0.172098] Enabled cp15_barrier support
+[    0.176017] Enabled setend support
+[    0.179619] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    0.187028] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
+[    0.196023] 25568 pages in range for non-PLT usage
+[    0.196027] 517088 pages in range for PLT usage
+[    0.200861] pinctrl core: initialized pinctrl subsystem
+[    0.210881] DMI not present or invalid.
+[    0.217527] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.227468] DMA: preallocated 128 KiB GFP_KERNEL pool for atomic allocations
+[    0.235447] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+[    0.244136] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.252056] audit: initializing netlink subsys (disabled)
+[    0.257523] audit: type=2000 audit(0.160:1): state=initialized audit_enabled=0 res=1
+[    0.257807] thermal_sys: Registered thermal governor 'step_wise'
+[    0.265273] cpuidle: using governor menu
+[    0.275222] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
+[    0.282032] ASID allocator initialised with 65536 entries
+[    0.287962] Serial: AMBA PL011 UART driver
+[    0.294650] bcm2835-mbox 3f00b880.mailbox: mailbox enabled
+[    0.308139] raspberrypi-firmware soc:firmware: Attached to firmware from 2026-11-02T13:42:00, variant start
+[    0.321880] raspberrypi-firmware soc:firmware: Firmware hash is 13c4219f16dbe58c5b9946086b474baf572512bb
+[    0.337900] bcm2835-dma 3f007000.dma-controller: DMA legacy API manager, dmachans=0x1
+[    0.346365] iommu: Default domain type: Translated
+[    0.351147] iommu: DMA domain TLB invalidation policy: strict mode
+[    0.365182] SCSI subsystem initialized
+[    0.369038] usbcore: registered new interface driver usbfs
+[    0.374537] usbcore: registered new interface driver hub
+[    0.379857] usbcore: registered new device driver usb
+[    0.385057] pps_core: LinuxPPS API ver. 1 registered
+[    0.390014] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    0.399143] PTP clock support registered
+[    0.404187] vgaarb: loaded
+[    0.406970] clocksource: Switched to clocksource arch_sys_counter
+[    1.647250] VFS: Disk quotas dquot_6.6.0
+[    1.651174] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    1.662815] NET: Registered PF_INET protocol family
+[    1.667770] IP idents hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    1.676653] tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes, linear)
+[    1.685018] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    1.692758] TCP established hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    1.700561] TCP bind hash table entries: 8192 (order: 6, 262144 bytes, linear)
+[    1.707899] TCP: Hash tables configured (established 8192 bind 8192)
+[    1.714309] MPTCP token hash table entries: 1024 (order: 3, 24576 bytes, linear)
+[    1.721721] UDP hash table entries: 512 (order: 3, 32768 bytes, linear)
+[    1.728353] UDP-Lite hash table entries: 512 (order: 3, 32768 bytes, linear)
+[    1.735490] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    1.741301] RPC: Registered named UNIX socket transport module.
+[    1.747212] RPC: Registered udp transport module.
+[    1.751908] RPC: Registered tcp transport module.
+[    1.756603] RPC: Registered tcp-with-tls transport module.
+[    1.762080] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    1.768519] PCI: CLS 0 bytes, default 64
+[    1.772542] Trying to unpack rootfs image as initramfs...
+[    1.781349] kvm [1]: nv: 568 coarse grained trap handlers
+[    1.787195] kvm [1]: IPA Size Limit: 40 bits
+[    1.792612] kvm [1]: Hyp nVHE mode initialized successfully
+[    1.799492] Initialise system trusted keyrings
+[    1.804003] workingset: timestamp_bits=42 max_order=18 bucket_order=0
+[    1.810763] NFS: Registering the id_resolver key type
+[    1.815818] Key type id_resolver registered
+[    1.819992] Key type id_legacy registered
+[    1.824004] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    1.830697] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
+[    1.831863] Freeing initrd memory: 1192K
+[    1.838414] Key type asymmetric registered
+[    1.846080] Asymmetric key parser 'x509' registered
+[    1.850966] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 246)
+[    1.858409] io scheduler mq-deadline registered
+[    1.862932] io scheduler kyber registered
+[    1.866946] io scheduler bfq registered
+[    1.871775] pinctrl-bcm2835 3f200000.gpio: GPIO_OUT persistence: yes
+[    1.880595] ledtrig-cpu: registered to indicate activity on CPUs
+[    1.887191] bcm2708_fb soc:fb: FB found 1 display(s)
+[    1.896795] Console: switching to colour frame buffer device 82x26
+[    1.904284] bcm2708_fb soc:fb: Registered framebuffer for display 0, size 656x416
+[    1.911829] simple-framebuffer 3eef5000.framebuffer: framebuffer at 0x3eef5000, 0x10a800 bytes
+[    1.920434] simple-framebuffer 3eef5000.framebuffer: format=a8r8g8b8, mode=656x416x32, linelength=2624
+[    1.929827] simple-framebuffer 3eef5000.framebuffer: fb1: simplefb registered!
+smirror: error: firmware: tag 0x00010007 is not emulated
 
 
 drive: no "linux-card: the initramfs runs" in time

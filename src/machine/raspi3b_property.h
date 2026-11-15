@@ -9,19 +9,21 @@
  *
  * Written from the Raspberry Pi firmware wiki, "Mailbox property
  * interface": the buffer format, the tags and their values. Tags that
- * neither it nor Linux's include/soc/bcm2835/raspberrypi-firmware.h
- * names are unknown to the firmware, and left unanswered as the wiki
- * says. A known tag that is not emulated stops the machine, as do the
- * values the wiki leaves to the firmware and nothing documents for this
- * board (the state of a clock or of a power domain at boot, the rates of
- * the EMMC, PIXEL and PWM clocks, ...).
+ * neither it nor include/soc/bcm2835/raspberrypi-firmware.h of
+ * Raspberry Pi's Linux names are unknown to the firmware, and left
+ * unanswered as the wiki says. A known tag that is not emulated stops
+ * the machine, as do the values the wiki leaves to the firmware and
+ * nothing documents for this board (the state of a clock or of a power
+ * domain at boot, the rates of the EMMC, PIXEL and PWM clocks, ...).
  *
  * Answered: the firmware revision, the board revision, MAC address and
  * serial number, the memory split, the command line, power on and off,
- * the rates of the clocks and turbo. Clock rates come from the Raspberry
- * Pi documentation (config.txt, overclocking options: the defaults of
- * the Raspberry Pi 3). Turning a power domain on or off and changing the
- * Arm's clock change nothing else in the emulation.
+ * the rates of the clocks and turbo, the display and its frame buffer.
+ * Clock rates come from the Raspberry Pi documentation (config.txt,
+ * overclocking options: the defaults of the Raspberry Pi 3). Turning a
+ * power domain on or off and changing the Arm's clock change nothing
+ * else in the emulation. The display is the composite output, as on a
+ * board without an HDMI display; smirror shows no picture.
  */
 
 #ifndef MACHINE_RASPI3B_PROPERTY_H
