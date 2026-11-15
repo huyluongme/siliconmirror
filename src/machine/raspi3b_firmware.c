@@ -402,7 +402,47 @@ static bool console(Boot *b)
 	       write_reg(b, AUX_MU_BAUD_REG, 270);
 }
 
-/* The first line of the command line file, without its end of line. */
+/* Whether an argument of the command line ends at c. */
+static bool argument_end(char c)
+{
+	return c == '\0' || c == ',' || c == ' ' || c == '\t';
+}
+
+/*
+ * The firmware replaces the serial aliases that console= names with the
+ * ports they stand for (meta-raspberrypi's 2016 patch "linux-raspberrypi:
+ * Make use of serial aliases"): on the Pi 3 Model B, serial0 is the mini
+ * UART, ttyS0. The name it gives serial1, UART0, is not known, and stops
+ * the boot.
+ */
+static bool serial_aliases(Boot *b, const char *path)
+{
+	static const char key[] = "console=serial";
+	char *p = b->cmdline;
+
+	while ((p = strstr(p, key)) != NULL) {
+		char *alias = p + strlen("console=");
+		bool start = p == b->cmdline || p[-1] == ' ' || p[-1] == '\t';
+
+		p = alias;
+		if (!start || (alias[6] != '0' && alias[6] != '1') ||
+		    !argument_end(alias[7]))
+			continue;
+		if (alias[6] == '1')
+			return fail(b,
+			            "%s asks for console=serial1, and the name the "
+			            "firmware gives that port is not known",
+			            path);
+		memcpy(alias, "ttyS0", 5);
+		memmove(alias + 5, alias + 7, strlen(alias + 7) + 1);
+	}
+	return true;
+}
+
+/*
+ * The first line of the command line file, without its end of line, its
+ * serial aliases replaced.
+ */
 static bool read_cmdline(Boot *b)
 {
 	const char *name = get(b, "cmdline", false);
@@ -437,7 +477,7 @@ static bool read_cmdline(Boot *b)
 		b->cmdline[len] = '\0';
 	}
 	free(data);
-	return true;
+	return b->cmdline == NULL || serial_aliases(b, path);
 }
 
 /* --- The kernel ----------------------------------------------------------- */

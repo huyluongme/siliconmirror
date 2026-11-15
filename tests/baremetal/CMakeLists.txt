@@ -249,7 +249,7 @@ make_card(sdboot-fat16.img 16 16
 # config.txt filters, a setting that is not applied, cmdline.txt, and the
 # device tree on a FAT32 card like Raspberry Pi OS's.
 add_expect_test(baremetal.sd-boot-fat32
-	STDOUT "^cmdline: console=serial0,115200 smirror\n\
+	STDOUT "^cmdline: console=ttyS0,115200 smirror\n\
 sd boot ok\n$"
 	STDERR "^smirror: warning: config.txt:7: dtoverlay=vc4-kms-v3d is not \
 applied\nsmirror: idle: every CPU is waiting and no event is pending\n$"

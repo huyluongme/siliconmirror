@@ -820,7 +820,10 @@ smirror does what that firmware does, without running it:
    its BSS, which would destroy an initramfs there. The firmware's own
    alignment is not documented.
 9. The command line: the first line of `cmdline.txt`, or of the file
-   `cmdline=` names.
+   `cmdline=` names. As the firmware replaces the serial aliases that
+   `console=` names with their ports, `console=serial0` becomes
+   `console=ttyS0`, the mini UART. The name it gives `serial1`, UART0,
+   is not known: `console=serial1` stops the boot.
 10. The device tree: `device_tree=`, or `bcm2710-rpi-3-b.dtb`, or else
     the upstream `bcm2837-rpi-3-b.dtb`; `device_tree=` with no name boots
     without one. The firmware fills in the memory node (`reg`, after

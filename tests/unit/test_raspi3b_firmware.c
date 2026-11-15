@@ -484,7 +484,7 @@ static void test_card_boot(void)
 	CHECK_EQ(load_be32(v + 4), 0x3b400000);
 	v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &len);
 	CHECK(v != NULL && strcmp((const char *)v, "coherent_pool=1M "
-	                                           "console=serial0,115200 "
+	                                           "console=ttyS0,115200 "
 	                                           "root=/dev/mmcblk0p2") == 0);
 	node = fdt_find(fdt, "/soc/usb@7e980000/ethernet@1");
 	v = fdt_get(node, "local-mac-address", &len);
@@ -1370,7 +1370,10 @@ static void test_read_errors(void)
 	block_mem_free(&c.fs.m);
 }
 
-/* The command line: its first line, without the blanks at its end. */
+/*
+ * The command line: its first line, without the blanks at its end, and
+ * the serial aliases of console= replaced.
+ */
 static void test_cmdline_edges(void)
 {
 	static char x4096[4097], x4097[4098];
@@ -1387,6 +1390,19 @@ static void test_cmdline_edges(void)
 		{"x", "coherent_pool=1M x"},
 		{x4096, expected},
 		{x4097, NULL},
+		/* serial0, the mini UART, as the firmware names it. */
+		{"console=serial0,115200 earlycon",
+	     "coherent_pool=1M console=ttyS0,115200 earlycon"},
+		{"quiet console=serial0", "coherent_pool=1M quiet console=ttyS0"},
+		{"a\tconsole=serial0 console=serial0,9600",
+	     "coherent_pool=1M a\tconsole=ttyS0 console=ttyS0,9600"},
+		{"xconsole=serial0 console=serial01 console=serial2",
+	     "coherent_pool=1M xconsole=serial0 console=serial01 console=serial2"},
+		{"console=serial", "coherent_pool=1M console=serial"},
+		{"console=tty1 console=serial1x", "coherent_pool=1M console=tty1 "
+	                                      "console=serial1x"},
+		{"console=serial1,115200", NULL},
+		{"quiet console=serial1", NULL},
 	};
 
 	memset(x4096, 'x', 4096);
@@ -1399,7 +1415,11 @@ static void test_cmdline_edges(void)
 		card_config(&c, "arm_64bit=1\n");
 		add_text(&c, "CMDLINE TXT", "cmdline.txt", cases[i].file);
 		if (cases[i].bootargs == NULL) {
-			boot_fails(&c, "cmdline.txt is longer than 4096 characters");
+			boot_fails(&c, strstr(cases[i].file, "serial1")
+			                   ? "cmdline.txt asks for console=serial1, and "
+			                     "the name the firmware gives that port is "
+			                     "not known"
+			                   : "cmdline.txt is longer than 4096 characters");
 		} else {
 			m = boot_ok(&c);
 			CHECK(strcmp(bootargs(m), cases[i].bootargs) == 0);
