@@ -5,6 +5,7 @@
 add_library(hw STATIC
 	char/bcm2835_aux.c
 	char/pl011.c
+	dma/bcm2835_dma.c
 	gpio/bcm2835_gpio.c
 	intc/bcm2835_ic.c
 	intc/bcm2836_local.c

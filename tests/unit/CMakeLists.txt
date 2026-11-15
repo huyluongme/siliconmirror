@@ -109,6 +109,10 @@ add_executable(test_bcm2835_mbox test_bcm2835_mbox.c)
 target_link_libraries(test_bcm2835_mbox PRIVATE hw)
 add_test(NAME unit.bcm2835_mbox COMMAND test_bcm2835_mbox)
 
+add_executable(test_bcm2835_dma test_bcm2835_dma.c)
+target_link_libraries(test_bcm2835_dma PRIVATE hw)
+add_test(NAME unit.bcm2835_dma COMMAND test_bcm2835_dma)
+
 add_executable(test_bcm2835_cprman test_bcm2835_cprman.c)
 target_link_libraries(test_bcm2835_cprman PRIVATE hw)
 add_test(NAME unit.bcm2835_cprman COMMAND test_bcm2835_cprman)
