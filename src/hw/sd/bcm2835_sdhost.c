@@ -105,7 +105,7 @@ struct Bcm2835Sdhost {
 	Machine *machine;
 	uint64_t core_hz;
 	Bcm2835SdhostSlot slot;
-	IrqLine *irq;
+	IrqLine *irq, *dreq;
 
 	uint32_t cmd, arg, tout, cdiv, rsp[4], hsts, vdd, edm, hcfg, hbct, hblc;
 	bool data_mode; /* the card has its RCA: the bus is in data mode */
@@ -200,9 +200,30 @@ static uint32_t hsts(const Bcm2835Sdhost *host)
 	return host->hsts | (data_flag(host) ? HSTS_DATA_FLAG : 0);
 }
 
+/*
+ * DREQ, which paces the DMA controller: on a read, the FIFO holds the
+ * read threshold of SDEDM; on a write, it has room for the write
+ * threshold. Unlike DATA_FLAG, it does not rise for the rest of a block:
+ * Linux's bcm2835.c reads the last words of a multi-block read itself,
+ * as "the block doesn't manage the FIFO DREQs properly".
+ */
+static bool dreq(const Bcm2835Sdhost *host)
+{
+	if (host->xfer == XFER_READ ||
+	    (host->xfer == XFER_NONE && host->fifo_count != 0))
+		return host->fifo_count >= threshold(host, EDM_READ_THRESHOLD_SHIFT);
+	if (host->xfer == XFER_WRITE)
+		return BCM2835_SDHOST_FIFO_WORDS - host->fifo_count >=
+		       threshold(host, EDM_WRITE_THRESHOLD_SHIFT);
+	return false;
+}
+
+/* The interrupt and DREQ, after a change. */
 static void update_irq(Bcm2835Sdhost *host)
 {
 	uint32_t s = hsts(host), c = host->hcfg;
+
+	irq_set(host->dreq, dreq(host));
 
 	irq_set(host->irq,
 	        ((s & HSTS_BUSY_IRPT) && (c & HCFG_BUSY_IRPT_EN)) ||
@@ -663,7 +684,7 @@ void bcm2835_sdhost_reset(Bcm2835Sdhost *host)
 
 Bcm2835Sdhost *bcm2835_sdhost_create(Machine *m, uint64_t core_hz,
                                      const Bcm2835SdhostSlot *slot,
-                                     IrqLine *irq)
+                                     IrqLine *irq, IrqLine *dreq)
 {
 	Bcm2835Sdhost *host;
 
@@ -676,6 +697,7 @@ Bcm2835Sdhost *bcm2835_sdhost_create(Machine *m, uint64_t core_hz,
 	host->core_hz = core_hz;
 	host->slot = *slot;
 	host->irq = irq;
+	host->dreq = dreq;
 	event_init(&host->command_done, command_finished, host);
 	event_init(&host->word_done, word_finished, host);
 	event_init(&host->busy_done, busy_finished, host);

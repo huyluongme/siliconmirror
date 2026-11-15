@@ -86,7 +86,7 @@ typedef struct Setup {
 	BlockMem disk;
 	SdCard *card;
 	bool connected;
-	IrqLine irq;
+	IrqLine irq, dreq;
 	Bcm2835Sdhost *host;
 } Setup;
 
@@ -112,9 +112,11 @@ static void setup_with(Setup *s, bool card)
 	}
 	s->connected = true;
 	irq_init(&s->irq, NULL, NULL, 0);
+	irq_init(&s->dreq, NULL, NULL, 0);
 	s->host = bcm2835_sdhost_create(
 		s->m, CORE_HZ,
-		&(Bcm2835SdhostSlot){s->card, slot_connected, &s->connected}, &s->irq);
+		&(Bcm2835SdhostSlot){s->card, slot_connected, &s->connected}, &s->irq,
+		&s->dreq);
 	CHECK(s->host != NULL);
 	CHECK_EQ(bcm2835_sdhost_map(s->host, s->m->bus, "sdhost", BASE), BUS_OK);
 }
@@ -845,6 +847,7 @@ static void test_read_exact(void)
 		/* One word is below the threshold, but the last one is due. */
 		CHECK_EQ(rd(&s, SDHSTS), i == 127 ? DATA_FLAG : 0);
 		CHECK_EQ(irq_level(&s.irq), i == 127);
+		CHECK(!irq_level(&s.dreq)); /* DREQ: not for the last word */
 		word = rd(&s, SDDATA);
 		CHECK_EQ(word, load_le32(s.disk.data + 4 * i));
 		CHECK_EQ(rd(&s, SDHSTS), 0);
@@ -1051,7 +1054,10 @@ static void test_irq_matrix(void)
 	teardown(&s);
 }
 
-/* SDEDM's thresholds: where they are, and how DATA_FLAG uses them. */
+/*
+ * SDEDM's thresholds: where they are, and how DATA_FLAG and DREQ use
+ * them.
+ */
 static void test_thresholds(void)
 {
 	Setup s;
@@ -1077,6 +1083,7 @@ static void test_thresholds(void)
 			run_until(&s, t + CLK(32 * w));
 			CHECK_EQ(fifo(&s), w);
 			CHECK_EQ(rd(&s, SDHSTS) & DATA_FLAG, w >= need ? DATA_FLAG : 0);
+			CHECK_EQ(irq_level(&s.dreq), w >= need);
 		}
 		wr(&s, SDEDM, 1u << 19);
 		command(&s, BUSYWAIT | 12, 0);
@@ -1091,9 +1098,11 @@ static void test_thresholds(void)
 	command(&s, WRITE | 24, 0);
 	for (unsigned i = 0; i < 13; i++) {
 		CHECK_EQ(rd(&s, SDHSTS) & DATA_FLAG, DATA_FLAG);
+		CHECK(irq_level(&s.dreq));
 		wr(&s, SDDATA, i);
 	}
 	CHECK_EQ(rd(&s, SDHSTS) & DATA_FLAG, 0); /* room for 3 */
+	CHECK(!irq_level(&s.dreq));
 	wr(&s, SDEDM, 1u << 19);
 	teardown(&s);
 
@@ -1109,10 +1118,17 @@ static void test_thresholds(void)
 	CHECK_EQ(fsm(&s), DATAMODE);
 	CHECK_EQ(fifo(&s), 4);
 	CHECK_EQ(rd(&s, SDHSTS), BLOCK_IRPT | CRC16_ERROR | DATA_FLAG);
+	CHECK(!irq_level(&s.dreq)); /* 4 words, below the threshold of 31 */
+	wr(&s, SDEDM, 4u << 14);
+	CHECK(irq_level(&s.dreq));             /* with a threshold of 4 */
 	CHECK_EQ(rd(&s, SDDATA), 0x02802502u); /* 02 25 80 02 */
+	CHECK(!irq_level(&s.dreq));            /* 3 left, below 4 */
 	CHECK_EQ(rd(&s, SDDATA), 0);
 	CHECK_EQ(rd(&s, SDDATA), 0); /* past the SCR: zeros */
+	wr(&s, SDEDM, 1u << 14);
+	CHECK(irq_level(&s.dreq)); /* the last word, with a threshold of 1 */
 	CHECK_EQ(rd(&s, SDDATA), 0);
+	CHECK(!irq_level(&s.dreq));
 	teardown(&s);
 }
 
@@ -1172,7 +1188,7 @@ static void test_register_writes(void)
 	}
 	teardown(&s);
 
-	CHECK(bcm2835_sdhost_create(NULL, 0, &(Bcm2835SdhostSlot){0}, NULL) ==
+	CHECK(bcm2835_sdhost_create(NULL, 0, &(Bcm2835SdhostSlot){0}, NULL, NULL) ==
 	      NULL);
 }
 

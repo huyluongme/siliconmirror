@@ -610,7 +610,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		m, CORE_CLOCK_HZ,
 		&(Bcm2835SdhostSlot){
 			.card = sd_card, .connected = slot_connected, .ctx = gpio},
-		bcm2835_ic_gpu_input(ic, BCM2835_IC_SDHOST));
+		bcm2835_ic_gpu_input(ic, BCM2835_IC_SDHOST), NULL);
 	if (sdhost == NULL)
 		goto out_of_memory;
 	if (!machine_add_device(m, sdhost, reset_sdhost, destroy_sdhost)) {

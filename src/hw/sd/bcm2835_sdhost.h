@@ -22,7 +22,12 @@
  * data and busy, 64 for a response (Ncr, SD Physical Layer
  * specification, 4.12). CRC errors never happen.
  *
- * The DMA request is not modelled yet.
+ * DREQ, for the DMA controller, is high on a read while the FIFO holds
+ * SDEDM's read threshold, and on a write while it has room for the write
+ * threshold. It does not rise for the rest of a block, as Linux's
+ * bcm2835.c finds: its DMA leaves the last words of a multi-block read
+ * to the processor, as "the block doesn't manage the FIFO DREQs
+ * properly".
  */
 
 #ifndef HW_SD_BCM2835_SDHOST_H
@@ -55,12 +60,13 @@ typedef struct Bcm2835SdhostSlot {
 /*
  * Create the controller in its reset state, with a core clock of
  * core_hz. It takes the time from m and stops m on what it does not
- * emulate. irq is its interrupt, or NULL. Returns NULL when core_hz is 0
- * or memory runs out.
+ * emulate. irq is its interrupt and dreq its DMA request, DREQ 13,
+ * either of which may be NULL. Returns NULL when core_hz is 0 or memory
+ * runs out.
  */
 Bcm2835Sdhost *bcm2835_sdhost_create(Machine *m, uint64_t core_hz,
                                      const Bcm2835SdhostSlot *slot,
-                                     IrqLine *irq);
+                                     IrqLine *irq, IrqLine *dreq);
 void bcm2835_sdhost_destroy(Bcm2835Sdhost *host);
 
 void bcm2835_sdhost_reset(Bcm2835Sdhost *host);
