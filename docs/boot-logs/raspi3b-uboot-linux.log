@@ -219,7 +219,28 @@ Starting kernel ...
 [    2.440843] High-Speed Isochronous Endpoints
 [    2.440843] Interrupt/Control Split Transaction hack enabled
 [    2.463177] INFO:: MPHI regs_base at ffffffc081c85000
-smirror: error: cpu0: 4-byte write to 0x000000003f00604c (virtual 0xffffffc081c8504c) at 0xffffffc080aa7548 failed: no region at this address
+[    2.468232] dwc_otg 3f980000.usb: DWC OTG Controller
+[    2.473197] dwc_otg 3f980000.usb: new USB bus registered, assigned bus number 1
+[    2.480505] dwc_otg 3f980000.usb: irq 74, io mem 0x00000000
+[    2.486085] Init: Port Power? op_state=1
+[    2.489999] Init: Power Port (1)
+[    2.493285] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.18
+[    2.501543] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.508768] usb usb1: Product: DWC OTG Controller
+[    2.513467] usb usb1: Manufacturer: Linux 6.18.50-v8+ dwc_otg_hcd
+[    2.519556] usb usb1: SerialNumber: 3f980000.usb
+[    2.524404] hub 1-0:1.0: USB hub found
+[    2.528157] hub 1-0:1.0: 1 port detected
+[    2.532936] usbcore: registered new interface driver uas
+[    2.538281] usbcore: registered new interface driver usb-storage
+[    2.544466] mousedev: PS/2 mouse device common for all mice
+[    2.551037] sdhci: Secure Digital Host Controller Interface driver
+[    2.557207] sdhci: Copyright(c) Pierre Ossman
+[    2.561647] sdhci-pltfm: SDHCI platform and OF driver helper
+[    2.567546] hid: raw HID events driver (C) Jiri Kosina
+[    2.572735] usbcore: registered new interface driver usbhid
+[    2.578299] usbhid: USB HID core driver
+smirror: error: firmware: tag 0x00048010 is not emulated
 
 
 drive: no "linux-card: the initramfs runs" in time

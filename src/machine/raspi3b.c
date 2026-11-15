@@ -26,6 +26,7 @@
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_cprman.h"
 #include "hw/misc/bcm2835_mbox.h"
+#include "hw/misc/bcm2835_mphi.h"
 #include "hw/misc/bcm2835_pm.h"
 #include "hw/misc/bcm2835_rng.h"
 #include "hw/misc/bcm2835_thermal.h"
@@ -191,6 +192,16 @@ static void reset_pm(void *ctx)
 static void destroy_pm(void *ctx)
 {
 	bcm2835_pm_destroy(ctx);
+}
+
+static void reset_mphi(void *ctx)
+{
+	bcm2835_mphi_reset(ctx);
+}
+
+static void destroy_mphi(void *ctx)
+{
+	bcm2835_mphi_destroy(ctx);
 }
 
 static void reset_rng(void *ctx)
@@ -438,6 +449,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Dma *dma;
+	Bcm2835Mphi *mphi;
 	IrqLine *dma_irqs[BCM2835_DMA_NUM_IRQS];
 	Bcm2835Emmc *emmc;
 	Dwc2 *usb;
@@ -679,6 +691,19 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	                         RASPI3B_DMA15_BASE);
 	if (status != BUS_OK) {
 		snprintf(error, error_size, "cannot map the DMA controller: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
+	mphi = bcm2835_mphi_create(m, bcm2835_ic_gpu_input(ic, BCM2835_IC_MPHI));
+	if (mphi == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, mphi, reset_mphi, destroy_mphi)) {
+		bcm2835_mphi_destroy(mphi);
+		goto out_of_memory;
+	}
+	status = bcm2835_mphi_map(mphi, m->bus, "mphi", RASPI3B_MPHI_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the MPHI: %s",
 		         bus_status_str(status));
 		goto fail;
 	}

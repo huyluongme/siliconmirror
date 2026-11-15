@@ -115,6 +115,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 |--------------|---------|----------------------------------------------------------|----------------------------|
 | `0x00000000` | 1008 MB | RAM                                                      | Yes                        |
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
+| `0x3f006000` | 4 KB    | MPHI, the parallel host interface: dwc_otg's interrupt   | What dwc_otg uses          |
 | `0x3f007000` | 4 KB    | DMA controller, channels 0 to 14                         | Yes, but 2D and ignore     |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
@@ -227,8 +228,9 @@ pending register the ARM's, eleven selected GPU interrupts again (7, 9,
 10, 18, 19, 53 to 57 and 62) in bits 10 to 20, and in bits 8 and 9
 whether pending 1 or 2 has others. The GPU FIQ follows the one
 interrupt that the FIQ register selects, whether its IRQ is enabled or
-not. Of its sources, the mini UART, the GPIO and UART0 are modelled
-yet.
+not. Of its GPU sources, the USB controller (9), the DMA channels (16
+to 27), the mini UART (29), the MPHI (32), the GPIO (49 to 52), SDHOST
+(56), UART0 (57) and EMMC (62) are modelled.
 
 The documents leave some things open; smirror chooses:
 
@@ -709,6 +711,20 @@ with Link Power Management and with power optimization, which bit 15 of
 anyway, and acts on them only when a port sleeps or it hibernates: they
 read 0, smirror's choice, and writing them stops the machine.
 
+`dwc_otg` takes the controller's interrupt in a fast handler, its FIQ
+on 32-bit kernels and an ordinary handler on the 64-bit one, which
+"kicks" its main handler through the MPHI at `0x3f006000`: the board's
+device tree gives the USB node the MPHI's registers and its interrupt,
+GPU interrupt 32, as "soft". Broadcom does not document the MPHI;
+smirror models what `dwc_otg` uses. `CTRL` (`0x4c`) bit 31 enables it,
+bit 16 resets it and bit 17 says the reset is done; writing bit 29 of
+`OUTDDB` (`0x2c`) sends the 16 bytes at the address in `OUTDDA`
+(`0x28`); a send sets bits 16, the interrupt, and 29, sent, of
+`INTSTAT` (`0x50`), which a 1 written clears. smirror's choices: a send
+ends at once, without reading its data, and a reset at once. Other
+registers and bits, and a send while the block is disabled, stop the
+machine.
+
 The USB devices follow chapter 9 of the USB 2.0 specification (device
 states, control transfers, the standard requests), and the hub chapter
 11 (the hub descriptor and class requests, port power and a 10 ms port
@@ -1133,6 +1149,19 @@ to quit.
   before sending.
 
 ## Sources
+
+- The MPHI and `dwc_otg`: Raspberry Pi's Linux,
+  [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)
+  (the MPHI's registers, enabling it, the fast handler on arm64),
+  [dwc_otg_fiq_fsm.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_fiq_fsm.c)
+  (the kick),
+  [dwc_otg_hcd_intr.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_intr.c)
+  (clearing it, the reset) and
+  [dwc_otg_cil_intr.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_cil_intr.c)
+  (`GPWRDN` at each interrupt); the board's device tree (the USB node's
+  `reg` and "soft" interrupt); Linux's
+  [dwc2/hw.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/dwc2/hw.h) (`GHWCFG3_OTG_LPM_EN`,
+  `GHWCFG4_POWER_OPTIMIZ`).
 
 - The firmware's clocks and power domains: Raspberry Pi's Linux,
   [clk-raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/clk/bcm/clk-raspberrypi.c)

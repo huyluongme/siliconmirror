@@ -759,6 +759,39 @@ static void test_clock_manager(void)
 }
 
 /*
+ * The MPHI at 0x3f006000: dwc_otg's kick is GPU interrupt 32, bit 0 of
+ * the second pending register.
+ */
+static void test_mphi(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_write(m->bus, 0x3f00b214, 4, 1), BUS_OK); /* enable 32 */
+	CHECK_EQ(bus_write(m->bus, 0x3f00604c, 4, 1u << 31), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f00602c, 4, 1u << 29), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, 0x3f00b208, 4, &v), BUS_OK);
+	CHECK_EQ(v, 1);
+	CHECK_EQ(bus_write(m->bus, 0x3f006050, 4, 1u << 16), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, 0x3f00b208, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(bus_write(m->bus, 0x3f00602c, 4, 1u << 29), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, 0x3f00b208, 4, &v), BUS_OK);
+	CHECK_EQ(v, 1);
+	machine_reset(m);
+	CHECK_EQ(bus_write(m->bus, 0x3f00b214, 4, 1), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, 0x3f00b208, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(bus_read(m->bus, 0x3f00604c, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
  * The random number generator at 0x3f104000, which a reset stops, and
  * the temperature sensor at 0x3f212000, which the firmware set up.
  */
@@ -1058,6 +1091,7 @@ int main(void)
 	RUN_TEST(test_uart_clock);
 	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_clock_manager);
+	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
 	RUN_TEST(test_dma);
 	RUN_TEST(test_secondary_cores);
