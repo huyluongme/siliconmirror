@@ -882,7 +882,10 @@ What the Arm sees at boot is what the firmware leaves. A Raspberry Pi 3
 Model B shows, in Linux's `clk_summary`, PLLC and PLLD at 2 GHz,
 `pllc_core0` at 1 GHz, `plld_per` and `plld_core` at 500 MHz, the UART
 clock at 47999625 Hz, GP1 at 25 MHz, SDRAM at 166.7 MHz and GP2 at
-32768 Hz from the crystal; smirror sets those divisors. The rest is its
+32768 Hz from the crystal; smirror sets those divisors. A Raspberry Pi
+Model B's shows TSENS at 1.92 MHz, the crystal / 10, which the
+temperature sensor needs (Linux's `bcm2835_thermal.c` warns outside 1.92
+to 5 MHz) and the firmware runs: smirror sets it too. The rest is its
 choice, from config.txt's defaults: the ARM at 1.2 GHz from PLLB at
 2.4 GHz, the VPU at 250 MHz (as `enable_uart` sets it), H264 and ISP at
 400 MHz, and EMMC at 200 MHz from `plld_per`. As Linux sets them, PLLs
@@ -1229,6 +1232,11 @@ to quit.
   (the pixel clock's minimum on a Pi 3 Model B+); the
   [Pi 3 Model B+ thread](https://www.mail-archive.com/dri-devel@lists.freedesktop.org/msg566786.html)
   in which Linux turns V3D, ISP and the VEC off at boot; Raspberry Pi
+- The clock manager's TSENS clock at boot: a Raspberry Pi Model B Rev
+  2's `clk_summary`
+  ([a gist from 2019](https://gist.github.com/cleverca22/2c3bd998e08a2d2c282bc735494792e3)):
+  `tsens` at 1920000 Hz beside `osc` at 19200000 Hz, with the UART,
+  EMMC and VPU clocks at the rates the Pi 3 shows.
   documentation, legacy video options: the highest mode before the Pi 4.
 - The random number generator and the temperature sensor: Linux's
   [bcm2835-rng.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/char/hw_random/bcm2835-rng.c)

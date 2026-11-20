@@ -176,7 +176,9 @@ static void test_boot_state(void)
 		{GP2CTL, MASH1 | BUSY | ENAB | 1}, /* the crystal */
 		{GP2DIV, 585u << 12 | 3840},       /* 32768 Hz */
 		{GP0CTL, 0},
-		{0x0e0, 0}, /* TSENS */
+		{0x0e0, BUSY | ENAB | 1}, /* TSENS, from the crystal */
+		{0x0e4, 10u << 12},       /* 1.92 MHz */
+		{0x0e8, 0},               /* TIMER */
 		{DSI0HSCK, 0},
 	};
 	Setup s;

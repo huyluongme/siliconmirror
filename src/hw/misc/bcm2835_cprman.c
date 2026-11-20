@@ -31,7 +31,9 @@
  *    Linux's clk_summary (PLLC and PLLD at 2 GHz; PLLC_CORE0 at 1 GHz;
  *    PLLD_PER and PLLD_CORE at 500 MHz; UART at 47999625 Hz, GP1 at
  *    25 MHz and SDRAM at PLLD_CORE / 3 from them; GP2 at 32768 Hz from
- *    the crystal); with them, the rates of config.txt's defaults: the ARM
+ *    the crystal), and TSENS at 1.92 MHz, the crystal / 10, as a
+ *    Raspberry Pi Model B's shows it (the firmware runs the temperature
+ *    sensor); with them, the rates of config.txt's defaults: the ARM
  *    at 1.2 GHz from PLLB at 2.4 GHz, the VPU at 250 MHz as enable_uart
  *    sets it, H264 and ISP at 400 MHz, and EMMC at 200 MHz from
  *    PLLD_PER. As Linux sets them, the PLLs above 1.75 GHz use the
@@ -191,6 +193,7 @@ enum {
 	REG_ISPCTL = 0x030,
 	REG_GP1CTL = 0x078,
 	REG_GP2CTL = 0x080,
+	REG_TSENSCTL = 0x0e0,
 	REG_SDCCTL = 0x1a8,
 };
 
@@ -422,6 +425,7 @@ void bcm2835_cprman_reset(Bcm2835Cprman *c)
 	set_generator(c, REG_GP1CTL, on | 6, 20 << DIV_FRAC_BITS);
 	set_generator(c, REG_GP2CTL, on | mash | SRC_OSC,
 	              585 << DIV_FRAC_BITS | 3840);
+	set_generator(c, REG_TSENSCTL, on | SRC_OSC, 10 << DIV_FRAC_BITS);
 	for (unsigned i = 0; i < BCM2835_CPRMAN_NUM_CLOCKS; i++)
 		c->boot_rate[i] = bcm2835_cprman_rate(c, i);
 }
