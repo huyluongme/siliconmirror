@@ -396,7 +396,7 @@ static void test_register_bits(void)
 		{GPIO_CFG, 0xffffffffu, 0xff, 0, 0xff0000ffu},
 		{FLOW, 0xffff0006u, 0, 0x1, 0},
 		{WUCSR, 0x200, 0, 0x6, 0},
-		{COE_CR, 0, 0, 0x00010003u, 0},
+		{COE_CR, 0x00010001u, 0, 0x2, 0},
 		{AFC_CFG, 0x00ffffffu, 0, 0, 0},
 		{E2P_DATA, 0xff, 0, 0, 0},
 		{BURST_CAP, 0xff, 0, 0, 0},
@@ -465,7 +465,7 @@ static void test_unmodelled(void)
 		{0x11c, 1, true, "pause frames"},
 		{0x128, 0, true, "wake-up frame filter"},
 		{0x12c, 4, true, "wake-up detection"},
-		{COE_CR, 1, true, "checksum offload"},
+		{COE_CR, 2, true, "checksum offload engine's mode 1"},
 		{MII_ACCESS, 2u << 11 | 1, true, "no PHY"},
 		{MII_ACCESS, 1u << 11 | 7u << 6 | 1, true, "PHY register"},
 	};
@@ -1176,6 +1176,187 @@ static void rx_counters(Setup *s, uint32_t *c)
 		c[i] = load_le32(b + 4 * i);
 }
 
+/*
+ * The test's own ones' complement sum, as the datasheet writes it out
+ * (5.5.7.1): each byte at its place in a little-endian 16-bit word, the
+ * carries added back at the end.
+ */
+static uint16_t ones_sum(const uint8_t *p, size_t n)
+{
+	uint64_t sum = 0;
+
+	for (size_t i = 0; i < n; i++)
+		sum += (uint64_t)p[i] << (8 * (i % 2));
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+	return (uint16_t)sum;
+}
+
+/* A frame to receive: own address, the payload, the FCS. */
+static size_t coe_frame(uint8_t *f, const uint8_t *payload, size_t n)
+{
+	memcpy(f, own, 6);
+	memset(f + 6, 0x02, 6);
+	f[12] = 0x08;
+	f[13] = 0x00;
+	memcpy(f + 14, payload, n);
+	store_le32(f + 14 + n, crc32(f, 14 + n));
+	return 18 + n;
+}
+
+/* One buffer of n bytes; with ck, the TXCOE's preamble pre before them. */
+static void coe_send(Setup *s, const uint8_t *data, size_t n, bool ck,
+                     uint32_t pre)
+{
+	uint8_t buf[1600];
+	size_t at = ck ? 12 : 8;
+
+	store_le32(buf, (uint32_t)(n + at - 8) | 1u << 13 | 1u << 12);
+	store_le32(buf + 4, (uint32_t)(n + at - 8) | (ck ? 1u << 14 : 0));
+	store_le32(buf + 8, pre);
+	memcpy(buf + at, data, n);
+	CHECK_EQ(bulk_write(s, buf, at + n), USB_ACK);
+}
+
+/* The checksum offload engines (5.5.7, 5.5.8), as smsc95xx uses them. */
+static void test_checksum_offload(void)
+{
+	static const uint8_t carry[4] = {0xff, 0xff, 0x01, 0x00};
+	static const uint8_t odd[3] = {0x34, 0x12, 0x78};
+	static const struct {
+		uint32_t pre;
+		size_t n;
+	} bad[] = {
+		{50u << 16 | 13, 96}, /* starts in the MAC header */
+		{13u << 16 | 34, 96}, /* goes in the MAC header */
+		{50u << 16 | 92, 96}, /* starts in the last 4 bytes */
+		{91u << 16 | 34, 96}, /* goes in the last 4 bytes */
+		{50u << 16 | 34 | 1u << 12, 96},
+		{50u << 16 | 34 | 1u << 28, 96},
+	};
+	Setup s = setup(true);
+	uint8_t frame[1600], buf[1600], data[100];
+	uint32_t st;
+	size_t len;
+
+	link_up(&s);
+	wr(&s, MAC_CR, 1u << 18 | 1u << 16 | 0xc); /* PRMS, PASSBAD */
+	wr(&s, COE_CR, 0x00010001);
+	CHECK_EQ(rd(&s, COE_CR), 0x00010001);
+
+	/* RX: the sum after the FCS, the length 2 bytes longer. */
+	for (size_t n = 64; n <= 67; n++) {
+		len = make_frame(frame, own, 0x0800, n);
+		st = rx_one(&s, frame, len, buf);
+		CHECK_EQ(st >> 16, len + 2);
+		CHECK(memcmp(buf + 4, frame, len) == 0);
+		CHECK_EQ(load_le16(buf + 4 + len), ones_sum(frame + 14, len - 18));
+	}
+	len = coe_frame(frame, carry, 4); /* 0xffff + 0x0001: a carry */
+	rx_one(&s, frame, len, buf);
+	CHECK_EQ(load_le16(buf + 4 + len), 0x0001);
+	len = coe_frame(frame, odd, 3); /* 0x1234 + 0x0078 */
+	rx_one(&s, frame, len, buf);
+	CHECK_EQ(load_le16(buf + 4 + len), 0x12ac);
+	len = coe_frame(frame, odd, 1); /* one byte, the low one */
+	rx_one(&s, frame, len, buf);
+	CHECK_EQ(load_le16(buf + 4 + len), 0x0034);
+	/* With RXDOFF, the sum still follows the frame. */
+	wr(&s, HW_CFG, rd(&s, HW_CFG) | 2u << 9);
+	len = coe_frame(frame, odd, 3);
+	rx_one(&s, frame, len, buf);
+	CHECK(memcmp(buf + 6, frame, len) == 0);
+	CHECK_EQ(load_le16(buf + 6 + len), 0x12ac);
+	wr(&s, HW_CFG, rd(&s, HW_CFG) & ~(3u << 9));
+	len = coe_frame(frame, odd, 0);
+	CHECK_EQ(rx_one(&s, frame, len, buf) >> 16, 20);
+	CHECK_EQ(load_le16(buf + 4 + len), 0);
+	CHECK(lan95xx_receive(s.e, frame, 6));
+	CHECK_EQ(bulk_read(&s, buf, &len), USB_ACK);
+	CHECK_EQ(load_le32(buf) >> 16, 8);
+	CHECK_EQ(load_le16(buf + 10), 0);
+	/* Pad stripping with it is forbidden. */
+	wr(&s, MAC_CR, 1u << 18 | 1u << 16 | 1u << 8 | 0xc);
+	CHECK(!lan95xx_receive(s.e, frame, coe_frame(frame, odd, 3)));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(s.m->stop_message, "pad stripping") != NULL);
+	s.m->stop = MACHINE_STOP_NONE;
+	wr(&s, MAC_CR, 1u << 18 | 1u << 16 | 0xc);
+
+	/* TX: the preamble goes; ~sum from 34 to the end goes in at 50. */
+	make_frame(frame, bcast, 0x0800, 100);
+	memcpy(data, frame, 96);
+	store_le16(data + 50, 0x1234); /* a partial sum, which counts */
+	coe_send(&s, data, 96, true, 50u << 16 | 34);
+	CHECK_EQ(sent_len, 100);
+	CHECK(memcmp(sent, data, 50) == 0);
+	CHECK(memcmp(sent + 52, data + 52, 44) == 0);
+	CHECK_EQ(load_le16(sent + 50), (uint16_t)~ones_sum(data + 34, 62));
+	CHECK_EQ(load_le32(sent + 96), crc32(sent, 96));
+	/* The preamble in a buffer of its own, as the datasheet has it. */
+	store_le32(buf, 4u | 1u << 13);
+	store_le32(buf + 4, 100u | 1u << 14);
+	store_le32(buf + 8, 50u << 16 | 34);
+	store_le32(buf + 12, 96u | 1u << 12);
+	store_le32(buf + 16, 100u | 1u << 14);
+	memcpy(buf + 20, data, 96);
+	CHECK_EQ(bulk_write(&s, buf, 116), USB_ACK);
+	CHECK_EQ(sent_len, 100);
+	CHECK_EQ(load_le16(sent + 50), (uint16_t)~ones_sum(data + 34, 62));
+	CHECK(memcmp(sent + 52, data + 52, 44) == 0);
+	/* The limits: from 14, into 14; from n - 5, into n - 6. */
+	coe_send(&s, data, 96, true, 14u << 16 | 14);
+	CHECK_EQ(load_le16(sent + 14), (uint16_t)~ones_sum(data + 14, 82));
+	CHECK(memcmp(sent + 16, data + 16, 80) == 0);
+	coe_send(&s, data, 96, true, 90u << 16 | 91);
+	CHECK_EQ(load_le16(sent + 90), (uint16_t)~ones_sum(data + 91, 5));
+	CHECK(memcmp(sent, data, 90) == 0 && memcmp(sent + 92, data + 92, 4) == 0);
+	/* Short: the sum, then the pad to 60 bytes. */
+	coe_send(&s, data, 46, true, 40u << 16 | 34);
+	CHECK_EQ(sent_len, 64);
+	CHECK_EQ(load_le16(sent + 40), (uint16_t)~ones_sum(data + 34, 12));
+	CHECK_EQ(sent[46], 0);
+	/* Without CK, or without TX_COE_EN, frames pass as they are. */
+	coe_send(&s, data, 96, false, 0);
+	CHECK(sent_len == 100 && memcmp(sent, data, 96) == 0);
+	wr(&s, COE_CR, 0x00000001);
+	coe_send(&s, data, 92, true, 0x11223344);
+	CHECK(sent_len == 100 && load_le32(sent) == 0x11223344);
+	CHECK(memcmp(sent + 4, data, 92) == 0);
+	CHECK_EQ(sent_count, 7);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+
+	/* Preambles that the datasheet does not allow stop the machine. */
+	wr(&s, COE_CR, 0x00010000);
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		coe_send(&s, data, bad[i].n, true, bad[i].pre);
+		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+		CHECK(strstr(s.m->stop_message, "lan95xx: TX checksum preamble") !=
+		      NULL);
+		s.m->stop = MACHINE_STOP_NONE;
+	}
+	/* Its buffer: at a data offset of 2, or with only 3 bytes. */
+	store_le32(buf, 100u | 2u << 16 | 3u << 12);
+	store_le32(buf + 4, 100u | 1u << 14);
+	store_le32(buf + 10, 50u << 16 | 34);
+	memcpy(buf + 14, data, 96);
+	CHECK_EQ(bulk_write(&s, buf, 110), USB_ACK);
+	CHECK(strstr(s.m->stop_message, "not as the datasheet allows") != NULL);
+	s.m->stop = MACHINE_STOP_NONE;
+	store_le32(buf, 3u | 1u << 13);
+	store_le32(buf + 4, 100u | 1u << 14);
+	store_le32(buf + 8, 50u << 16 | 34);
+	store_le32(buf + 12, 97u | 1u << 12);
+	store_le32(buf + 16, 100u | 1u << 14);
+	buf[20] = 0;
+	memcpy(buf + 21, data, 96);
+	CHECK_EQ(bulk_write(&s, buf, 117), USB_ACK);
+	CHECK(strstr(s.m->stop_message, "not as the datasheet allows") != NULL);
+	s.m->stop = MACHINE_STOP_NONE;
+	CHECK_EQ(sent_count, 7);
+	teardown(&s);
+}
+
 /* The RX status word (Table 5-40), the counters, and pad stripping. */
 static void test_rx_status(void)
 {
@@ -1827,5 +2008,6 @@ int main(void)
 	RUN_TEST(test_usb_requests);
 	RUN_TEST(test_plug);
 	RUN_TEST(test_destroy_pending);
+	RUN_TEST(test_checksum_offload);
 	return test_summary();
 }

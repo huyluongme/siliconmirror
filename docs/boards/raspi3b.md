@@ -804,6 +804,17 @@ smirror follows it, without the LAN9500A's additions:
   20 KB FIFO; one frame a bulk IN burst or several (MEF), the burst cap,
   a ZLP or a NAK when empty; the interrupt endpoint and the MAC's
   loopback.
+- The checksum offload engines (5.5.7, 5.5.8), which Linux turns on:
+  received frames get, after their FCS, the 16-bit ones' complement sum
+  of what lies between their first 14 bytes and the FCS, and a 2 bytes
+  longer length. A frame to send whose first command B has `CK` set, with
+  `TX_COE_EN`, starts with a 4-byte preamble, which goes: the ones'
+  complement of the sum from `TXCSSP` to the end goes in at `TXCSLOC`.
+  The datasheet does not say that the engine complements the sum; Linux's
+  `smsc95xx` needs it, as its own fallback for short frames stores
+  `csum_fold()`. Linux puts the preamble in the frame's one buffer,
+  which the datasheet's note 6 forbids, and that works on the real
+  board, so smirror allows it.
 
 No cable is plugged in, as nothing on the host carries the frames yet:
 the link stays down, and U-Boot's `dhcp` says `Waiting for Ethernet
@@ -813,8 +824,10 @@ Mb/s, half or full duplex, with the link up 2 s after a reset (our
 choice), and frames that cross it at once. Not modelled, and the machine
 stops when software uses them: the soft reset `SRST` (a USB disconnect),
 the data port, the debug registers, wake-up frames and wake-up
-detection, the checksum offload engines, pause frames on demand, and
-the PHY's loopback and collision test. The GPIO pins are inputs that
+detection, the receive checksum engine's mode 1 (VLAN tags and SNAP
+headers), received frames with both that engine and pad stripping (the
+datasheet forbids it), preambles outside the datasheet's rules, pause
+frames on demand, and the PHY's loopback and collision test. The GPIO pins are inputs that
 read 1 and never interrupt. The bulk IN delay is not waited.
 
 ## The watchdog
@@ -1137,7 +1150,6 @@ to quit.
   low-speed devices, which need the hub's transaction translators,
   cannot be attached yet.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
-  Its checksum offload engines, which Linux turns on, stop the machine.
 - The firmware's device tree overlays and parameters (`dtoverlay`,
   `dtparam`) are not applied, nor are the other settings of `config.txt`
   that smirror does not list above; a warning names each. The firmware
@@ -1220,6 +1232,11 @@ to quit.
   [dwc2/hw.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/dwc2/hw.h) (`GHWCFG3_OTG_LPM_EN`,
   `GHWCFG4_POWER_OPTIMIZ`).
 
+- The clock manager's TSENS clock at boot: a Raspberry Pi Model B Rev
+  2's `clk_summary`
+  ([a gist from 2019](https://gist.github.com/cleverca22/2c3bd998e08a2d2c282bc735494792e3)):
+  `tsens` at 1920000 Hz beside `osc` at 19200000 Hz, with the UART,
+  EMMC and VPU clocks at the rates the Pi 3 shows.
 - The firmware's clocks and power domains: Raspberry Pi's Linux,
   [clk-raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/clk/bcm/clk-raspberrypi.c)
   (`GET_CLOCKS`, the clocks' states and ranges),
@@ -1286,7 +1303,8 @@ to quit.
 - [LAN950x datasheet](https://www.microchip.com/content/dam/mchp/documents/UNG/ProductDocuments/DataSheets/LAN950x-Data-Sheet-DS00001875D.pdf),
   Microchip DS00001875D: the Ethernet controller's endpoints,
   descriptors and vendor commands (5.3), its FIFOs and frame formats
-  (5.4), address filtering and VLAN tags (5.5), the EEPROM controller
+  (5.4), address filtering, VLAN tags and the checksum offload engines
+  (5.5), the EEPROM controller
   (5.7), the resets (5.13), and its registers and the PHY's (chapter 7).
 - A LAN9512 board's `lsusb -v`
   ([a Volumio forum post](https://community.volumio.com/uploads/short-url/lOB1cc2lCcK5LTQ7RxJU6oPWK5l.txt)):

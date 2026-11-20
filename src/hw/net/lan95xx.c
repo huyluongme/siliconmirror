@@ -129,6 +129,11 @@ enum {
 #define WUCSR_MPEN (1u << 1)
 #define WUCSR_CLEARABLE 0x60u
 
+/* COE_CR (7.4.13). */
+#define COE_TX_EN (1u << 16)
+#define COE_RX_MODE (1u << 1)
+#define COE_RX_EN (1u << 0)
+
 /* The RX status word (Table 5-40). */
 #define RXS_FILTER_FAIL (1u << 30)
 #define RXS_ES (1u << 15)
@@ -244,6 +249,7 @@ struct Lan95xx {
 	size_t tx_head, tx_used;
 	bool in_frame;
 	uint32_t frame_cmd_b;
+	bool preamble_aligned; /* the first buffer: offset 0, 4 bytes or more */
 	size_t frame_got;
 	uint8_t frame[FRAME_MAX + 4];
 
@@ -676,13 +682,30 @@ static bool address_passes(Lan95xx *e, const uint8_t *dst)
 }
 
 /* A frame, FCS included, from the PHY or the MAC's loopback. */
+/*
+ * The checksum offload engines' sum of n bytes: 16 bits at a time, the
+ * first byte low, an odd last byte padded with a zero, each carry added
+ * back (5.5.7.1).
+ */
+static uint16_t coe_sum(const uint8_t *p, size_t n)
+{
+	uint32_t sum = 0;
+
+	for (size_t i = 0; i < n; i += 2) {
+		sum += p[i] | (i + 1 < n ? (uint32_t)p[i + 1] << 8 : 0);
+		sum = (sum & 0xffff) + (sum >> 16);
+	}
+	return (uint16_t)sum;
+}
+
 static bool rx_frame(Lan95xx *e, const uint8_t *frame, size_t len)
 {
 	uint32_t cr = *reg(e, MAC_CR), status = 0;
 	size_t longest = 1518, need, at;
 	unsigned type = 0, off = rx_offset(e);
 	bool pass;
-	uint8_t word[4], zero[3] = {0};
+	uint8_t word[4], zero[3] = {0}, sum[2];
+	size_t extra = 0; /* the RXCOE's sum */
 
 	if (!(cr & MAC_RXEN) || len < 6)
 		return false;
@@ -738,22 +761,38 @@ static bool rx_frame(Lan95xx *e, const uint8_t *frame, size_t len)
 		*reg(e, INT_STS) |= INT_RXDF;
 		return false;
 	}
+	/*
+	 * The RXCOE: the sum of what lies between the first 14 bytes and
+	 * the FCS, after the frame (5.5.7). Pad stripping must be off.
+	 */
+	if (*reg(e, COE_CR) & COE_RX_EN) {
+		if (cr & MAC_PADSTR) {
+			stop(e,
+			     "a frame with both the RX checksum offload engine and pad "
+			     "stripping, which the datasheet forbids (5.5.7)",
+			     MAC_CR, cr);
+			return false;
+		}
+		store_le16(sum, len > 18 ? coe_sum(frame + 14, len - 18) : 0);
+		extra = 2;
+	}
 	/* Pad stripping: the pad and the FCS go (MAC_CR bit 8). */
 	if ((cr & MAC_PADSTR) && len >= 18 && type < 46 && len - 18 > type)
 		len = 14 + type;
 
-	need = 4 + ((off + len + 3) & ~(size_t)3);
+	need = 4 + ((off + len + extra + 3) & ~(size_t)3);
 	if (e->rx_used + need > RX_FIFO_SIZE) {
 		count(&e->rx_stats[RX_DROP], false);
 		*reg(e, INT_STS) |= INT_RXDF;
 		return false;
 	}
-	status |= (uint32_t)len << 16;
+	status |= (uint32_t)(len + extra) << 16;
 	store_le32(word, status);
 	at = e->rx_head + e->rx_used;
 	fifo_put(e->rx_fifo, RX_FIFO_SIZE, at, word, 4);
 	fifo_put(e->rx_fifo, RX_FIFO_SIZE, at + 4, zero, off);
 	fifo_put(e->rx_fifo, RX_FIFO_SIZE, at + 4 + off, frame, len);
+	fifo_put(e->rx_fifo, RX_FIFO_SIZE, at + 4 + off + len, sum, extra);
 	e->rx_used += need;
 	e->rx_frames++;
 	return true;
@@ -855,9 +894,39 @@ static void tx_error(Lan95xx *e)
 		e->dev.halted[2][0] = true;
 }
 
+/*
+ * The TXCOE (5.5.8): the frame's first 4 bytes are its preamble, which
+ * is not sent; the ones' complement of the sum from TXCSSP (bits 11:0) to
+ * the end goes in at TXCSLOC (bits 27:16), as Linux's smsc95xx needs.
+ * Neither may lie in the MAC header or the last 4 bytes. False when it
+ * stopped the machine.
+ */
+static bool tx_checksum(Lan95xx *e, size_t *len)
+{
+	uint32_t pre = load_le32(e->frame);
+	size_t start = pre & 0xfff, at = pre >> 16 & 0xfff, n = *len - 4;
+
+	if (!e->preamble_aligned || (pre & 0xf000f000u) != 0 || start < 14 ||
+	    at < 14 || start + 4 >= n || at + 2 + 4 > n) {
+		machine_stop(e->machine, MACHINE_STOP_ERROR,
+		             "lan95xx: TX checksum preamble 0x%08" PRIx32
+		             " for %zu bytes: not as the datasheet allows (5.5.8)",
+		             pre, n);
+		return false;
+	}
+	memmove(e->frame, e->frame + 4, n);
+	store_le16(e->frame + at, (uint16_t)~coe_sum(e->frame + start, n - start));
+	*len = n;
+	return true;
+}
+
 static void transmit(Lan95xx *e, uint32_t cmd_b, size_t len)
 {
 	bool crc = !(cmd_b & TXB_NO_CRC);
+
+	if ((cmd_b & TXB_CK) && (*reg(e, COE_CR) & COE_TX_EN) &&
+	    !tx_checksum(e, &len))
+		return;
 
 	/* Padding to 64 bytes brings the CRC with it (Table 5-42). */
 	if (!(cmd_b & TXB_NO_PAD) && len < 60) {
@@ -914,6 +983,7 @@ static void tx_drain(Lan95xx *e)
 			}
 			e->in_frame = true;
 			e->frame_cmd_b = b;
+			e->preamble_aligned = off == 0 && size >= 4;
 			e->frame_got = 0;
 		} else if ((a & TXA_FIRST) || ((b ^ e->frame_cmd_b) & ~TXB_CK)) {
 			tx_error(e); /* unexpected FS, or command B changed */
@@ -1225,10 +1295,14 @@ static bool reg_write(Lan95xx *e, unsigned addr, uint32_t v)
 		*r = (old & WUCSR_CLEARABLE & ~v) | (v & reg_info[addr / 4].writable);
 		return true;
 	case COE_CR:
-		if (v & reg_info[addr / 4].writable) {
-			stop(e, "the checksum offload engines are not modelled", addr, v);
+		if (v & COE_RX_MODE) {
+			stop(e,
+			     "the RX checksum offload engine's mode 1 (VLAN tags, SNAP) "
+			     "is not modelled",
+			     addr, v);
 			return false;
 		}
+		*r = v & reg_info[addr / 4].writable;
 		return true;
 	default:
 		if (reg_info[addr / 4].writable == 0) {

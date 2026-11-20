@@ -19,10 +19,17 @@
  * partner that negotiates 10 or 100 Mb/s, half or full duplex; frames
  * cross it whole, with their FCS, at once.
  *
+ * The checksum offload engines (5.5.7, 5.5.8): the receive engine's sum
+ * follows each frame; the transmit engine puts the ones' complement of
+ * its sum in a frame, as Linux's smsc95xx needs, even with the preamble
+ * in the frame's one buffer.
+ *
  * Not modelled, and the machine stops when software uses them: the soft
  * reset (SRST, a USB disconnect), the data port, the debug registers, the
- * wake-up frame filter and wake-up detection, the checksum offload
- * engines, pause frames on demand, the PHY's loopback and collision test.
+ * wake-up frame filter and wake-up detection, the receive checksum
+ * engine's mode 1 and that engine with pad stripping, preambles outside
+ * the datasheet's rules, pause frames on demand, the PHY's loopback and
+ * collision test.
  * GPIO pins are inputs that read 1 (pulled up) and never interrupt.
  */
 
