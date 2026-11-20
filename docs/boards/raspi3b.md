@@ -117,6 +117,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f000000` | 16 MB   | Peripherals                                              | Partly                     |
 | `0x3f006000` | 4 KB    | MPHI, the parallel host interface: dwc_otg's interrupt   | What dwc_otg uses          |
 | `0x3f007000` | 4 KB    | DMA controller, channels 0 to 14                         | Yes, but 2D and ignore     |
+| `0x3f00a000` | 36 B    | AXI bridges (ASB) between the power domains and the bus  | Their ID                   |
 | `0x3f00b200` | 512 B   | Interrupt controller of the GPU's and ARM's peripherals  | Yes, up to `0x3f00b227`    |
 | `0x3f00b840` | 60 B    | Doorbells between the Arm and the VideoCore (VCHIQ)      | What VCHIQ uses            |
 | `0x3f00b880` | 64 B    | Mailboxes between the Arm and the VideoCore              | Yes                        |
@@ -836,6 +837,15 @@ them at 0 and sets nothing in `RSTS`. The power domains and reset lines,
 and the other kinds of watchdog reset (`WRCFG` `0b01` and `0b11`), stop
 the machine.
 
+The binding gives the power manager a second region, at `0x3f00a000`:
+the asynchronous AXI bridges (ASB) between the power domains and the
+bus. Linux's `bcm2835-power` reads their ID at `0x20`, which must be
+`0x62726467` ("brdg"), and then registers the power domains without
+touching them: no device in the board's devicetree uses them, as the
+Raspberry Pi devicetree powers its devices through the firmware. smirror
+models that ID. The bridges' other registers, which stop and start each
+bridge, stop the machine.
+
 ## The clock manager
 
 The clock manager, CPRMAN, at `0x3f101000` multiplies the 19.2 MHz
@@ -1250,6 +1260,13 @@ to quit.
   with the node in
   [bcm2835-common.dtsi](https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2835-common.dtsi)
   (`0x7e100000`, 0x114 bytes).
+- The AXI bridges: Raspberry Pi's Linux,
+  [bcm2835-power.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/pmdomain/bcm/bcm2835-power.c)
+  (`ASB_AXI_BRDG_ID`, `BCM2835_BRDG_ID`, the domains off at probe) and
+  [bcm2835-pm.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/mfd/bcm2835-pm.c)
+  (the `asb` region); the board's devicetree, `bcm2710-rpi-3-b.dtb` of
+  firmware 1.20260915 (`reg-names = "pm", "asb"`, `0x7e00a000`, 0x24
+  bytes, and no device on the power manager's domains).
 - [LAN950x datasheet](https://www.microchip.com/content/dam/mchp/documents/UNG/ProductDocuments/DataSheets/LAN950x-Data-Sheet-DS00001875D.pdf),
   Microchip DS00001875D: the Ethernet controller's endpoints,
   descriptors and vendor commands (5.3), its FIFOs and frame formats

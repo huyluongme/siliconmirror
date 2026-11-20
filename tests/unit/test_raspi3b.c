@@ -840,6 +840,29 @@ static void test_rng_thermal(void)
 }
 
 /*
+ * The AXI bridges at 0x3f00a000, the power manager's second region: 36
+ * bytes, of which their ID is modelled.
+ */
+static void test_axi_bridges(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_read(m->bus, 0x3f00a020, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0x62726467);
+	CHECK_EQ(bus_read(m->bus, 0x3f00a024, 4, &v), BUS_ERR_UNMAPPED);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	CHECK_EQ(bus_read(m->bus, 0x3f00a000, 4, &v), BUS_OK);
+	CHECK_EQ(m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(m->stop_message, "bcm2835-pm: 4-byte read of ASB offset "
+	                              "0x000 is not emulated") != NULL);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
  * The DMA controller at 0x3f007000: a copy through a bus alias of the
  * RAM, whose end is GPU interrupt 16 for channel 0 and 27 for channel
  * 11; channel 15 at 0x3fe05000.
@@ -1116,6 +1139,7 @@ int main(void)
 	RUN_TEST(test_doorbells);
 	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
+	RUN_TEST(test_axi_bridges);
 	RUN_TEST(test_dma);
 	RUN_TEST(test_secondary_cores);
 	RUN_TEST(test_shared_l2_registers);

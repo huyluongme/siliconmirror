@@ -259,7 +259,17 @@ Starting kernel ...
 [    2.701736] printk: legacy console [ttyS0] enabled
 [    2.711332] printk: legacy bootconsole [bcm2835aux0] disabled
 [    2.711332] printk: legacy bootconsole [bcm2835aux0] disabled
-[    2.725204] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog tsmirror: error: cpu1: 4-byte read from 0x000000003f00a020 (virtual 0xffffffc081ccd020) at 0xffffffc0808da6ec failed: no region at this address
-
-
-drive: no "linux-card: the initramfs runs" in time
+[    2.725204] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
+[    2.732076] bcm2835-power bcm2835-power: Broadcom BCM2835 power domains driver
+[    2.738886] bcm2835_thermal 3f212000.thermal: Clock tsens running at 0 Hz is outside of the recommended range: 1.92 to 5MHz
+[    2.750308] mmc-bcm2835 3f300000.mmcnr: mmc_debug:0 mmc_debug2:0
+[    2.755859] mmc-bcm2835 3f300000.mmcnr: DMA channel allocated
+[    2.785466] of_cfs_init
+[    2.787354] of_cfs_init: OK
+[    2.790161] clk: Disabling unused clocks
+[    2.794103] PM: genpd: Disabling unused power doma[    2.857875] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
+[    2.868135] Freeing unused kernel memory: 5632K
+[    2.872191] Run /init as init process
+linux-card: the initramfs runs
+~ # smirror: shutdown: the user pressed Ctrl-A x
+drive: 11 lines, ok

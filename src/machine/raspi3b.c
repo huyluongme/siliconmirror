@@ -597,6 +597,12 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+	status = bcm2835_pm_map_asb(pm, m->bus, "asb", RASPI3B_ASB_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the AXI bridges: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
 	cprman = bcm2835_cprman_create(m);
 	if (cprman == NULL)
 		goto out_of_memory;

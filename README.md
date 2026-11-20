@@ -63,7 +63,7 @@ a few minutes, so only the `release` and `ci-release` builds run it
 `~/.cache/siliconmirror-linux`: the firmware files and the `kernel8.img`
 of the same release, and an initramfs of BusyBox 1.38.0 (built with an
 `aarch64-linux-gnu-` GCC), whose `/init` starts a shell on the serial
-console. smirror does not boot it to that shell yet: see the roadmap.
+console. smirror boots it to that shell.
 
 `scripts/uboot-linux-card.sh` puts both together, as a card that boots
 with U-Boot would: the firmware starts U-Boot, whose `boot.scr` loads
