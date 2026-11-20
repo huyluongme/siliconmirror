@@ -249,27 +249,26 @@ Starting kernel ...
 [    2.641902] Demotion targets for Node 0: null
 [    2.646325] Key type .fscrypt registered
 [    2.650252] Key type fscrypt-provisioning registered
-[    2.658369] uart-pl011 3f201000.serial: cts_event_workaround enabled
-[    2.664893] 3f201000.serial: ttyAMA1 at MMIO 0x3f201000 (irq = 99, base_baud = 0) is a PL011 rev2
-[    2.673883] serial serial0: tty port ttyAMA1 registered
-[    2.679589] bcm2835-aux-uart 3f215040.serial: there is not valid maps for state default
-[    2.687716] printk: legacy console [ttyS0] disabled
-[    2.692850] 3f215040.serial: ttyS0 at MMIO 0x3f215040 (irq = 71, base_baud = 31250000) is a 16550
-[    2.701736] printk: legacy console [ttyS0] enabled
-[    2.701736] printk: legacy console [ttyS0] enabled
-[    2.711332] printk: legacy bootconsole [bcm2835aux0] disabled
-[    2.711332] printk: legacy bootconsole [bcm2835aux0] disabled
-[    2.725204] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
-[    2.732076] bcm2835-power bcm2835-power: Broadcom BCM2835 power domains driver
-[    2.738886] bcm2835_thermal 3f212000.thermal: Clock tsens running at 0 Hz is outside of the recommended range: 1.92 to 5MHz
-[    2.750308] mmc-bcm2835 3f300000.mmcnr: mmc_debug:0 mmc_debug2:0
-[    2.755859] mmc-bcm2835 3f300000.mmcnr: DMA channel allocated
-[    2.785466] of_cfs_init
-[    2.787354] of_cfs_init: OK
-[    2.790161] clk: Disabling unused clocks
-[    2.794103] PM: genpd: Disabling unused power doma[    2.857875] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
-[    2.868135] Freeing unused kernel memory: 5632K
-[    2.872191] Run /init as init process
+[    2.658365] uart-pl011 3f201000.serial: cts_event_workaround enabled
+[    2.664889] 3f201000.serial: ttyAMA1 at MMIO 0x3f201000 (irq = 99, base_baud = 0) is a PL011 rev2
+[    2.673878] serial serial0: tty port ttyAMA1 registered
+[    2.679586] bcm2835-aux-uart 3f215040.serial: there is not valid maps for state default
+[    2.687713] printk: legacy console [ttyS0] disabled
+[    2.692847] 3f215040.serial: ttyS0 at MMIO 0x3f215040 (irq = 71, base_baud = 31250000) is a 16550
+[    2.701733] printk: legacy console [ttyS0] enabled
+[    2.701733] printk: legacy console [ttyS0] enabled
+[    2.711329] printk: legacy bootconsole [bcm2835aux0] disabled
+[    2.711329] printk: legacy bootconsole [bcm2835aux0] disabled
+[    2.725203] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
+[    2.732075] bcm2835-power bcm2835-power: Broadcom BCM2835 power domains driver
+[    2.739333] mmc-bcm2835 3f300000.mmcnr: mmc_debug:0 mmc_debug2:0
+[    2.744751] mmc-bcm2835 3f300000.mmcnr: DMA channel allocated
+[    2.773438] of_cfs_init
+[    2.775301] of_cfs_init: OK
+[    2.778134] clk: Disabling unused clocks
+[    2.782071] PM: genpd: Disabling unused power doma[    2.845858] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
+[    2.856076] Freeing unused kernel memory: 5632K
+[    2.860132] Run /init as init process
 linux-card: the initramfs runs
 ~ # smirror: shutdown: the user pressed Ctrl-A x
 drive: 11 lines, ok
