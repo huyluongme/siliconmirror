@@ -470,6 +470,17 @@ static void phy_soft_reset(Lan95xx *e)
 	schedule(e, &e->phy_reset_done, BMCR_RST_NS);
 }
 
+/*
+ * Registers 7 to 15, which the PHY does not have: the LAN8700's datasheet,
+ * the same PHY (model 0x0c), says they read 0xFFFF (4.13.1). Writes to
+ * them do nothing (our reading). Linux reads its EEE abilities through
+ * 13 and 14, and takes 0xFFFF for none.
+ */
+static bool phy_absent(unsigned index)
+{
+	return index >= 7 && index <= 15;
+}
+
 static uint16_t phy_read(Lan95xx *e, unsigned index)
 {
 	uint16_t v;
@@ -517,7 +528,8 @@ static uint16_t phy_read(Lan95xx *e, unsigned index)
 			v |= 4u << 2;
 		return v;
 	default:
-		stop_phy(e, "read of a PHY register not modelled:", index);
+		if (!phy_absent(index))
+			stop_phy(e, "read of a PHY register not modelled:", index);
 		return 0xffff;
 	}
 }
@@ -581,7 +593,8 @@ static void phy_write(Lan95xx *e, unsigned index, uint16_t v)
 	case PHY_ISR:
 		return; /* read-only */
 	default:
-		stop_phy(e, "write of a PHY register not modelled:", index);
+		if (!phy_absent(index))
+			stop_phy(e, "write of a PHY register not modelled:", index);
 	}
 }
 

@@ -786,7 +786,11 @@ smirror follows it, without the LAN9500A's additions:
   `ID_REV_CHIP_ID_9512_`) and revision 0, which is unknown.
 - The vendor commands that read and write a register or give the
   statistics; the system and MAC registers; the PHY's through
-  `MII_ACCESS`, identity `0x0007c0c3` (the LAN9500's).
+  `MII_ACCESS`, identity `0x0007c0c3` (the LAN9500's). The PHY has no
+  registers 7 to 15: they read `0xFFFF`, as the datasheet of the LAN8700
+  says (4.13.1), the same PHY (model `0x0c`, which Linux drives as
+  "SMSC LAN8700"); writes to them do nothing (our reading). Linux reads
+  the PHY's EEE abilities through 13 and 14 and takes `0xFFFF` for none.
 - The resets: a USB reset or a lite reset puts every register back, and
   the PHY powers down after a USB reset; the PHY's reset through
   `PMT_CTL` takes 2 ms, while every transfer gets a NAK, and its soft
@@ -1306,6 +1310,14 @@ to quit.
   (5.4), address filtering, VLAN tags and the checksum offload engines
   (5.5), the EEPROM controller
   (5.7), the resets (5.13), and its registers and the PHY's (chapter 7).
+- [LAN8700/LAN8700i datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/00002260A.pdf),
+  Microchip DS00002260A: the PHY's registers (5.1, Table 5-29), and
+  registers 7 to 15, which read `0xFFFF` (4.13.1); Raspberry Pi's
+  Linux,
+  [phy-c45.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/net/phy/phy-c45.c)
+  (`0xffff` for no EEE) and
+  [smsc.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/net/phy/smsc.c)
+  ("SMSC LAN8700" for model `0x0c`).
 - A LAN9512 board's `lsusb -v`
   ([a Volumio forum post](https://community.volumio.com/uploads/short-url/lOB1cc2lCcK5LTQ7RxJU6oPWK5l.txt)):
   the Ethernet controller's device release and protocol. Linux's

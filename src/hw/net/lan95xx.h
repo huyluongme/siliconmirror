@@ -19,6 +19,9 @@
  * partner that negotiates 10 or 100 Mb/s, half or full duplex; frames
  * cross it whole, with their FCS, at once.
  *
+ * The PHY's registers 7 to 15, which it does not have, read 0xFFFF, as the
+ * LAN8700's datasheet (DS00002260A, 4.13.1) says of the same PHY.
+ *
  * The checksum offload engines (5.5.7, 5.5.8): the receive engine's sum
  * follows each frame; the transmit engine puts the ones' complement of
  * its sum in a frame, as Linux's smsc95xx needs, even with the preamble

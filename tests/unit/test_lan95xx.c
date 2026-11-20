@@ -467,7 +467,7 @@ static void test_unmodelled(void)
 		{0x12c, 4, true, "wake-up detection"},
 		{COE_CR, 2, true, "checksum offload engine's mode 1"},
 		{MII_ACCESS, 2u << 11 | 1, true, "no PHY"},
-		{MII_ACCESS, 1u << 11 | 7u << 6 | 1, true, "PHY register"},
+		{MII_ACCESS, 1u << 11 | 16u << 6 | 1, true, "PHY register"},
 	};
 
 	for (size_t i = 0; i < sizeof(stops) / sizeof(stops[0]); i++) {
@@ -825,7 +825,10 @@ static void test_phy_unmodelled(void)
 	} stops[] = {
 		{0, 0x4000, "PHY loopback"},
 		{0, 0x0080, "collision test"},
-		{7, 0, "PHY register not modelled"},
+		{16, 0, "PHY register not modelled"},
+		{19, 0, "PHY register not modelled"},
+		{26, 0, "PHY register not modelled"},
+		{28, 0, "PHY register not modelled"},
 		{18, 0x00c1, "reserved mode"}, /* then the soft reset */
 	};
 
@@ -840,6 +843,32 @@ static void test_phy_unmodelled(void)
 		CHECK(strstr(s.m->stop_message, stops[i].message) != NULL);
 		teardown(&s);
 	}
+}
+
+/*
+ * Registers 7 to 15, which the PHY does not have, read 0xFFFF (the
+ * LAN8700's datasheet, 4.13.1); writes do nothing. Linux reads the EEE
+ * abilities, MMD 3 register 20, through 13 and 14 so.
+ */
+static void test_phy_absent(void)
+{
+	Setup s = setup(true);
+
+	phy_reset(&s);
+	for (unsigned i = 7; i <= 15; i++) {
+		CHECK_EQ(mdio_read(&s, i), 0xffff);
+		mdio_write(&s, i, 0x1234);
+		CHECK_EQ(mdio_read(&s, i), 0xffff);
+	}
+	mdio_write(&s, 13, 3);
+	mdio_write(&s, 14, 20);
+	mdio_write(&s, 13, 0x4003);
+	CHECK_EQ(mdio_read(&s, 14), 0xffff);
+	CHECK_EQ(mdio_read(&s, 6), 0); /* ANER, before them, is there */
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	mdio_read(&s, 16); /* after them: not modelled */
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	teardown(&s);
 }
 
 /* Speed and duplex as negotiated or forced; what restarts the link. */
@@ -2009,5 +2038,6 @@ int main(void)
 	RUN_TEST(test_plug);
 	RUN_TEST(test_destroy_pending);
 	RUN_TEST(test_checksum_offload);
+	RUN_TEST(test_phy_absent);
 	return test_summary();
 }
