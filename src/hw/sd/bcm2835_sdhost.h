@@ -22,6 +22,10 @@
  * data and busy, 64 for a response (Ncr, SD Physical Layer
  * specification, 4.12). CRC errors never happen.
  *
+ * BLOCK_IRPT comes at the end of a block only while BLOCK_IRPT_EN is
+ * set: Linux's bcm2835.c reads blocks through the FIFO with it clear,
+ * and would take a BLOCK_IRPT left from them for one more block.
+ *
  * DREQ, for the DMA controller, is high on a read while the FIFO holds
  * SDEDM's read threshold, and on a write while it has room for the write
  * threshold. It does not rise for the rest of a block, as Linux's

@@ -210,7 +210,7 @@ static void identify(Setup *s)
 	CHECK_EQ(rd(s, SDRSP0) >> 16, 0xaaaa);
 	command(s, 7 | BUSYWAIT, 0xaaaa0000);
 	wr(s, SDHSTS, BUSY_IRPT);
-	wr(s, SDHCFG, SLOW_CARD);
+	wr(s, SDHCFG, SLOW_CARD | BLOCK_IRPT_EN); /* BLOCK_IRPT, as for writes */
 	wr(s, SDCDIV, 3); /* 50 MHz with SLOW_CARD: 250 / 5 */
 }
 
@@ -409,10 +409,10 @@ static void test_read(void)
 	CHECK_EQ(fsm(&s), READDATA); /* the CRC and end bit to come */
 	run_until(&s, now(&s) + clocks(17, 5));
 	CHECK_EQ(fsm(&s), DATAMODE);
-	CHECK_EQ(rd(&s, SDHSTS), BLOCK_IRPT);
+	/* BLOCK_IRPT_EN was clear: no BLOCK_IRPT, as Linux's PIO reads need. */
+	CHECK_EQ(rd(&s, SDHSTS), 0);
 	wr(&s, SDHCFG, SLOW_CARD | BLOCK_IRPT_EN);
-	CHECK(irq_level(&s.irq));
-	wr(&s, SDHSTS, BLOCK_IRPT);
+	CHECK_EQ(rd(&s, SDHSTS), 0);
 	CHECK(!irq_level(&s.irq));
 	teardown(&s);
 }
@@ -546,7 +546,7 @@ static void test_details(void)
 	wr(&s, SDCMD, NEW | WRITE | 24);
 	run_until(&s, now(&s) + clocks(200, 5));
 	CHECK(irq_level(&s.irq));
-	wr(&s, SDHCFG, SLOW_CARD);
+	wr(&s, SDHCFG, SLOW_CARD | BLOCK_IRPT_EN);
 	for (unsigned i = 0; i < 128; i++) {
 		for (int k = 0; k < 10000 && fifo(&s) == 16; k++)
 			run_until(&s, now(&s) + 100);
@@ -598,7 +598,7 @@ static void test_bus_width(void)
 	wr(&s, SDHBCT, 512);
 	wr(&s, SDHBLC, 1);
 	/* The host on 4 lines, the card on 1: the CRC fails. */
-	wr(&s, SDHCFG, SLOW_CARD | WIDE_EXT_BUS);
+	wr(&s, SDHCFG, SLOW_CARD | WIDE_EXT_BUS | BLOCK_IRPT_EN);
 	command(&s, READ | 17, 0);
 	read_block(&s, words, 128);
 	run_until(&s, now(&s) + 100000);
@@ -967,7 +967,8 @@ static void test_write_errors(void)
 		wr(&s, SDHBCT, 512);
 		wr(&s, SDHBLC, 1);
 		if (c == 0)
-			wr(&s, SDHCFG, SLOW_CARD | WIDE_EXT_BUS); /* the card: 1 line */
+			wr(&s, SDHCFG, /* the card: 1 line */
+			   SLOW_CARD | WIDE_EXT_BUS | BLOCK_IRPT_EN);
 		command(&s, WRITE | 24, 0);
 		if (c == 1)
 			s.connected = false; /* the card leaves */
@@ -1036,6 +1037,7 @@ static void test_irq_matrix(void)
 		} else {
 			uint32_t words[128];
 
+			wr(&s, SDHCFG, SLOW_CARD | BLOCK_IRPT_EN); /* else no source */
 			wr(&s, SDHBLC, 1);
 			command(&s, READ | 17, 0);
 			read_block(&s, words, 128);
@@ -1070,7 +1072,7 @@ static void test_thresholds(void)
 	CHECK_EQ(rd(&s, SDEDM), 0x1fu << 14 | 1u << 9 | DATAMODE);
 	wr(&s, SDEDM, 1u << 14 | 0x1fu << 9);
 	CHECK_EQ(rd(&s, SDEDM), 1u << 14 | 0x1fu << 9 | DATAMODE);
-	CHECK_EQ(rd(&s, SDHCFG), SLOW_CARD); /* SDEDM is not SDHCFG */
+	CHECK_EQ(rd(&s, SDHCFG), SLOW_CARD | BLOCK_IRPT_EN); /* not SDEDM */
 
 	/* A read threshold of 3, then 0 (taken as 1). */
 	for (unsigned th = 3;; th = 0) {

@@ -654,9 +654,17 @@ does not answer fails after 64 clocks with `CMD_TIME_OUT`; data that
 does not come fails after `SDTOUT` clocks with `REW_TIME_OUT`. `DATA_FLAG`
 is set while the FIFO holds the read threshold of `SDEDM`, or the end of
 a block, or has room for the write threshold; `BLOCK_IRPT` comes at the
-end of each block, `BUSY_IRPT` at the end of a busy period. The
-interrupt, GPU interrupt 56, is high while one of them is set and
-enabled.
+end of each block while `BLOCK_IRPT_EN` is set, `BUSY_IRPT` at the end
+of a busy period. The interrupt, GPU interrupt 56, is high while one of
+them is set and enabled.
+
+That `BLOCK_IRPT` needs its enable is our reading of Linux's
+`bcm2835.c`, which works on the real board: it reads a block through
+the FIFO with `BLOCK_IRPT_EN` clear, then takes a `BLOCK_IRPT` that it
+sees in `SDHSTS` at its next interrupt for one more block, and fails
+(`WARN_ON(!host->blocks)`, then `-EINVAL`). `DATA_FLAG`, which the
+driver calls no "true data interrupt status bit", does not need its
+enable.
 
 Without the card, or while GPIO 48 to 53 are not all ALT0, commands
 time out, as with an empty slot. CRC errors never happen, but a block

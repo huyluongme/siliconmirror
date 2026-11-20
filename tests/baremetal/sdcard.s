@@ -38,7 +38,8 @@
 	.equ	READ, 0x40
 	.equ	BLOCK_IRPT, 9		// bits of SDHSTS
 	.equ	BUSY_IRPT, 10
-	.equ	SLOW_CARD, 0x8
+	.equ	SLOW_CARD, 0x8		// bits of SDHCFG
+	.equ	BLOCK_IRPT_EN, 0x100
 	.equ	IDENT_CDIV, 623		// 250 MHz / 625 = 400 kHz
 	.equ	DATA_CDIV, 3		// 50 MHz
 	.equ	OCR_READY, 31
@@ -55,7 +56,9 @@ _start:
 	// Power on, slow for the identification.
 	mov	w0, #1
 	str	w0, [x10, #SDVDD]
-	mov	w0, #SLOW_CARD
+	// BLOCK_IRPT comes only while enabled; the interrupt controller
+	// keeps the interrupt itself from the core.
+	mov	w0, #(SLOW_CARD | BLOCK_IRPT_EN)
 	str	w0, [x10, #SDHCFG]
 	mov	w0, #IDENT_CDIV
 	str	w0, [x10, #SDCDIV]

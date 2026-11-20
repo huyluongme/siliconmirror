@@ -291,10 +291,14 @@ static void next_read_block(Bcm2835Sdhost *host)
 	               at_clocks(host, NAC + 1 + word_clocks(host)));
 }
 
-/* A block is done: its interrupt, then the next, or the end. */
+/*
+ * A block is done: its interrupt, if enabled (see the header), then the
+ * next block, or the end.
+ */
 static void block_done(Bcm2835Sdhost *host)
 {
-	host->hsts |= HSTS_BLOCK_IRPT;
+	if (host->hcfg & HCFG_BLOCK_IRPT_EN)
+		host->hsts |= HSTS_BLOCK_IRPT;
 	if (host->block_error)
 		host->hsts |= HSTS_CRC16_ERROR;
 	if (host->blocks_left == 0) {
