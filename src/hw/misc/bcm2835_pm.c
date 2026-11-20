@@ -15,6 +15,10 @@
 /* The registers that the drivers use. */
 enum { REG_RSTC = 0x1c, REG_RSTS = 0x20, REG_WDOG = 0x24 };
 
+/* The AXI bridges: their ID, which Linux's bcm2835-power checks. */
+#define REG_ASB_ID 0x20
+#define ASB_ID 0x62726467u /* "brdg" */
+
 #define PASSWORD_MASK 0xff000000u
 #define PASSWORD 0x5a000000u
 #define DATA_MASK 0x00ffffffu  /* what the registers keep */
@@ -32,12 +36,19 @@ struct Bcm2835Pm {
 	Event expire;
 };
 
+/* region: "" for the power manager, "ASB " for the AXI bridges. */
+static void stop_in(Bcm2835Pm *pm, const char *access, const char *region,
+                    uint64_t offset, unsigned size, const char *why)
+{
+	machine_stop(pm->machine, MACHINE_STOP_ERROR,
+	             "bcm2835-pm: %u-byte %s %soffset 0x%03" PRIx64 " %s", size,
+	             access, region, offset, why);
+}
+
 static void stop(Bcm2835Pm *pm, const char *access, uint64_t offset,
                  unsigned size, const char *why)
 {
-	machine_stop(pm->machine, MACHINE_STOP_ERROR,
-	             "bcm2835-pm: %u-byte %s offset 0x%03" PRIx64 " %s", size,
-	             access, offset, why);
+	stop_in(pm, access, "", offset, size, why);
 }
 
 static bool running(const Bcm2835Pm *pm)
@@ -151,6 +162,29 @@ static const BusMmioOps pm_mmio_ops = {
 	.write = pm_write,
 };
 
+#define ASB_UNMODELLED "is not emulated: the AXI bridges, but for their ID"
+
+static uint64_t asb_read(void *ctx, uint64_t offset, unsigned size)
+{
+	Bcm2835Pm *pm = ctx;
+
+	if (size == 4 && offset == REG_ASB_ID)
+		return ASB_ID;
+	stop_in(pm, "read of", "ASB ", offset, size, ASB_UNMODELLED);
+	return 0;
+}
+
+static void asb_write(void *ctx, uint64_t offset, uint64_t value, unsigned size)
+{
+	(void)value;
+	stop_in(ctx, "write to", "ASB ", offset, size, ASB_UNMODELLED);
+}
+
+static const BusMmioOps asb_mmio_ops = {
+	.read = asb_read,
+	.write = asb_write,
+};
+
 Bcm2835Pm *bcm2835_pm_create(Machine *m)
 {
 	Bcm2835Pm *pm = calloc(1, sizeof(*pm));
@@ -180,6 +214,13 @@ BusStatus bcm2835_pm_map(Bcm2835Pm *pm, Bus *bus, const char *name,
 {
 	return bus_map_mmio(bus, name, base, BCM2835_PM_MMIO_SIZE, &pm_mmio_ops,
 	                    pm);
+}
+
+BusStatus bcm2835_pm_map_asb(Bcm2835Pm *pm, Bus *bus, const char *name,
+                             uint64_t base)
+{
+	return bus_map_mmio(bus, name, base, BCM2835_PM_ASB_MMIO_SIZE,
+	                    &asb_mmio_ops, pm);
 }
 
 unsigned bcm2835_pm_partition(const Bcm2835Pm *pm)

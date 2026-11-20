@@ -15,9 +15,15 @@
  * RSTS survives that reset: the Raspberry Pi firmware finds there, in
  * bits 0, 2, 4, 6, 8 and 10, the partition to boot from, 63 for a halt.
  *
+ * The binding gives the block a second region, at 0x7E00A000: the
+ * asynchronous AXI bridges (ASB) between the power domains and the bus.
+ * Its ID register, at 0x20, reads 0x62726467, "brdg": Linux's
+ * bcm2835-power checks it before it registers the power domains.
+ *
  * Not modelled, and the machine stops when software uses them: the
- * power domains and reset lines (the other registers), and the other
- * kinds of watchdog reset, WRCFG 0b01 and 0b11.
+ * power domains and reset lines (the other registers), the other kinds
+ * of watchdog reset, WRCFG 0b01 and 0b11, and the bridges' other
+ * registers, which stop and start them.
  */
 
 #ifndef HW_MISC_BCM2835_PM_H
@@ -28,7 +34,8 @@
 #include "core/bus.h"
 #include "core/machine.h"
 
-#define BCM2835_PM_MMIO_SIZE 0x114 /* the binding's "pm" region */
+#define BCM2835_PM_MMIO_SIZE 0x114    /* the binding's "pm" region */
+#define BCM2835_PM_ASB_MMIO_SIZE 0x24 /* and its "asb" region */
 #define BCM2835_PM_HALT_PARTITION 63
 
 typedef struct Bcm2835Pm Bcm2835Pm;
@@ -43,6 +50,10 @@ void bcm2835_pm_reset(Bcm2835Pm *pm);
 /* Map the registers on bus at base. */
 BusStatus bcm2835_pm_map(Bcm2835Pm *pm, Bus *bus, const char *name,
                          uint64_t base);
+
+/* Map the AXI bridges' registers on bus at base. */
+BusStatus bcm2835_pm_map_asb(Bcm2835Pm *pm, Bus *bus, const char *name,
+                             uint64_t base);
 
 /* The partition that RSTS gives the firmware: 0 for the default. */
 unsigned bcm2835_pm_partition(const Bcm2835Pm *pm);

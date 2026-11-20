@@ -16,6 +16,7 @@
 #include "test.h"
 
 #define BASE 0x3f100000
+#define ASB 0x3f00a000
 #define PW 0x5a000000u
 
 enum { RSTC = 0x1c, RSTS = 0x20, WDOG = 0x24 };
@@ -248,6 +249,53 @@ static void test_unmodelled(void)
 	}
 }
 
+/*
+ * The AXI bridges, the binding's second region: their ID reads "brdg",
+ * as Linux's bcm2835-power checks; the rest stops the machine.
+ */
+static void test_axi_bridges(void)
+{
+	static const struct {
+		uint64_t offset;
+		unsigned size;
+		bool write;
+		const char *message;
+	} stops[] = {
+		{0x00, 4, false,
+	     "4-byte read of ASB offset 0x000 is not emulated: "
+	     "the AXI bridges, but for their ID"},
+		{0x1c, 4, false, "read of ASB offset 0x01c"},
+		{0x20, 2, false, "2-byte read of ASB offset 0x020"},
+		{0x21, 1, false, "1-byte read of ASB offset 0x021"},
+		{0x08, 4, true, "4-byte write to ASB offset 0x008 is not emulated"},
+		{0x20, 4, true, "write to ASB offset 0x020"},
+	};
+	Setup s;
+	uint64_t value = 0;
+
+	setup(&s);
+	CHECK_EQ(bcm2835_pm_map_asb(s.pm, s.m->bus, "asb", ASB), BUS_OK);
+	CHECK_EQ(bus_read(s.m->bus, ASB + 0x20, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x62726467);
+	CHECK_EQ(bus_read(s.m->bus, ASB + 0x24, 4, &value), BUS_ERR_UNMAPPED);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	for (size_t i = 0; i < sizeof(stops) / sizeof(stops[0]); i++) {
+		value = 0x5a;
+		if (stops[i].write)
+			bus_write(s.m->bus, ASB + stops[i].offset, stops[i].size,
+			          PW | 0x15);
+		else
+			bus_read(s.m->bus, ASB + stops[i].offset, stops[i].size, &value);
+		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+		CHECK(strstr(s.m->stop_message, "bcm2835-pm: ") != NULL);
+		CHECK(strstr(s.m->stop_message, stops[i].message) != NULL);
+		CHECK_EQ(value, stops[i].write ? 0x5a : 0);
+		s.m->stop = MACHINE_STOP_NONE;
+	}
+	CHECK_EQ(rd(&s, RSTS), 0); /* the bridges' writes went nowhere */
+	teardown(&s);
+}
+
 int main(void)
 {
 	RUN_TEST(test_reset_values_and_password);
@@ -257,5 +305,6 @@ int main(void)
 	RUN_TEST(test_registers_apart);
 	RUN_TEST(test_destroy_running);
 	RUN_TEST(test_unmodelled);
+	RUN_TEST(test_axi_bridges);
 	return test_summary();
 }
