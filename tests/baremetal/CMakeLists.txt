@@ -186,7 +186,7 @@ add_test(NAME baremetal.raspi3b-stub-up-to-date
 # An instruction that is not implemented stops the machine with an error.
 add_expect_test(baremetal.unimplemented
 	STATUS 1
-	STDERR "^smirror: error: cpu0: instruction 0x1e622820 at 0x0000000000080000 is not implemented yet"
+	STDERR "^smirror: error: cpu0: instruction 0xd5330400 at 0x0000000000080000 is not implemented yet"
 	COMMAND ${smirror} -M raspi3b -kernel unimplemented.bin)
 
 # Boot from SD card images that sfdisk, mkfs.fat and mtools make, with a

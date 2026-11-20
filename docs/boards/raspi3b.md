@@ -95,11 +95,21 @@ architecture's pseudocode; so do the instructions that move data without
 computing: `DUP`, `INS`, `UMOV`, `SMOV`, `MOVI`, `MVNI`, `ORR` and `BIC`
 with an immediate, and `FMOV`. Every integer instruction of Advanced
 SIMD works, vector and scalar, the saturating ones setting `FPSR.QC`.
-The floating-point arithmetic is not implemented yet, nor the
-conversions between floating point and integers: such an instruction
-stops the machine and names its class. Those that the core lacks, the
-Cryptographic Extension and the half-precision arithmetic of Armv8.2, are
-UNDEFINED.
+
+So does every floating-point instruction of Armv8.0, scalar and Advanced
+SIMD, on single and double precision, and half precision in `FCVT`,
+`FCVTN` and `FCVTL` (`cpu/arm64/fp_scalar.c`, `cpu/arm64/simd_fp.c`).
+Their arithmetic (`cpu/arm64/fp.c`) is the Arm ARM's shared pseudocode
+done on integers, without the host's floating point, whose NaNs and
+flags differ: rounding as `FPCR.RMode` or the instruction says, with
+underflow found before rounding; `FPCR.FZ` flushing denormal inputs
+(with `IDC`) and results (with `UFC`); `FPCR.DN` and the default NaN;
+`FPCR.AHP` and its half precision without infinities or NaNs; NaN
+propagation in the pseudocode's order; a fused multiply-add rounded once;
+and the 8-bit estimates of `FRECPE`, `FRSQRTE`, `URECPE` and `URSQRTE`.
+The cumulative exception bits of `FPSR` gather what each instruction
+raises. Those that the core lacks, the Cryptographic Extension and the
+half-precision arithmetic of Armv8.2, are UNDEFINED.
 
 A System register that the Cortex-A53 has but smirror does not
 implement yet, such as the debug communications channel's `DBGDTR_EL0`,
@@ -1416,7 +1426,13 @@ to quit.
   (D8), TLB maintenance and the rule that permits invalidating more
   entries (D8.17, R_MMZTY), and `AArch64_S1Translate()` with the
   functions it calls (J1.2.4); `DC`, `IC`, `AT` and `TLBI` (C5.3 to
-  C5.5), and `DCZID_EL0`.
+  C5.5), and `DCZID_EL0`; floating point: the shared pseudocode of
+  J1.4.3 (`FPUnpackBase()`, `FPRoundBase()`, `FPProcessNaN()` and
+  `FPProcessNaNs()`, the operations from `FPAdd()` to `FPToFixed()`,
+  `FPRecipEstimate()`, `RecipEstimate()`, `FPRSqrtEstimate()`,
+  `RecipSqrtEstimate()`, `FPRecipStepFused()`, `FPRSqrtStepFused()` and
+  `FPRecpX()`), and the instructions of C7.2, read for Armv8.0 with
+  `FPCR.AH` 0 and no FEAT_FP16.
 - Raspberry Pi firmware wiki:
   [Mailboxes](https://github.com/raspberrypi/firmware/wiki/Mailboxes)
   and

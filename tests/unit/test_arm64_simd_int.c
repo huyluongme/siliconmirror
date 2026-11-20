@@ -1882,9 +1882,9 @@ static void test_edges(void)
 
 /*
  * The floating-point encodings of the integer classes, from a sweep that
- * binutils decoded: 1 for an instruction of Armv8.0, which stops the
- * machine as not implemented yet, 0 for an UNDEFINED one: UNALLOCATED,
- * half-precision arithmetic (FEAT_FP16) or a later feature.
+ * binutils decoded: 1 for an instruction of Armv8.0, which executes, 0
+ * for an UNDEFINED one: UNALLOCATED, half-precision arithmetic
+ * (FEAT_FP16) or a later feature.
  */
 static const struct {
 	uint32_t insn;
@@ -2057,8 +2057,7 @@ static void test_floating_point_encodings(void)
 	Machine *m = arm64_test_machine(&c);
 
 	for (unsigned i = 0; i < ARRAY_SIZE(fp_sweep); i++) {
-		Arm64Exec want =
-			fp_sweep[i].fp ? ARM64_EXEC_UNIMPLEMENTED : ARM64_EXEC_UNDEFINED;
+		Arm64Exec want = fp_sweep[i].fp ? ARM64_EXEC_OK : ARM64_EXEC_UNDEFINED;
 		Arm64Exec got = arm64_execute(c, fp_sweep[i].insn);
 
 		if (got != want) {

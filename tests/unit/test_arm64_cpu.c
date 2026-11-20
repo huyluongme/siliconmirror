@@ -190,12 +190,11 @@ static void test_unimplemented_instruction_stops(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	CHECK_EQ(arm64_test_step(m, c, 0x1e622820),
-	         MACHINE_STOP_ERROR); /* FADD D0, D1, D2 */
+	/* A load/store class newer than Armv8.0, which stops for now. */
+	CHECK_EQ(arm64_test_step(m, c, 0x09000000), MACHINE_STOP_ERROR);
 	CHECK(strcmp(m->stop_message,
-	             "cpu0: instruction 0x1e622820 at 0x0000000000080000 is not "
-	             "implemented yet (Floating-point data-processing (2 "
-	             "source))") == 0);
+	             "cpu0: instruction 0x09000000 at 0x0000000000080000 is not "
+	             "implemented yet (Loads and Stores)") == 0);
 	CHECK_EQ(m->insns, 0);
 	machine_destroy(m);
 }

@@ -232,10 +232,7 @@ Arm64Exec arm64_simd_by_element(Arm64Cpu *c, uint32_t insn, bool scalar)
 	fp = (size & 2) && (opcode == 0x1 || opcode == 0x5 || opcode == 0x9) &&
 	     (!u || opcode == 0x9);
 	if (fp)
-		return arm64_simd_not_yet(c, scalar ? "Advanced SIMD scalar x indexed "
-		                                      "element"
-		                                    : "Advanced SIMD vector x indexed "
-		                                      "element");
+		return arm64_simd_fp_by_element(c, insn, scalar);
 	if (scalar) {
 		/* SQDMLAL, SQDMLSL, SQDMULL, SQDMULH and SQRDMULH. */
 		if (u || !(lop == 0x9 || lop == 0xb || lop == 0xd || opcode == 0xc ||

@@ -226,8 +226,6 @@ static Arm64Exec scalar_same(Arm64Cpu *c, bool u, unsigned size,
 			return ARM64_EXEC_UNDEFINED;
 		break;
 	default:
-		if (opcode >= 0x18 && fp_scalar_same(u, size, opcode))
-			return arm64_simd_not_yet(c, "Advanced SIMD scalar three same");
 		return ARM64_EXEC_UNDEFINED;
 	}
 	if ((result = arm64_check_fp_enabled(c)) != ARM64_EXEC_OK)
@@ -280,6 +278,11 @@ Arm64Exec arm64_simd_three_same(Arm64Cpu *c, uint32_t insn, bool scalar)
 	unsigned datasize = q ? 16 : 8, elements = datasize / esize;
 	Arm64Exec result;
 
+	if (opcode >= 0x18) { /* floating-point */
+		if (scalar ? fp_scalar_same(u, size, opcode) : fp_same(u, size, opcode))
+			return arm64_simd_fp_same(c, insn, scalar);
+		return ARM64_EXEC_UNDEFINED;
+	}
 	if (scalar)
 		return scalar_same(c, u, size, opcode, m, n, d);
 
@@ -323,11 +326,6 @@ Arm64Exec arm64_simd_three_same(Arm64Cpu *c, uint32_t insn, bool scalar)
 	case KEY(1, 0x17):
 		return ARM64_EXEC_UNDEFINED;
 	default:
-		if (opcode >= 0x18) {
-			if (fp_same(u, size, opcode))
-				return arm64_simd_not_yet(c, "Advanced SIMD three same");
-			return ARM64_EXEC_UNDEFINED;
-		}
 		/* The halving ones, MAX, MIN, ABD, ABA, MLA, MLS, MUL, the
 		 * pairwise MAXP and MINP: no doublewords. */
 		if (size == 3)

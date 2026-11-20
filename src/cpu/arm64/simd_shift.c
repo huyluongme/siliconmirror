@@ -179,10 +179,7 @@ Arm64Exec arm64_simd_shift_imm(Arm64Cpu *c, uint32_t insn, bool scalar)
 		/* immh = 001x is half precision, FEAT_FP16; 000x reserved. */
 		if (immh < 4 || (!scalar && (immh & 8) && !q))
 			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(c, scalar
-		                                 ? "Advanced SIMD scalar shift by "
-		                                   "immediate"
-		                                 : "Advanced SIMD shift by immediate");
+		return arm64_simd_fp_fixed(c, insn, scalar);
 	}
 	if (kind == NARROW || kind == LONG) {
 		if (immh & 8) /* no doubleword to narrow, or to widen */

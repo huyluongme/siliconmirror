@@ -310,13 +310,28 @@ Arm64Exec arm64_exec_simd_fp(Arm64Cpu *c, uint32_t insn);
  * The integer classes of the SIMD&FP group, from simd_int.c, for simd.c:
  * Advanced SIMD two-register miscellaneous and across lanes, and their
  * scalar forms, with scalar pairwise. scalar picks the scalar class.
- * arm64_simd_not_yet(), from simd.c, stops the machine on an instruction
- * of a class not implemented yet, naming the class.
  */
 Arm64Exec arm64_simd_two_reg_misc(Arm64Cpu *c, uint32_t insn, bool scalar);
 Arm64Exec arm64_simd_across_lanes(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_simd_scalar_pairwise(Arm64Cpu *c, uint32_t insn);
-Arm64Exec arm64_simd_not_yet(Arm64Cpu *c, const char *class_name);
+
+/* The floating-point instructions of Advanced SIMD, simd_fp.c. */
+Arm64Exec arm64_simd_fp_same(Arm64Cpu *c, uint32_t insn, bool scalar);
+Arm64Exec arm64_simd_fp_misc(Arm64Cpu *c, uint32_t insn, bool scalar);
+Arm64Exec arm64_simd_fp_across(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_fp_pairwise(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_simd_fp_fixed(Arm64Cpu *c, uint32_t insn, bool scalar);
+Arm64Exec arm64_simd_fp_by_element(Arm64Cpu *c, uint32_t insn, bool scalar);
+
+/* The scalar floating-point classes, fp_scalar.c. */
+Arm64Exec arm64_fp_int_conversion(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_fixed_conversion(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_one_source(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_two_source(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_three_source(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_compare(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_cond_compare(Arm64Cpu *c, uint32_t insn);
+Arm64Exec arm64_fp_cond_select(Arm64Cpu *c, uint32_t insn);
 
 /* Advanced SIMD shift by immediate and its scalar form, simd_shift.c. */
 Arm64Exec arm64_simd_shift_imm(Arm64Cpu *c, uint32_t insn, bool scalar);

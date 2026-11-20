@@ -1280,69 +1280,6 @@ static void test_features_undefined(void)
 	arm64_test_check_undefined(insns, ARRAY_SIZE(insns));
 }
 
-/* The classes not implemented yet stop the machine and are named. */
-static void test_not_implemented_yet(void)
-{
-	static const struct {
-		uint32_t insn;
-		const char *name;
-	} cases[] = {
-		{0x1e622820, "Floating-point data-processing (2 source)"},
-		{0x4e22d420, "Advanced SIMD three same"}, /* FADD */
-		{0x1e620020, "Conversion between floating-point and integer"},
-		/* SCVTF D0, W1 */
-		{0x6e30f820, "Advanced SIMD across lanes"}, /* FMAXV */
-		{0x4ea0f820, "Advanced SIMD two-register miscellaneous"},
-		/* FABS V0.4S, V1.4S */
-		{0x4f3de420, "Advanced SIMD shift by immediate"},
-		/* SCVTF V0.4S, V1.4S, #3 */
-		{0x4fa21020, "Advanced SIMD vector x indexed element"}, /* FMLA */
-		{0x7ea2d420, "Advanced SIMD scalar three same"},        /* FABD */
-		{0x7e30d820, "Advanced SIMD scalar pairwise"},          /* FADDP */
-		{0x5ea1d820, "Advanced SIMD scalar two-register miscellaneous"},
-		/* FRECPE S0, S1 */
-		{0x5f3de420, "Advanced SIMD scalar shift by immediate"},
-		/* SCVTF S0, S1, #3 */
-		{0x5fa21020, "Advanced SIMD scalar x indexed element"}, /* FMLA */
-		{0x1e212000, "Floating-point compare"},
-		{0x1e210400, "Floating-point conditional compare"},
-		{0x1e220c20, "Floating-point conditional select"},
-		{0x1f020c20, "Floating-point data-processing (3 source)"},
-		{0x1e220020, "Conversion between floating-point and integer"},
-		{0x1e02f420, "Conversion between floating-point and fixed-point"},
-		{0x1e20c020, "Floating-point data-processing (1 source)"},
-		{0x1ee24020, "Floating-point data-processing (1 source)"},
-		/* FCVT S0, H1 */
-		{0x1ee2c020, "Floating-point data-processing (1 source)"},
-		/* FCVT D0, H1 */
-		{0x1e218400, "Floating-point conditional compare"}, /* HI */
-		{0x1e214400, "Floating-point conditional compare"}, /* MI */
-		{0x1e211400, "Floating-point conditional compare"}, /* NE */
-		{0x1e212400, "Floating-point conditional compare"}, /* CS */
-		{0x1e227c20, "Floating-point conditional select"},  /* VC */
-		{0x1f024020, "Floating-point data-processing (3 source)"},
-		/* FMADD S0, S1, S2, S16 */
-		{0x1f021020, "Floating-point data-processing (3 source)"},
-		/* FMADD S0, S1, S2, S4 */
-	};
-
-	for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
-		Arm64Cpu *c;
-		Machine *m = machine(&c);
-		char expected[128];
-
-		snprintf(expected, sizeof(expected), "is not implemented yet (%s)",
-		         cases[i].name);
-		CHECK_EQ(arm64_test_step(m, c, cases[i].insn), MACHINE_STOP_ERROR);
-		if (strstr(m->stop_message, expected) == NULL) {
-			fprintf(stderr, "0x%08" PRIx32 ": %s\n", cases[i].insn,
-			        m->stop_message);
-			test_failures++;
-		}
-		machine_destroy(m);
-	}
-}
-
 int main(void)
 {
 	RUN_TEST(test_reset_and_registers);
@@ -1359,7 +1296,6 @@ int main(void)
 	RUN_TEST(test_modified_immediate);
 	RUN_TEST(test_move_unallocated);
 	RUN_TEST(test_features_undefined);
-	RUN_TEST(test_not_implemented_yet);
 	RUN_TEST(test_register_numbers);
 	RUN_TEST(test_fp_immediates);
 	RUN_TEST(test_faults);

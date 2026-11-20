@@ -174,7 +174,7 @@ pages in [docs/boards/](docs/boards/) describe how each board boots.
 2. Exceptions, system registers, generic timer, interrupt controllers.
 3. MMU, SD host, mailbox, firmware emulation: U-Boot prompt.
 4. SMP (spin table): Linux with an initramfs to a serial shell.
-5. Root file system on SD, FP/SIMD: Raspberry Pi OS Lite login.
+5. Root file system on SD: Raspberry Pi OS Lite login.
 6. USB, networking (Ethernet, and the WiFi chip on SDIO), framebuffer.
 
 ## Contributing

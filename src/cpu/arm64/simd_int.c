@@ -266,9 +266,6 @@ static Arm64Exec scalar_misc(Arm64Cpu *c, bool u, unsigned size,
 			return ARM64_EXEC_UNDEFINED;
 		break;
 	default:
-		if (fp_scalar_misc(u, size, opcode))
-			return arm64_simd_not_yet(
-				c, "Advanced SIMD scalar two-register miscellaneous");
 		return ARM64_EXEC_UNDEFINED;
 	}
 	if ((result = arm64_check_fp_enabled(c)) != ARM64_EXEC_OK)
@@ -296,6 +293,9 @@ Arm64Exec arm64_simd_two_reg_misc(Arm64Cpu *c, uint32_t insn, bool scalar)
 	bool reserved = size == 3 && !q; /* size:Q = 110, the .1D form */
 	Arm64Exec result;
 
+	/* The tables take in no integer opcode. */
+	if (scalar ? fp_scalar_misc(u, size, opcode) : fp_misc(u, size, opcode))
+		return arm64_simd_fp_misc(c, insn, scalar);
 	if (scalar)
 		return scalar_misc(c, u, size, opcode, n, d);
 
@@ -343,9 +343,6 @@ Arm64Exec arm64_simd_two_reg_misc(Arm64Cpu *c, uint32_t insn, bool scalar)
 			return ARM64_EXEC_UNDEFINED;
 		break;
 	default:
-		if (fp_misc(u, size, opcode))
-			return arm64_simd_not_yet(
-				c, "Advanced SIMD two-register miscellaneous");
 		return ARM64_EXEC_UNDEFINED;
 	}
 	if ((result = arm64_check_fp_enabled(c)) != ARM64_EXEC_OK)
@@ -461,7 +458,7 @@ Arm64Exec arm64_simd_across_lanes(Arm64Cpu *c, uint32_t insn)
 	case 0x0f: /* FMAXV, FMINV */
 		/* Single precision only; with U = 0, FEAT_FP16. */
 		if (u && !(size & 1) && q)
-			return arm64_simd_not_yet(c, "Advanced SIMD across lanes");
+			return arm64_simd_fp_across(c, insn);
 		return ARM64_EXEC_UNDEFINED;
 	default:
 		return ARM64_EXEC_UNDEFINED;
@@ -509,6 +506,6 @@ Arm64Exec arm64_simd_scalar_pairwise(Arm64Cpu *c, uint32_t insn)
 	}
 	/* FMAXNMP, FMINNMP, FMAXP, FMINP; FADDP of single or double only. */
 	if (opcode == 0x0c || opcode == 0x0f || (opcode == 0x0d && size < 2))
-		return arm64_simd_not_yet(c, "Advanced SIMD scalar pairwise");
+		return arm64_simd_fp_pairwise(c, insn);
 	return ARM64_EXEC_UNDEFINED;
 }

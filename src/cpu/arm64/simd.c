@@ -11,27 +11,19 @@
  * INS, SMOV, UMOV (Advanced SIMD copy and scalar copy), MOVI, MVNI, ORR
  * and BIC (vector, immediate) and FMOV (vector, immediate) (Advanced SIMD
  * modified immediate), FMOV (general), FMOV (register) and FMOV (scalar,
- * immediate). It gives the integer classes of Advanced SIMD to the files
- * that implement them: simd_int.c, simd_shift.c, simd_same.c, simd_perm.c
- * and simd_long.c. The floating-point classes, and the floating-point
- * instructions of those files, stop the machine as not implemented yet,
- * naming the class.
+ * immediate). It gives the other classes to the files that implement
+ * them: the integer ones of Advanced SIMD to simd_int.c, simd_shift.c,
+ * simd_same.c, simd_perm.c and simd_long.c, which give their
+ * floating-point instructions to simd_fp.c, and the scalar floating-point
+ * classes to fp_scalar.c. The arithmetic is fp.c's.
  *
  * The Cortex-A53 of the BCM2837 has no Cryptographic Extension: the AES
  * and SHA classes are UNDEFINED, as are those that only hold instructions
  * newer than Armv8.0 (FEAT_FP16, FEAT_RDM, FEAT_DotProd and others).
  */
 
-#include <stdio.h>
-
 #include "cpu/arm64/internal.h"
 #include "util/bits.h"
-
-Arm64Exec arm64_simd_not_yet(Arm64Cpu *c, const char *class_name)
-{
-	snprintf(c->detail, sizeof(c->detail), "%s", class_name);
-	return ARM64_EXEC_UNIMPLEMENTED;
-}
 
 /* Replicate the low esize bytes of value to fill 64 bits. */
 static uint64_t replicate64(uint64_t value, unsigned esize)
@@ -248,78 +240,6 @@ static unsigned ftype_size(uint32_t insn)
 }
 
 /*
- * Conversion between floating-point and integer, sf 0 S 11110 ftype 1
- * rmode opcode 000000 Rn Rd. Only FMOV (general), C7.2.157, so far.
- */
-static Arm64Exec fp_int_conversion(Arm64Cpu *c, uint32_t insn)
-{
-	bool sf = bit32(insn, 31);
-	unsigned ftype = field32(insn, 23, 22), rmode = field32(insn, 20, 19);
-	unsigned opcode = field32(insn, 18, 16);
-	unsigned n = field32(insn, 9, 5), d = field32(insn, 4, 0);
-	Arm64Exec result;
-
-	if (bit32(insn, 29))
-		return ARM64_EXEC_UNDEFINED;
-	if (opcode >> 1 != 3) {
-		/* ftype 11 needs FEAT_FP16; 10 is UNALLOCATED. */
-		if (ftype >= 2)
-			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(
-			c, "Conversion between floating-point and integer");
-	}
-	/*
-	 * FMOV: rmode 00 between a register and S (sf = 0, ftype = 00) or D
-	 * (sf = 1, ftype = 01); rmode 01 between X and V.D[1] (ftype = 10).
-	 * Half precision needs FEAT_FP16; rmode 1x holds newer instructions.
-	 */
-	if (!(rmode == 0 && ftype == (sf ? 1u : 0u)) &&
-	    !(rmode == 1 && ftype == 2 && sf))
-		return ARM64_EXEC_UNDEFINED;
-	if ((result = arm64_check_fp_enabled(c)) != ARM64_EXEC_OK)
-		return result;
-	if (opcode & 1) { /* general to SIMD&FP */
-		if (rmode == 1)
-			c->v[d].d[1] = get_x(c, n);
-		else
-			set_scalar(c, d, sf ? 8 : 4, get_x(c, n));
-	} else if (rmode == 1) {
-		set_x(c, d, c->v[n].d[1]);
-	} else {
-		set_x(c, d, get_d(c, n) & datasize_mask(sf ? 64 : 32));
-	}
-	return ARM64_EXEC_OK;
-}
-
-/*
- * Floating-point data-processing (1 source), M 0 S 11110 ftype 1 opcode
- * 10000 Rn Rd, with M and S clear. Only FMOV (register), C7.2.156, so
- * far. Opcodes 1xxxxx are UNALLOCATED. Half precision is FEAT_FP16,
- * except FCVT from it (opcode 00010x).
- */
-static Arm64Exec fp_one_source(Arm64Cpu *c, uint32_t insn)
-{
-	unsigned size = ftype_size(insn);
-	unsigned opcode = field32(insn, 20, 15);
-	Arm64Exec result;
-
-	if (opcode & 0x20)
-		return ARM64_EXEC_UNDEFINED;
-	if (opcode != 0) {
-		if (size == 0 && !(field32(insn, 23, 22) == 3 && opcode >> 1 == 2))
-			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(c,
-		                          "Floating-point data-processing (1 source)");
-	}
-	if (size == 0)
-		return ARM64_EXEC_UNDEFINED;
-	if ((result = arm64_check_fp_enabled(c)) != ARM64_EXEC_OK)
-		return result;
-	set_scalar(c, field32(insn, 4, 0), size, get_d(c, field32(insn, 9, 5)));
-	return ARM64_EXEC_OK;
-}
-
-/*
  * Floating-point immediate, M 0 S 11110 ftype 1 imm8 100 imm5 Rd, with
  * M and S clear: FMOV (scalar, immediate), C7.2.158, with VFPExpandImm().
  */
@@ -353,32 +273,29 @@ static Arm64Exec fp_scalar(Arm64Cpu *c, uint32_t insn)
 	if (!bit32(insn, 24) && !bit32(insn, 21)) {
 		if (bit32(insn, 29) || wide)
 			return ARM64_EXEC_UNDEFINED;
-		return arm64_simd_not_yet(c, "Conversion between floating-point and "
-		                             "fixed-point");
+		return arm64_fp_fixed_conversion(c, insn);
 	}
 	if (!bit32(insn, 24) && (op3 & 0x3f) == 0x00)
-		return fp_int_conversion(c, insn);
+		return arm64_fp_int_conversion(c, insn);
 	if (bit32(insn, 31) || bit32(insn, 29) || (op3 & 0x3f) == 0x20)
 		return ARM64_EXEC_UNDEFINED;
 	if (!bit32(insn, 24) && (op3 & 0x1f) == 0x10)
-		return fp_one_source(c, insn);
+		return arm64_fp_one_source(c, insn);
 	if (!bit32(insn, 24) && (op3 & 0x7) == 0x4)
 		return fp_immediate(c, insn);
 	if (wide)
 		return ARM64_EXEC_UNDEFINED;
 	if (bit32(insn, 24))
-		return arm64_simd_not_yet(c,
-		                          "Floating-point data-processing (3 source)");
+		return arm64_fp_three_source(c, insn);
 	if ((op3 & 0xf) == 0x8)
-		return arm64_simd_not_yet(c, "Floating-point compare");
+		return arm64_fp_compare(c, insn);
 	switch (op3 & 3) {
 	case 1:
-		return arm64_simd_not_yet(c, "Floating-point conditional compare");
+		return arm64_fp_cond_compare(c, insn);
 	case 2:
-		return arm64_simd_not_yet(c,
-		                          "Floating-point data-processing (2 source)");
+		return arm64_fp_two_source(c, insn);
 	default:
-		return arm64_simd_not_yet(c, "Floating-point conditional select");
+		return arm64_fp_cond_select(c, insn);
 	}
 }
 

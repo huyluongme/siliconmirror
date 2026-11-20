@@ -536,10 +536,10 @@ static void test_unimplemented_bits_stop(void)
 	      NULL);
 
 	/* The detail of one instruction does not stay for the next one. */
-	CHECK_EQ(arm64_test_step(m, c, 0x1e622820), /* FADD D0, D1, D2 */
+	CHECK_EQ(arm64_test_step(m, c, 0xd5330400), /* MRS X0, DBGDTR_EL0 */
 	         MACHINE_STOP_ERROR);
-	CHECK(strstr(m->stop_message, "is not implemented yet") != NULL);
-	CHECK(strstr(m->stop_message, "System register") == NULL);
+	CHECK(strstr(m->stop_message, "(System register DBGDTR_EL0)") != NULL);
+	CHECK(strstr(m->stop_message, "FPEXC32_EL2") == NULL);
 
 	/* A trap is an exception: here from EL1, using AArch64, to EL2. */
 	uint64_t at = c->pc;

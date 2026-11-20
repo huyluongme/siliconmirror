@@ -13,6 +13,7 @@ add_library(cpu STATIC
 	arm64/exception.c
 	arm64/exclusive.c
 	arm64/fp.c
+	arm64/fp_scalar.c
 	arm64/interrupt.c
 	arm64/load_store.c
 	arm64/mem.c
@@ -27,6 +28,7 @@ add_library(cpu STATIC
 	arm64/simd_ldst.c
 	arm64/simd_long.c
 	arm64/simd_perm.c
+	arm64/simd_fp.c
 	arm64/timer.c)
 
 target_link_libraries(cpu PUBLIC core)
