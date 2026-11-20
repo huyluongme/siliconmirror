@@ -12,6 +12,7 @@ add_library(cpu STATIC
 	arm64/dp_reg.c
 	arm64/exception.c
 	arm64/exclusive.c
+	arm64/fp.c
 	arm64/interrupt.c
 	arm64/load_store.c
 	arm64/mem.c

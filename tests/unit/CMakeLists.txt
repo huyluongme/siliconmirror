@@ -237,6 +237,10 @@ add_executable(test_arm64_simd_int test_arm64_simd_int.c)
 target_link_libraries(test_arm64_simd_int PRIVATE cpu)
 add_test(NAME unit.arm64_simd_int COMMAND test_arm64_simd_int)
 
+add_executable(test_arm64_fp test_arm64_fp.c)
+target_link_libraries(test_arm64_fp PRIVATE cpu)
+add_test(NAME unit.arm64_fp COMMAND test_arm64_fp)
+
 add_executable(test_arm64_interrupt test_arm64_interrupt.c)
 target_link_libraries(test_arm64_interrupt PRIVATE cpu)
 add_test(NAME unit.arm64_interrupt COMMAND test_arm64_interrupt)
