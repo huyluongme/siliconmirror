@@ -496,6 +496,7 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00048020` | The virtual GPIOs' buffer: 0, success; nothing reads it            |
 | `0x00030043` | The GPIO expander: a line's direction; `0x00038043` sets it        |
 | `0x00030041` | The GPIO expander: a line's state; `0x00038041` sets an output's   |
+| `0x00030048` | Linux reboots: the GPIO expander goes back as it started           |
 
 The GPIO expander has 8 lines that only the firmware drives, 128 to 135
 in its tags: BT_ON, WL_ON, STATUS_LED, LAN_RUN, HDMI_HPD_N, CAM_GPIO0,
@@ -506,7 +507,10 @@ shows them on a Pi 3B+ and a Pi 3A+, whose expanders share five of
 them: outputs, but for HDMI_HPD_N and PWR_LOW_N, inputs. Their levels
 are smirror's choice, after what each line does: Bluetooth off, WiFi
 and the LAN9514 powered, the activity LED and the camera off, no
-display, a good power supply. A reset brings them back. Other GPIOs, a
+display, a good power supply. A reset brings them back, and so does the
+firmware when Linux says that it reboots: a Pi 3B+'s boot ROM needs the
+expander as at power on for a network boot (Linux's commit b80ec7c0,
+"firmware: raspberrypi: notify VC4 firmware of a reboot"). Other GPIOs, a
 polarity or termination, and setting an input stop the machine.
 
 The display is the composite output of the AV jack: on a Pi 3 Model B
@@ -1252,6 +1256,12 @@ to quit.
   ([a gist from 2019](https://gist.github.com/cleverca22/2c3bd998e08a2d2c282bc735494792e3)):
   `tsens` at 1920000 Hz beside `osc` at 19200000 Hz, with the UART,
   EMMC and VPU clocks at the rates the Pi 3 shows.
+- The reboot's notice to the firmware: Raspberry Pi's Linux,
+  [raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/firmware/raspberrypi.c)
+  (`NOTIFY_REBOOT`, from a reboot notifier and at shutdown), and Linux's
+  commit
+  [b80ec7c0](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b80ec7c0ef8de5d04b893310ecae29219143a454)
+  (why: the GPIO expander as at power on).
 - The firmware's clocks and power domains: Raspberry Pi's Linux,
   [clk-raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/clk/bcm/clk-raspberrypi.c)
   (`GET_CLOCKS`, the clocks' states and ranges),

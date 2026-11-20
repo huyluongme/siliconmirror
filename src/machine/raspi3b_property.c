@@ -507,6 +507,21 @@ static bool set_gpiovirtbuf(Raspi3bProperty *p, Value *v)
 	return true;
 }
 
+/*
+ * NOTIFY_REBOOT, of no value: Linux is about to reboot or halt (its
+ * drivers/firmware/raspberrypi.c, from a reboot notifier and at
+ * shutdown). Linux's commit b80ec7c0 says why it tells the firmware: the
+ * GPIO expander must be as at power on after a reboot, or the boot ROM's
+ * network boot fails on a Pi 3B+, so the firmware puts it back. The rest
+ * is the reset's to restore.
+ */
+static bool notify_reboot(Raspi3bProperty *p, Value *v)
+{
+	(void)v;
+	memcpy(p->exp, exp_boot, sizeof(p->exp));
+	return true;
+}
+
 /* The expander's line of the request, or NULL when it stopped. */
 static ExpLine *exp_line(Raspi3bProperty *p, const Value *v, uint32_t len)
 {
@@ -1471,6 +1486,7 @@ static const Handler handlers[] = {
 	{0x00038041, set_gpio_state},
 	{0x00030043, get_gpio_config},
 	{0x00038043, set_gpio_config},
+	{0x00030048, notify_reboot},
 	{0x00010002, get_board_revision},
 	{0x00010003, get_mac_address},
 	{0x00010004, get_board_serial},
