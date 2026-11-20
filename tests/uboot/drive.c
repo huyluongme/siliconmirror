@@ -15,6 +15,8 @@
  *   expect TEXT       wait for TEXT, after what the last expect found
  *   type TEXT         type TEXT; \r, \n, \\ and \xHH are escapes
  *   quit              press Ctrl-A x; smirror must end with status 0
+ *   end               wait for smirror to end by itself, as when the
+ *                     guest powers the board off; with status 0 too
  *
  * What smirror prints goes to standard output as it comes, so that
  * ctest's log holds the session; a failure says why on standard error.
@@ -62,40 +64,65 @@ static double seconds(void)
 	return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
 }
 
-/* Read what smirror prints until text shows up after found. */
+/*
+ * Read what smirror prints next, waiting until the time end at most:
+ * returns 1 when something came, 0 when the time is up, -1 when smirror
+ * closed the terminal.
+ */
+static int read_some(double end)
+{
+	struct pollfd p = {.fd = master, .events = POLLIN};
+	double left = end - seconds();
+	ssize_t n;
+
+	if (left <= 0 || poll(&p, 1, (int)(left * 1000) + 1) <= 0)
+		return 0;
+	if (output_size - output_len < 4096) {
+		output_size = output_size * 2 + 8192;
+		output = realloc(output, output_size);
+		if (output == NULL)
+			fail("%s", "out of memory");
+	}
+	n = read(master, output + output_len, 4096);
+	if (n <= 0)
+		return -1; /* EIO once smirror has closed the terminal */
+	fwrite(output + output_len, 1, (size_t)n, stdout);
+	fflush(stdout);
+	output_len += (size_t)n;
+	return 1;
+}
+
+/*
+ * Read what smirror prints until text shows up after found. What it
+ * prints may hold NUL bytes, as the files that a guest's cat shows can.
+ */
 static bool read_until(const char *text, double timeout)
 {
 	double end = seconds() + timeout;
-	char *at;
+	size_t len = strlen(text), at = found;
 
 	for (;;) {
-		struct pollfd p = {.fd = master, .events = POLLIN};
-		double left = end - seconds();
-		ssize_t n;
-
-		if (output != NULL) {
-			at = strstr(output + found, text);
-			if (at != NULL) {
-				found = (size_t)(at - output) + strlen(text);
+		for (; output != NULL && at + len <= output_len; at++) {
+			if (memcmp(output + at, text, len) == 0) {
+				found = at + len;
 				return true;
 			}
 		}
-		if (left <= 0 || poll(&p, 1, (int)(left * 1000) + 1) <= 0)
+		if (read_some(end) <= 0)
 			return false;
-		if (output_size - output_len < 4097) {
-			output_size = output_size * 2 + 8192;
-			output = realloc(output, output_size);
-			if (output == NULL)
-				fail("%s", "out of memory");
-		}
-		n = read(master, output + output_len, 4096);
-		if (n <= 0)
-			return false; /* EIO once smirror has closed the terminal */
-		fwrite(output + output_len, 1, (size_t)n, stdout);
-		fflush(stdout);
-		output_len += (size_t)n;
-		output[output_len] = '\0';
 	}
+}
+
+/* smirror has ended, or is about to: it must end with status 0. */
+static void reap(const char *what)
+{
+	int status;
+
+	while (waitpid(child, &status, 0) < 0 && errno == EINTR)
+		continue;
+	child = 0;
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		fail("smirror did not end with status 0 after %s", what);
 }
 
 /* The bytes of TEXT, its escapes decoded; returns the length. */
@@ -191,7 +218,6 @@ int main(int argc, char **argv)
 	char line[512], *arg;
 	double timeout = 60;
 	unsigned number = 0;
-	int status;
 	FILE *script;
 
 	if (argc < 5) {
@@ -199,7 +225,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	if (access(argv[1], R_OK) != 0) {
-		printf("drive: skipped, no %s: make it with scripts/uboot-card.sh\n",
+		printf("drive: skipped, no %s: a script of scripts/ makes it\n",
 		       argv[1]);
 		return SKIP;
 	}
@@ -232,11 +258,16 @@ int main(int argc, char **argv)
 			type("\\x01x");
 			if (!read_until(QUIT_MESSAGE, timeout))
 				fail("%s", "Ctrl-A x did not quit");
-			while (waitpid(child, &status, 0) < 0 && errno == EINTR)
+			reap("Ctrl-A x");
+		} else if (strcmp(line, "end") == 0) {
+			double end = seconds() + timeout;
+			int r;
+
+			while ((r = read_some(end)) > 0)
 				continue;
-			child = 0;
-			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-				fail("%s", "smirror did not end with status 0");
+			if (r == 0)
+				fail("%s", "smirror did not end in time");
+			reap("its end");
 		} else {
 			fprintf(stderr, "drive: %s:%u: what is \"%s\"?\n", argv[3], number,
 			        line);
@@ -246,7 +277,7 @@ int main(int argc, char **argv)
 	}
 	fclose(script);
 	if (child > 0)
-		fail("%s", "the script ends without quit");
+		fail("%s", "the script ends without quit or end");
 	printf("drive: %u lines, ok\n", number);
 	return 0;
 }
