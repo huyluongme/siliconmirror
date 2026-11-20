@@ -6,9 +6,10 @@
 Generic full-system emulator for multiple CPU architectures and boards,
 booting unmodified bootloaders and kernels.
 
-> **Status:** early development. Bare-metal AArch64 programs run on the
-> first board, the Raspberry Pi 3 Model B; bootloaders and kernels do
-> not yet.
+> **Status:** early development. On the first board, the Raspberry Pi 3
+> Model B, U-Boot and Linux boot unmodified: Linux runs a shell on the
+> serial console and uses the SD card, USB and the Ethernet controller;
+> a network to the host is still to come.
 
 ## Goals
 
@@ -26,9 +27,9 @@ booting unmodified bootloaders and kernels.
 
 ## Supported boards
 
-| Board                  | SoC     | CPU                     | Status     |
-|------------------------|---------|-------------------------|------------|
-| Raspberry Pi 3 Model B | BCM2837 | 4x Cortex-A53 (AArch64) | Bare metal |
+| Board                  | SoC     | CPU                     | Status      |
+|------------------------|---------|-------------------------|-------------|
+| Raspberry Pi 3 Model B | BCM2837 | 4x Cortex-A53 (AArch64) | Linux shell |
 
 ## Limitations
 
@@ -63,7 +64,10 @@ a few minutes, so only the `release` and `ci-release` builds run it
 `~/.cache/siliconmirror-linux`: the firmware files and the `kernel8.img`
 of the same release, and an initramfs of BusyBox 1.38.0 (built with an
 `aarch64-linux-gnu-` GCC), whose `/init` starts a shell on the serial
-console. smirror boots it to that shell.
+console. smirror boots it to that shell. A test uses it as a user
+would: commands in the shell, the SD card, Ethernet, a reboot and a
+power off; like the U-Boot test, it takes minutes, only the `release`
+and `ci-release` builds run it, and without the card it is skipped.
 
 `scripts/uboot-linux-card.sh` puts both together, as a card that boots
 with U-Boot would: the firmware starts U-Boot, whose `boot.scr` loads
@@ -170,10 +174,11 @@ pages in [docs/boards/](docs/boards/) describe how each board boots.
 ## Roadmap
 
 1. Core (bus, interrupt lines, virtual clock), AArch64 interpreter
-   (integer subset), PL011 UART: bare-metal "hello world".
+   (integer subset), PL011 UART: bare-metal "hello world". Done.
 2. Exceptions, system registers, generic timer, interrupt controllers.
-3. MMU, SD host, mailbox, firmware emulation: U-Boot prompt.
-4. SMP (spin table): Linux with an initramfs to a serial shell.
+   Done.
+3. MMU, SD host, mailbox, firmware emulation: U-Boot prompt. Done.
+4. SMP (spin table): Linux with an initramfs to a serial shell. Done.
 5. Root file system on SD: Raspberry Pi OS Lite login.
 6. USB, networking (Ethernet, and the WiFi chip on SDIO), framebuffer.
 

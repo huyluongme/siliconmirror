@@ -1,0 +1,85 @@
+# A Linux session on the raspi3b: the card of scripts/linux-card.sh,
+# which the firmware boots as a real card, to the shell of its
+# initramfs; the CPUs, the SD card, the temperature sensor, floating
+# point, Ethernet, a reboot, after which what was written is there, and
+# a power off. drive.c runs it; see its comment for the commands.
+#
+# Typing waits for the prompt, and for the end of what the kernel
+# prints: its console prints with the interrupts off, the mini UART
+# keeps 8 bytes, and a byte that comes then is lost, as on the board.
+
+# The boot, about a minute on a fast host. The SD card and the LAN9514
+# show up once the shell runs.
+timeout 900
+expect Booting Linux on physical CPU 0x0000000000 [0x410fd034]
+expect Machine model: Raspberry Pi 3 Model B
+expect smp: Brought up 1 node, 4 CPUs
+expect Run /init as init process
+expect linux-card: the initramfs runs
+expect ~ #
+expect mmcblk0: p1
+expect eth0: register 'smsc95xx'
+expect b8:27:eb:ff:ee:03
+timeout 120
+
+type uname -m\r
+expect aarch64
+expect ~ #
+type grep -c ^processor /proc/cpuinfo\r
+expect 4
+expect ~ #
+type grep -m1 'CPU part' /proc/cpuinfo\r
+expect 0xd03
+expect ~ #
+type grep MemTotal /proc/meminfo\r
+expect 926960 kB
+expect ~ #
+type cat /sys/class/thermal/thermal_zone0/temp\r
+expect 45084
+expect ~ #
+type awk 'BEGIN { printf "%.6f\\n", atan2(0, -1) }'\r
+expect 3.141593
+expect ~ #
+type time sleep 1\r
+expect 0m 1.00s
+expect ~ #
+
+# The SD card's FAT partition, read and written.
+type mkdir /boot && mount -t vfat /dev/mmcblk0p1 /boot\r
+expect ~ #
+type cat /boot/config.txt\r
+expect arm_64bit=1
+expect enable_uart=1
+expect ~ #
+type echo written by Linux > /boot/smirror.txt && umount /boot\r
+expect ~ #
+
+# Ethernet: no cable, so no link.
+type ifconfig eth0 up\r
+expect eth0: Link is Down
+type ifconfig eth0\r
+expect HWaddr B8:27:EB:FF:EE:03
+expect UP BROADCAST MULTICAST
+expect ~ #
+
+# The watchdog resets the board, which boots again. Linux waits for the
+# mini UART for two bytes' time only, so the end of its last line is
+# lost, as on the board.
+type reboot -f\r
+expect reboot: Restarting
+timeout 900
+expect Booting Linux on physical CPU
+expect eth0: register 'smsc95xx'
+expect b8:27:eb:ff:ee:03
+timeout 120
+type mkdir /boot && mount -t vfat /dev/mmcblk0p1 /boot\r
+expect ~ #
+type cat /boot/smirror.txt\r
+expect written by Linux
+expect ~ #
+
+# RSTS asks the firmware not to boot: the board halts, smirror ends.
+type umount /boot && poweroff -f\r
+expect reboot: Power
+expect the board halted
+end

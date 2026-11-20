@@ -221,6 +221,10 @@ Known limits, to be handled when the devices that need it arrive:
   files, both at pinned versions. The session takes minutes, so only
   optimized builds run it, and only on a host that has the card; the CI
   does not.
+- `tests/linux/`: Linux the same way, with `drive.c`: the card of
+  `scripts/linux-card.sh`, which the firmware boots, to the shell of
+  its initramfs, then commands, a reboot and a power off. Optimized
+  builds only, on a host that has the card.
 - `tests/fuzz/`: libFuzzer targets for what smirror reads from an SD
   card, which may be anything: the MBR, FAT volumes, `config.txt` and
   devicetree blobs. `scripts/fuzz.sh` builds them with clang,
