@@ -25,15 +25,16 @@ enum {
 #define HEADER_SIZE 40 /* struct fdt_header, version 17 */
 #define MAX_DEPTH 64   /* deeper trees are refused */
 
-typedef struct FdtProp {
-	struct FdtProp *next;
+struct FdtProp {
+	FdtProp *next;
 	char *name;
 	uint8_t *value;
 	size_t len;
-} FdtProp;
+};
 
 struct FdtNode {
-	FdtNode *next; /* the next child of the parent */
+	FdtNode *parent; /* NULL for the root */
+	FdtNode *next;   /* the next child of the parent */
 	FdtNode *children, *last_child;
 	FdtProp *props, *last_prop;
 	char *name;
@@ -93,6 +94,14 @@ static void free_node(FdtNode *node)
 	}
 }
 
+void fdt_swap(Fdt *a, Fdt *b)
+{
+	Fdt t = *a;
+
+	*a = *b;
+	*b = t;
+}
+
 void fdt_free(Fdt *fdt)
 {
 	if (fdt == NULL)
@@ -104,6 +113,7 @@ void fdt_free(Fdt *fdt)
 
 static void append_child(FdtNode *parent, FdtNode *child)
 {
+	child->parent = parent;
 	if (parent->last_child != NULL)
 		parent->last_child->next = child;
 	else
@@ -415,6 +425,24 @@ FdtNode *fdt_find(Fdt *fdt, const char *path)
 	return node;
 }
 
+FdtNode *fdt_add_node_first(FdtNode *parent, const char *name)
+{
+	FdtNode *node;
+
+	for (FdtNode *c = parent->children; c != NULL; c = c->next)
+		if (strcmp(c->name, name) == 0)
+			return c;
+	node = new_node(name, strlen(name));
+	if (node == NULL)
+		return NULL;
+	node->parent = parent;
+	node->next = parent->children;
+	parent->children = node;
+	if (parent->last_child == NULL)
+		parent->last_child = node;
+	return node;
+}
+
 FdtNode *fdt_add_node(FdtNode *parent, const char *name)
 {
 	FdtNode *node;
@@ -449,7 +477,8 @@ bool fdt_get_u32(const FdtNode *node, const char *name, uint32_t *value)
 	return true;
 }
 
-bool fdt_set(FdtNode *node, const char *name, const void *value, size_t len)
+static bool set_prop(FdtNode *node, const char *name, const void *value,
+                     size_t len, bool first)
 {
 	FdtProp *p = find_prop(node, name);
 	uint8_t *copy = malloc(len ? len : 1);
@@ -464,17 +493,35 @@ bool fdt_set(FdtNode *node, const char *name, const void *value, size_t len)
 			free(copy);
 			return false;
 		}
-		if (node->last_prop != NULL)
-			node->last_prop->next = p;
-		else
+		if (first) {
+			p->next = node->props;
 			node->props = p;
-		node->last_prop = p;
+			if (node->last_prop == NULL)
+				node->last_prop = p;
+		} else {
+			if (node->last_prop != NULL)
+				node->last_prop->next = p;
+			else
+				node->props = p;
+			node->last_prop = p;
+		}
 	} else {
 		free(p->value);
 	}
 	p->value = copy;
 	p->len = len;
 	return true;
+}
+
+bool fdt_set(FdtNode *node, const char *name, const void *value, size_t len)
+{
+	return set_prop(node, name, value, len, false);
+}
+
+bool fdt_set_first(FdtNode *node, const char *name, const void *value,
+                   size_t len)
+{
+	return set_prop(node, name, value, len, true);
 }
 
 bool fdt_set_string(FdtNode *node, const char *name, const char *value)
@@ -515,6 +562,88 @@ void fdt_remove(FdtNode *node, const char *name)
 		free(p);
 		return;
 	}
+}
+
+FdtNode *fdt_root(Fdt *fdt)
+{
+	return fdt->root;
+}
+
+const char *fdt_name(const FdtNode *node)
+{
+	return node->name;
+}
+
+FdtNode *fdt_parent(const FdtNode *node)
+{
+	return node->parent;
+}
+
+FdtNode *fdt_first_child(const FdtNode *node)
+{
+	return node->children;
+}
+
+FdtNode *fdt_next_child(const FdtNode *child)
+{
+	return child->next;
+}
+
+bool fdt_rename(FdtNode *node, const char *name)
+{
+	char *copy = copy_string(name, strlen(name));
+
+	if (copy == NULL)
+		return false;
+	free(node->name);
+	node->name = copy;
+	return true;
+}
+
+/* Write the path of node at the end of buf[0..*at); false if too long. */
+static bool path_into(const FdtNode *node, char *buf, size_t size, size_t *at)
+{
+	size_t len = strlen(node->name);
+
+	if (node->parent == NULL)
+		return true; /* the root: nothing before the first / */
+	if (!path_into(node->parent, buf, size, at) || size - *at < len + 2)
+		return false;
+	buf[(*at)++] = '/';
+	memcpy(buf + *at, node->name, len + 1);
+	*at += len;
+	return true;
+}
+
+bool fdt_path(const FdtNode *node, char *buf, size_t size)
+{
+	size_t at = 0;
+
+	if (size < 2)
+		return false;
+	strcpy(buf, "/");
+	return path_into(node, buf, size, &at);
+}
+
+FdtProp *fdt_first_prop(const FdtNode *node)
+{
+	return node->props;
+}
+
+FdtProp *fdt_next_prop(const FdtProp *prop)
+{
+	return prop->next;
+}
+
+const char *fdt_prop_name(const FdtProp *prop)
+{
+	return prop->name;
+}
+
+uint8_t *fdt_prop_value(const FdtProp *prop, size_t *len)
+{
+	*len = prop->len;
+	return prop->value;
 }
 
 /* --- Writing -------------------------------------------------------------- */

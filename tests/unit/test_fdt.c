@@ -716,6 +716,112 @@ static void test_names(void)
 	free(blob);
 }
 
+/* Walking the tree, its paths, and what goes first. */
+static void test_walk(void)
+{
+	uint8_t *blob, *out;
+	size_t size = sample(&blob), len;
+	Fdt *fdt = parse(blob, size), *back;
+	FdtNode *root = fdt_root(fdt), *cpus, *cpu0, *cpu1, *node;
+	FdtProp *p;
+	uint8_t *value;
+	char path[32], error[128];
+	uint32_t cells = 0;
+	const char *names[] = {"chosen", "memory@0", "cpus", "serial",
+	                       "serial@7e201000"};
+	size_t i = 0;
+
+	CHECK(root == fdt_find(fdt, "/"));
+	CHECK(fdt_parent(root) == NULL);
+	CHECK(strcmp(fdt_name(root), "") == 0);
+	for (node = fdt_first_child(root); node != NULL;
+	     node = fdt_next_child(node)) {
+		CHECK(i < ARRAY_SIZE(names) && strcmp(fdt_name(node), names[i]) == 0);
+		CHECK(fdt_parent(node) == root);
+		i++;
+	}
+	CHECK_EQ(i, ARRAY_SIZE(names));
+	cpus = fdt_find(fdt, "/cpus");
+	cpu0 = fdt_first_child(cpus);
+	cpu1 = fdt_next_child(cpu0);
+	CHECK(cpu1 == fdt_find(fdt, "/cpus/cpu@1"));
+	CHECK(fdt_next_child(cpu1) == NULL);
+	CHECK(fdt_first_child(cpu1) == NULL);
+	CHECK(fdt_parent(cpu1) == cpus);
+
+	/* Paths, which must fit, their 0 too. */
+	CHECK(fdt_path(root, path, sizeof(path)));
+	CHECK(strcmp(path, "/") == 0);
+	CHECK(fdt_path(cpu1, path, sizeof(path)));
+	CHECK(strcmp(path, "/cpus/cpu@1") == 0);
+	CHECK(fdt_path(cpu1, path, 12));
+	CHECK(!fdt_path(cpu1, path, 11));
+	CHECK(!fdt_path(cpu1, path, 6));
+	CHECK(!fdt_path(root, path, 1));
+	CHECK(fdt_path(root, path, 2) && strcmp(path, "/") == 0);
+
+	/* Properties in order; a value changes in place. */
+	p = fdt_first_prop(root);
+	CHECK(p != NULL && strcmp(fdt_prop_name(p), "model") == 0);
+	value = fdt_prop_value(p, &len);
+	CHECK_EQ(len, 11);
+	CHECK(memcmp(value, "Test board", 11) == 0);
+	p = fdt_next_prop(p);
+	CHECK(p != NULL && strcmp(fdt_prop_name(p), "#address-cells") == 0);
+	value = fdt_prop_value(p, &len);
+	CHECK_EQ(len, 4);
+	store_be32(value, 2);
+	CHECK(fdt_next_prop(p) == NULL);
+	CHECK(fdt_first_prop(fdt_find(fdt, "/serial")) == NULL);
+
+	/* Renaming; and what is new goes first, what is not stays put. */
+	CHECK(fdt_rename(cpu1, "cpu@5"));
+	CHECK(strcmp(fdt_name(cpu1), "cpu@5") == 0);
+	CHECK(fdt_add_node_first(cpus, "cpu@0") == cpu0);
+	node = fdt_add_node_first(cpus, "cpu@9");
+	CHECK(node != NULL && fdt_first_child(cpus) == node);
+	CHECK(fdt_next_child(node) == cpu0 && fdt_parent(node) == cpus);
+	CHECK(fdt_add_node(cpus, "cpu@7") == fdt_next_child(cpu1));
+	node = fdt_add_node_first(fdt_find(fdt, "/serial"), "only");
+	CHECK(node != NULL && fdt_first_child(fdt_find(fdt, "/serial")) == node);
+	CHECK(fdt_add_node(fdt_find(fdt, "/serial"), "next") ==
+	      fdt_next_child(node));
+	CHECK(fdt_set_first(root, "new", "x", 2));
+	CHECK(strcmp(fdt_prop_name(fdt_first_prop(root)), "new") == 0);
+	CHECK(fdt_set_first(root, "model", "M", 2));
+	p = fdt_next_prop(fdt_first_prop(root));
+	CHECK(strcmp(fdt_prop_name(p), "model") == 0);
+	CHECK(fdt_set_first(fdt_find(fdt, "/serial@7e201000"), "a", "", 0));
+	CHECK(fdt_set(fdt_find(fdt, "/serial@7e201000"), "b", "", 0));
+	p = fdt_first_prop(fdt_find(fdt, "/serial@7e201000"));
+	CHECK(strcmp(fdt_prop_name(fdt_next_prop(p)), "b") == 0);
+
+	/* All of it is written. */
+	size = fdt_size(fdt);
+	out = malloc(size);
+	CHECK(fdt_write(fdt, out, size));
+	back = try_parse(out, size, error);
+	CHECK(back != NULL);
+	CHECK(fdt_find(back, "/cpus/cpu@5") != NULL);
+	CHECK(fdt_find(back, "/serial/next") != NULL);
+	CHECK(fdt_get_u32(fdt_root(back), "#address-cells", &cells));
+	CHECK_EQ(cells, 2);
+	CHECK(strcmp(fdt_name(fdt_first_child(fdt_find(back, "/cpus"))), "cpu@9") ==
+	      0);
+
+	/* Swapping: each tree is the other's now. */
+	fdt_swap(fdt, back);
+	CHECK(fdt_find(back, "/cpus/cpu@5") != NULL);
+	CHECK(fdt_find(fdt, "/cpus/cpu@5") != NULL);
+	fdt_rename(fdt_find(back, "/cpus/cpu@5"), "cpu@6");
+	CHECK(fdt_find(fdt, "/cpus/cpu@5") != NULL);
+	CHECK(fdt_find(back, "/cpus/cpu@6") != NULL);
+	fdt_free(back);
+	free(out);
+	fdt_free(fdt);
+	free(blob);
+}
+
 int main(void)
 {
 	RUN_TEST(test_find);
@@ -730,5 +836,6 @@ int main(void)
 	RUN_TEST(test_reservations);
 	RUN_TEST(test_lookup_edges);
 	RUN_TEST(test_names);
+	RUN_TEST(test_walk);
 	return test_summary();
 }

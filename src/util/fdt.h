@@ -25,6 +25,7 @@
 
 typedef struct Fdt Fdt;
 typedef struct FdtNode FdtNode;
+typedef struct FdtProp FdtProp;
 
 /*
  * Read the devicetree blob of size bytes at blob. On failure, writes a
@@ -34,6 +35,9 @@ Fdt *fdt_parse(const void *blob, size_t size, char *error, size_t error_size);
 
 /* Free the tree. fdt may be NULL. */
 void fdt_free(Fdt *fdt);
+
+/* Exchange the trees of a and b, as when b is a copy to go back to. */
+void fdt_swap(Fdt *a, Fdt *b);
 
 /*
  * The node at path, such as "/chosen" or "/cpus/cpu@1". A unit address
@@ -51,6 +55,9 @@ FdtNode *fdt_child(FdtNode *parent, const char *name);
  */
 FdtNode *fdt_add_node(FdtNode *parent, const char *name);
 
+/* As fdt_add_node(), but a new child goes before the others. */
+FdtNode *fdt_add_node_first(FdtNode *parent, const char *name);
+
 /*
  * The value of the property name of node, and its length in *len, or
  * NULL when node has no such property.
@@ -67,6 +74,10 @@ bool fdt_get_u32(const FdtNode *node, const char *name, uint32_t *value);
  */
 bool fdt_set(FdtNode *node, const char *name, const void *value, size_t len);
 
+/* As fdt_set(), but a new property goes before the others. */
+bool fdt_set_first(FdtNode *node, const char *name, const void *value,
+                   size_t len);
+
 /* Set a property to a string, with its terminating 0. */
 bool fdt_set_string(FdtNode *node, const char *name, const char *value);
 
@@ -76,6 +87,37 @@ bool fdt_set_cells(FdtNode *node, const char *name, const uint32_t *cells,
 
 /* Remove the property name of node, if it has one. */
 void fdt_remove(FdtNode *node, const char *name);
+
+/* The root node. */
+FdtNode *fdt_root(Fdt *fdt);
+
+/* The name of node, with its unit address: "" for the root. */
+const char *fdt_name(const FdtNode *node);
+
+/* The parent of node, or NULL for the root. */
+FdtNode *fdt_parent(const FdtNode *node);
+
+/* The first child of node, and the child after child: NULL at the end. */
+FdtNode *fdt_first_child(const FdtNode *node);
+FdtNode *fdt_next_child(const FdtNode *child);
+
+/* Give node another name. Returns false when memory runs out. */
+bool fdt_rename(FdtNode *node, const char *name);
+
+/*
+ * The full path of node, such as "/soc/gpio@7e200000", in buf of size
+ * bytes. Returns false when it does not fit.
+ */
+bool fdt_path(const FdtNode *node, char *buf, size_t size);
+
+/*
+ * The first property of node, and the property after prop: NULL at the
+ * end. The value may be changed in place, its length not.
+ */
+FdtProp *fdt_first_prop(const FdtNode *node);
+FdtProp *fdt_next_prop(const FdtProp *prop);
+const char *fdt_prop_name(const FdtProp *prop);
+uint8_t *fdt_prop_value(const FdtProp *prop, size_t *len);
 
 /* The size of the blob that fdt_write() makes. */
 size_t fdt_size(const Fdt *fdt);
