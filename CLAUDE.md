@@ -81,6 +81,7 @@ For a new board, use the **add-board** skill (`/add-board <name>`).
 | `.claude/knowledge/tools.md` | running checks, sessions, CI, exploration |
 | `.claude/knowledge/mutation.md` | the mutation run of a task |
 | `.claude/knowledge/performance.md` | speed work, the JIT |
+| `docs/claude-sessions.md` | the owner's guide to sessions (Vietnamese): keep it in step when prompts, skills or settings change |
 
 ## Model and effort
 
@@ -93,6 +94,17 @@ of debugging, so a strong model at high effort pays off; `xhigh` and
   clear cause, the design of a new CPU or a JIT.
 - `/effort medium` for mechanical work: classifying mutation survivors,
   boot logs, docs, commits.
+- Claude cannot change the effort itself, so it tells the owner. When
+  one of these happens, stop and say in one line (Vietnamese) that this
+  part is hard and `/effort xhigh` is worth it, and why:
+  - the same failure after two fixes;
+  - the machine hangs or loops without a stop message, and the first
+    look did not find the cause;
+  - a design with many parts that interact (a new CPU, the JIT, a boot
+    ROM stage);
+  - the sources contradict each other and the choice matters.
+  When the hard part is over and the work is routine again, say that
+  `/effort high` is enough.
 - For a session of purely mechanical work, starting it with
   `claude --model sonnet` costs about half; do not switch model in the
   middle of a session (the prompt cache is per model).
