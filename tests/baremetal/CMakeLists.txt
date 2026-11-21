@@ -246,13 +246,14 @@ make_card(sdboot-fat16.img 16 16
 		${bin}/board.dtb=dtbs/raspberry-pi-3.dtb
 	DIRS images dtbs)
 
-# config.txt filters, a setting that is not applied, cmdline.txt, and the
-# device tree on a FAT32 card like Raspberry Pi OS's.
+# config.txt filters, an overlay that is not on the card, cmdline.txt,
+# and the device tree on a FAT32 card like Raspberry Pi OS's.
 add_expect_test(baremetal.sd-boot-fat32
 	STDOUT "^cmdline: console=ttyS0,115200 smirror\n\
 sd boot ok\n$"
-	STDERR "^smirror: warning: config.txt:7: dtoverlay=vc4-kms-v3d is not \
-applied\nsmirror: idle: every CPU is waiting and no event is pending\n$"
+	STDERR "^smirror: warning: Failed to load overlay 'vc4-kms-v3d': no \
+overlays/vc4-kms-v3d.dtbo\nsmirror: idle: every CPU is waiting and no event \
+is pending\n$"
 	COMMAND ${smirror} -M raspi3b -sd sdboot-fat32.img)
 
 # Long names in directories, on FAT16.

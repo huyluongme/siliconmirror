@@ -20,7 +20,8 @@ booting unmodified bootloaders and kernels.
   kernel `bcm2711_defconfig`) run without patches or special builds.
 - **Boots like the real board.** On Raspberry Pi boards the emulator
   reads `config.txt`, the kernel and the device tree from the SD card
-  image, the same way the board firmware does.
+  image, and applies the device tree overlays and parameters that
+  `config.txt` names, the same way the board firmware does.
 - **Generic core.** CPU architectures, devices and boards are separate
   layers, so new ones can be added without changing the core.
 - **Debuggable.** Built-in GDB stub and instruction tracing.

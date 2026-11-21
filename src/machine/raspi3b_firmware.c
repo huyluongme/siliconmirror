@@ -16,6 +16,7 @@
 #include "boot/fat.h"
 #include "boot/mbr.h"
 #include "boot/rpi_config.h"
+#include "boot/rpi_overlay.h"
 #include "machine/raspi3b.h"
 #include "util/byteorder.h"
 #include "util/fdt.h"
@@ -96,6 +97,8 @@ typedef struct Boot {
 	uint64_t kernel_start, kernel_end;
 	uint64_t initrd_start, initrd_end; /* 0, 0 without an initramfs */
 	char *cmdline;                     /* NULL without one */
+	char overlay_prefix[256];          /* with os_prefix, if it applies */
+	bool card_failed; /* reading an overlay found the card damaged */
 } Boot;
 
 static bool fail(Boot *b, const char *fmt, ...) PRINTF_FORMAT(2, 3);
@@ -894,9 +897,111 @@ static bool fixups(Boot *b, Fdt *fdt)
 	return true;
 }
 
+/* --- Overlays ------------------------------------------------------------- */
+
+#define OVERLAY_MAX (1 * MIB) /* a larger .dtbo is refused; ours */
+
+static Fdt *read_tree(Boot *b, const char *path, char *error, size_t size)
+{
+	uint8_t *blob = NULL;
+	size_t len = 0;
+	int r = read_file(b, path, OVERLAY_MAX, &blob, &len);
+	Fdt *fdt;
+
+	if (r < 0) {
+		b->card_failed = true;
+		snprintf(error, size, "%s", b->error);
+		return NULL;
+	}
+	if (r == 0) {
+		snprintf(error, size, "no %s", path);
+		return NULL;
+	}
+	fdt = fdt_parse(blob, len, error, size);
+	free(blob);
+	return fdt;
+}
+
+static Fdt *load_overlay(void *ctx, const char *name, char *error,
+                         size_t error_size)
+{
+	Boot *b = ctx;
+	char path[320];
+
+	snprintf(path, sizeof(path), "%s%s.dtbo", b->overlay_prefix, name);
+	return read_tree(b, path, error, error_size);
+}
+
 /*
- * Load the device tree, fix it up, and place it: device_tree_address, or
- * just below DTB_END. Returns its address in *address, 0 for none.
+ * Where the overlays are: overlay_prefix, "overlays/" by default, after
+ * os_prefix only if a README is there (documentation, "os_prefix" and
+ * "overlay_prefix").
+ */
+static bool overlay_prefix(Boot *b)
+{
+	const char *prefix = get(b, "overlay_prefix", false);
+	char readme[300];
+	bool found = false;
+
+	if (prefix == NULL)
+		prefix = "overlays/";
+	snprintf(b->overlay_prefix, sizeof(b->overlay_prefix), "%s%s", b->prefix,
+	         prefix);
+	snprintf(readme, sizeof(readme), "%sREADME", b->overlay_prefix);
+	if (!exists(b, readme, &found))
+		return false;
+	if (!found)
+		snprintf(b->overlay_prefix, sizeof(b->overlay_prefix), "%s", prefix);
+	return true;
+}
+
+/*
+ * config.txt's dtoverlay= and dtparam= lines, in order, from the files
+ * it includes too. Nothing is attached to the board, so the cameras and
+ * displays that camera_auto_detect and display_auto_detect look for are
+ * not found, and they load nothing; nor does a HAT, which has no EEPROM.
+ */
+static bool apply_overlays(Boot *b, Fdt *fdt)
+{
+	RpiOverlays o = {
+		.base = fdt,
+		.platform = "bcm2835", /* the overlay map's name for the Pi 3 */
+		.load = load_overlay,
+		.warn = warn,
+		.ctx = b,
+	};
+	char path[320], why[400];
+
+	if (!overlay_prefix(b))
+		return false;
+	get(b, "camera_auto_detect", false);
+	get(b, "display_auto_detect", false);
+	snprintf(path, sizeof(path), "%soverlay_map.dtb", b->overlay_prefix);
+	o.map = read_tree(b, path, why, sizeof(why));
+	if (o.map == NULL && !b->card_failed && strncmp(why, "no ", 3) != 0)
+		warnf(b, "%s: %s", path, why);
+	for (size_t i = 0; i < b->config.count && !b->card_failed; i++) {
+		RpiSetting *s = &b->config.settings[i];
+
+		if (strcmp(s->key, "dtoverlay") == 0) {
+			s->used = true;
+			rpi_overlays_dtoverlay(&o, s->value);
+		} else if (strcmp(s->key, "dtparam") == 0) {
+			s->used = true;
+			rpi_overlays_dtparam(&o, s->value);
+		}
+	}
+	rpi_overlays_end(&o);
+	fdt_free(o.map);
+	return !b->card_failed;
+}
+
+/* --- Placing the device tree --------------------------------------------- */
+
+/*
+ * Load the device tree, apply the overlays and parameters, fix it up,
+ * and place it: device_tree_address, or just below DTB_END. Returns its
+ * address in *address, 0 for none.
  */
 static bool load_dtb(Boot *b, uint32_t *address)
 {
@@ -929,7 +1034,7 @@ static bool load_dtb(Boot *b, uint32_t *address)
 	free(blob);
 	if (fdt == NULL)
 		return fail(b, "%s: %s", path, why);
-	if (!fixups(b, fdt)) {
+	if (!apply_overlays(b, fdt) || !fixups(b, fdt)) {
 		fdt_free(fdt);
 		return false;
 	}

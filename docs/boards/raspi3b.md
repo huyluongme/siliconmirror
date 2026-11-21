@@ -1060,7 +1060,9 @@ smirror does what that firmware does, without running it:
    is not known: `console=serial1` stops the boot.
 10. The device tree: `device_tree=`, or `bcm2710-rpi-3-b.dtb`, or else
     the upstream `bcm2837-rpi-3-b.dtb`; `device_tree=` with no name boots
-    without one. The firmware fills in the memory node (`reg`, after
+    without one. It applies the overlays and parameters of
+    `config.txt`, as the next section says. Then it fills in the
+    memory node (`reg`, after
     `#address-cells` and `#size-cells` of the root), sets
     `/chosen/bootargs` as below, sets `/chosen/linux,initrd-start` and
     `linux,initrd-end`, and gives the node that the alias `ethernet0`
@@ -1101,13 +1103,85 @@ nothing follows: `start.elf` holds a default line, but when it uses it
 is not documented. smirror's card gives Linux:
 
 ```
-coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200
+coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1 bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200
 ```
 
-What `config.txt` sets but smirror does not apply, such as `dtoverlay`,
-`dtparam` or the video settings, is listed in a warning, and the boot
-goes on. A reset of the board runs this boot again, from the card as it
+(`snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1` is what
+its `dtparam=audio=on` adds to `bootargs`.)
+
+What `config.txt` sets but smirror does not apply, such as the video
+settings, is listed in a warning, and the boot goes on. A reset of the board runs this boot again, from the card as it
 is then.
+
+## Overlays and parameters
+
+Before it fills in the device tree, the firmware applies the
+`dtoverlay=` and `dtparam=` lines of `config.txt` and of the files it
+includes, in their order, as the Raspberry Pi documentation, "Device
+Trees, overlays, and parameters", describes; src/boot/rpi_overlay.c
+does it:
+
+- `dtparam=name=value,...` sets parameters that the tree's
+  `__overrides__` declares: strings, `status` (on, off and the like
+  become "okay" and "disabled"), integers of 8, 16, 32 and 64 bits at an
+  offset, booleans and inverted booleans, byte strings, several targets
+  at once, literal assignments, lookup tables, and fragment operations.
+  `bootargs` grows, `reg` renames the node's unit address, `name` the
+  node.
+- `dtoverlay=name,param=value,...` loads `overlays/name.dtbo`
+  (`overlay_prefix`, after `os_prefix` only if a `README` is there),
+  as `overlays/overlay_map.dtb` says for the platform `bcm2835`: a
+  renamed overlay warns and loads the new name, a deprecated one or
+  one for another platform is not loaded. Its phandles move above the
+  base's (`__local_fixups__`), its references to the base's labels get
+  theirs (`__fixups__`, from `__symbols__`, or `aliases` without them;
+  a node without a phandle gets one). Its parameters, on its line and
+  on the `dtparam=` lines after it, win over the base's until the next
+  `dtoverlay=`; then its fragments merge, those that target the
+  overlay itself first, and the labels it exports (`__exports__`) are
+  the base's for the overlays after it (not those of a fragment that
+  targets the overlay: where they end up is not documented, and
+  smirror leaves them out). `dtoverlay=` alone ends its
+  scope.
+- What goes wrong is a warning in the words of `start.elf`'s strings
+  ("Unknown dtparam 'x' - ignored", "Failed to load overlay 'x'",
+  "overlay 'x' is deprecated: ..."), and the lines after it still
+  apply; an overlay that does not resolve or merge changes nothing,
+  and the `dtparam=` lines of its scope are dropped.
+- Nothing is attached to the board: `camera_auto_detect` and
+  `display_auto_detect` find no camera or display and load nothing, and
+  there is no HAT EEPROM to load an overlay from.
+
+Where the documentation says nothing, smirror chooses:
+
+- A parameter with no value is true for booleans, `status`, fragment
+  operations and integers; a lookup table gives its default, which is
+  how the overlays use `dtoverlay=name,param`; a string needs a value.
+  In a lookup table, a value that matches no key passes through when the
+  table allows it, before the default: pps-rp1's `{,=18}` means 18
+  without a value.
+- A false boolean removes the property from an overlay, never from the
+  base, which the documentation says it cannot change.
+- Fragments are all the root's children that hold an `__overlay__`, in
+  order: the overlays of the firmware number theirs with gaps
+  (`i2c-fan` has `fragment@100`). Each finds its target when it merges,
+  so that it may target what a fragment before it added, as
+  `seeed-can-fd-hat-v1` does. A fragment operation names `fragment@N`
+  or `fragment-N`, as `start.elf`'s strings do.
+- What an overlay adds goes before a node's other properties and
+  children, where libfdt, which `fdtoverlay` uses, puts it; the order
+  of the firmware's tree is not documented. A node that has a phandle
+  keeps it when an overlay's node merges into it.
+
+Of the 383 overlays of the firmware 1.20260915, each merged into
+`bcm2710-rpi-3-b.dtb` without parameters, 307 apply to a Pi 3. 269
+give the tree that `fdtoverlay` gives, but for `__symbols__` and
+`bootargs`, which `fdtoverlay` does not treat as the firmware does.
+The other 38 have fragments that target the overlay itself, which
+`fdtoverlay` merges in one pass instead of two: 28 differ only in the
+order of what those fragments add, and `fdtoverlay` cannot merge 10.
+Of the 76 that do not apply, the overlay map keeps 70 for other
+platforms, and 6 name labels that a Pi 3's tree does not have.
 
 With `-kernel`, the card is not read: the kernel comes from the host,
 goes where the rules of 7 put it, and boots without a device tree; the
@@ -1201,9 +1275,12 @@ to quit.
   low-speed devices, which need the hub's transaction translators,
   cannot be attached yet.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
-- The firmware's device tree overlays and parameters (`dtoverlay`,
-  `dtparam`) are not applied, nor are the other settings of `config.txt`
-  that smirror does not list above; a warning names each. The firmware
+- The settings of `config.txt` that smirror does not list above are
+  not applied; a warning names each. Of the overlays, the firmware
+  itself acts on some (it changes its own console or display for
+  `disable-bt` or `vc4-kms-v3d`, it refuses some with less than 512 MB,
+  it knows a `dtoverlay,preserve-phandle` property), and smirror only
+  merges them. `dtdebug` shows nothing: smirror has no firmware log. The firmware
   also adds things of its own to the command line, which are not
   documented, and smirror does not.
 - Time is virtual, as described under The Generic Timer: the counter
@@ -1288,6 +1365,23 @@ to quit.
   ([a gist from 2019](https://gist.github.com/cleverca22/2c3bd998e08a2d2c282bc735494792e3)):
   `tsens` at 1920000 Hz beside `osc` at 19200000 Hz, with the UART,
   EMMC and VPU clocks at the rates the Pi 3 shows.
+- Overlays and parameters: the Raspberry Pi documentation,
+  [Device Trees, overlays, and parameters](https://github.com/raspberrypi/documentation/blob/507038ca884751ce93d68a46816a72c838b619b6/documentation/asciidoc/computers/configuration/device-tree.adoc)
+  (fragments, `__fixups__`, `__local_fixups__`, `__symbols__`, the
+  parameters and their kinds, the special properties, the overlay map,
+  `__exports__`, the order of the passes, the scope of `dtparam`),
+  [overlay_prefix and os_prefix](https://www.raspberrypi.com/documentation/computers/config_txt.html#overlay_prefix),
+  and the
+  [overlays' README](https://github.com/raspberrypi/firmware/blob/1.20260915/boot/overlays/README)
+  of the release; the overlays themselves (`i2c-fan`'s `fragment@100`,
+  `pps-rp1`'s `{,=18}`, `seeed-can-fd-hat-v1`'s fragment 7,
+  `vc4-kms-v3d`'s fragments and parameters); the
+  strings of `start.elf` (`fragment@%u`, `fragment-%u`, "Unknown dtparam
+  '%s' - ignored", "Failed to load overlay '%s'", "overlay '%s' has
+  been renamed '%s'", "overlay '%s' is deprecated: %s", "overlay '%s' is
+  not supported on the '%s' platform", "Overlay '%s' needs at least
+  512MB", `dtoverlay,preserve-phandle`, `overlay_prefix`); `fdtoverlay`
+  of dtc 1.7, run on the release's overlays, for the merged trees.
 - What the firmware writes into the device tree: the strings of
   `start.elf` ("Raspberry Pi %s Rev %s", `/serial-number`,
   `/system/linux,revision`, `/system/linux,serial`, `/chosen/kaslr-seed`,

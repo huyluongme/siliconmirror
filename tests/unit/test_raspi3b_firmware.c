@@ -470,8 +470,8 @@ static void test_card_boot(void)
 	         "console=serial0,115200 root=/dev/mmcblk0p2 \nsecond line\n");
 	add_dtb(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb");
 	m = boot_ok(&c);
-	CHECK(strcmp(warnings,
-	             "config.txt:4: dtoverlay=vc4-kms-v3d is not applied\n") == 0);
+	CHECK(strcmp(warnings, "Failed to load overlay 'vc4-kms-v3d': no "
+	                       "overlays/vc4-kms-v3d.dtbo\n") == 0);
 
 	/* The stub: the kernel at 0x80000, the device tree in X0. */
 	CHECK_EQ(rd(m, RASPI3B_STUB_KERNEL, 4), 0x80000);
@@ -935,6 +935,176 @@ static void test_device_tree(void)
 	}
 }
 
+/*
+ * A base tree with a parameter, audio, and the label chosen: the parts
+ * of the firmware's trees that overlays use.
+ */
+static size_t overlay_base(uint8_t **blob)
+{
+	static Builder b;
+	static const char audio[] = "\0\0\0\1bootargs{on='snd=1'}";
+
+	memset(&b, 0, sizeof(b));
+	begin(&b, "");
+	prop_u32(&b, "#address-cells", 1);
+	prop_u32(&b, "#size-cells", 1);
+	begin(&b, "chosen");
+	prop(&b, "bootargs", "coherent_pool=1M", 17);
+	prop_u32(&b, "phandle", 1);
+	end(&b);
+	begin(&b, "__symbols__");
+	prop(&b, "chosen", "/chosen", 8);
+	end(&b);
+	begin(&b, "__overrides__");
+	prop(&b, "audio", audio, sizeof(audio));
+	end(&b);
+	end(&b);
+	return finish(&b, blob);
+}
+
+/* An overlay that adds words to bootargs. */
+static void add_overlay(Card *c, Dir *dir, const char name11[11],
+                        const char *long_name, const char *words)
+{
+	static Builder b;
+	uint8_t *blob;
+	size_t size;
+
+	memset(&b, 0, sizeof(b));
+	begin(&b, "");
+	begin(&b, "fragment@0");
+	prop(&b, "target-path", "/chosen", 8);
+	begin(&b, "__overlay__");
+	prop(&b, "bootargs", words, strlen(words) + 1);
+	end(&b);
+	end(&b);
+	end(&b);
+	size = finish(&b, &blob);
+	add_file(&c->fs, dir, name11, long_name, blob, (uint32_t)size);
+	free(blob);
+}
+
+/* The start of the command line that the kernel gets. */
+static bool bootargs_start(Machine *m, const char *start)
+{
+	uint32_t dtb;
+	Fdt *fdt = guest_dtb(m, &dtb);
+	size_t len;
+	const char *v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &len);
+	bool ok = v != NULL && strncmp(v, start, strlen(start)) == 0;
+
+	fdt_free(fdt);
+	return ok;
+}
+
+/* Whether the command line that the kernel gets has words. */
+static bool bootargs_has(Machine *m, const char *words)
+{
+	uint32_t dtb;
+	Fdt *fdt = guest_dtb(m, &dtb);
+	const char *v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &(size_t){0});
+	bool ok = v != NULL && strstr(v, words) != NULL;
+
+	fdt_free(fdt);
+	return ok;
+}
+
+/*
+ * dtoverlay= and dtparam= of config.txt: the overlays come from
+ * overlays/, or overlay_prefix, after os_prefix when it has a README; the
+ * overlay map says which to load.
+ */
+static void test_overlays(void)
+{
+	static const char map[] = "\xd0\x0d\xfe\xed";
+	Card c;
+	Dir dir, next;
+	Machine *m;
+	uint8_t *blob, *map_blob;
+	size_t size = overlay_base(&blob), map_size;
+	uint8_t image[64 + sizeof(kernel)];
+	size_t image_size = image_kernel(image, 0);
+	static Builder b;
+
+	memset(&b, 0, sizeof(b));
+	begin(&b, "");
+	begin(&b, "gone");
+	prop(&b, "deprecated", "use test", 9);
+	end(&b);
+	end(&b);
+	map_size = finish(&b, &map_blob);
+
+	card(&c, true, true);
+	add_text(&c, "CONFIG  TXT", "config.txt",
+	         "arm_64bit=1\ndtparam=audio=on\ndtoverlay=test,nope\n"
+	         "dtoverlay=gone\ndtoverlay=missing\n");
+	add(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+	dir = add_dir(&c.fs, &c.root, "OVERLAYS   ", "overlays");
+	add_overlay(&c, &dir, "TEST    DTB", "test.dtbo", "ov=1");
+	add_file(&c.fs, &dir, "OVERLA~1DTB", "overlay_map.dtb", map_blob,
+	         (uint32_t)map_size);
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "Unknown dtparam 'nope' - ignored\n"
+	                       "overlay 'gone' is deprecated: use test\n"
+	                       "Failed to load overlay 'missing': no "
+	                       "overlays/missing.dtbo\n") == 0);
+	CHECK(bootargs_start(m, "coherent_pool=1M snd=1 ov=1 bcm2708_fb."));
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* overlay_prefix; a map that is not a tree. */
+	card(&c, true, true);
+	add_text(&c, "CONFIG  TXT", "config.txt",
+	         "arm_64bit=1\noverlay_prefix=extra/\ndtoverlay=test\n");
+	add(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+	dir = add_dir(&c.fs, &c.root, "EXTRA      ", "extra");
+	add_overlay(&c, &dir, "TEST    DTB", "test.dtbo", "extra=1");
+	add_file(&c.fs, &dir, "OVERLA~1DTB", "overlay_map.dtb", map, 4);
+	m = boot_ok(&c);
+	CHECK(strncmp(warnings, "extra/overlay_map.dtb: ", 23) == 0);
+	CHECK(bootargs_start(m, "coherent_pool=1M extra=1 bcm2708_fb."));
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* os_prefix's overlays count only with their README. */
+	for (int readme = 0; readme < 2; readme++) {
+		Dir mine;
+
+		card(&c, true, true);
+		add_text(&c, "CONFIG  TXT", "config.txt",
+		         "arm_64bit=1\nos_prefix=next/\ndtoverlay=test\n");
+		dir = add_dir(&c.fs, &c.root, "OVERLAYS   ", "overlays");
+		add_overlay(&c, &dir, "TEST    DTB", "test.dtbo", "shared=1");
+		next = add_dir(&c.fs, &c.root, "NEXT       ", "next");
+		add_file(&c.fs, &next, "KERNEL8 IMG", "kernel8.img", image,
+		         (uint32_t)image_size);
+		add_file(&c.fs, &next, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob,
+		         (uint32_t)size);
+		mine = add_dir(&c.fs, &next, "OVERLAYS   ", "overlays");
+		add_overlay(&c, &mine, "TEST    DTB", "test.dtbo", "next=1");
+		if (readme)
+			add_file(&c.fs, &mine, "README     ", NULL, "", 0);
+		m = boot_ok(&c);
+		CHECK(strcmp(warnings, "") == 0);
+		CHECK(bootargs_start(m, readme ? "coherent_pool=1M next=1 "
+		                               : "coherent_pool=1M shared=1 "));
+		machine_destroy(m);
+		block_mem_free(&c.fs.m);
+	}
+
+	/* Without a device tree, the lines are not applied. */
+	card(&c, true, true);
+	add_text(&c, "CONFIG  TXT", "config.txt",
+	         "arm_64bit=1\ndtparam=audio=on\ndtoverlay=test\n");
+	m = boot_ok(&c);
+	CHECK(strstr(warnings, "config.txt:3: dtoverlay=test is not applied") !=
+	      NULL);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+	free(map_blob);
+	free(blob);
+}
+
 /* os_prefix: used when the kernel and the device tree are there. */
 static void test_os_prefix(void)
 {
@@ -1335,16 +1505,23 @@ static void test_card_layout(void)
  */
 static void test_read_errors(void)
 {
-	static const char config[] = "arm_64bit=1\ninclude extra.txt\n";
+	static const char config[] = "dtoverlay=test\narm_64bit=1\n"
+								 "include extra.txt\n";
 	static const char extra[] = "os_prefix=next/\ncmdline=cmd.txt\n"
-								"auto_initramfs=1\nenable_uart=1\n";
+								"auto_initramfs=1\nenable_uart=1\n"
+								"overlay_prefix=ovl/\ncamera_auto_detect=1\n"
+								"display_auto_detect=1\n";
+	static Builder map;
+	uint8_t *map_blob;
+	size_t map_size;
 	uint8_t image[64 + sizeof(kernel)];
 	size_t size = image_kernel(image, 0);
 	uint8_t *blob;
 	size_t dtb_size = board_dtb(&blob, 1);
 	unsigned reads;
 	Card c;
-	Dir next;
+	Dir next, ovl;
+	Machine *m;
 
 	card(&c, true, true);
 	add_text(&c, "CONFIG  TXT", "config.txt", config);
@@ -1355,16 +1532,27 @@ static void test_read_errors(void)
 	         (uint32_t)dtb_size);
 	add_file(&c.fs, &next, "CMD     TXT", "cmd.txt", "quiet", 5);
 	add_file(&c.fs, &next, "INITRA~1   ", "initramfs8", "auto", 4);
+	ovl = add_dir(&c.fs, &next, "OVL        ", "ovl");
+	add_file(&c.fs, &ovl, "README     ", NULL, "", 0);
+	add_overlay(&c, &ovl, "TEST    DTB", "test.dtbo", "ov=1");
+	memset(&map, 0, sizeof(map));
+	begin(&map, "");
+	end(&map);
+	map_size = finish(&map, &map_blob);
+	add_file(&c.fs, &ovl, "OVERLA~1DTB", "overlay_map.dtb", map_blob,
+	         (uint32_t)map_size);
+	free(map_blob);
 	free(blob);
 
 	c.fs.m.reads = 0;
-	machine_destroy(boot_ok(&c));
+	m = boot_ok(&c);
 	CHECK(strcmp(warnings, "") == 0);
+	CHECK(bootargs_has(m, "ov=1"));
+	machine_destroy(m);
 	reads = c.fs.m.reads;
 	CHECK(reads > 20);
 	for (unsigned n = 0; n < reads; n++) {
 		char error[256];
-		Machine *m;
 
 		c.fs.m.reads = 0;
 		c.fs.m.fail_read = n;
@@ -1373,6 +1561,9 @@ static void test_read_errors(void)
 			fprintf(stderr, "read %u: \"%s\"\n", n, error);
 		CHECK(m == NULL);
 		CHECK(strstr(error, "cannot read") != NULL);
+		/* An overlay that the card fails to give says why too. */
+		CHECK(strstr(warnings, "Failed to load overlay 'test': ") == NULL ||
+		      strstr(warnings, "'test': cannot read") != NULL);
 		machine_destroy(m);
 	}
 	block_mem_free(&c.fs.m);
@@ -1815,6 +2006,7 @@ int main(void)
 	RUN_TEST(test_gzip_kernel);
 	RUN_TEST(test_device_tree);
 	RUN_TEST(test_os_prefix);
+	RUN_TEST(test_overlays);
 	RUN_TEST(test_memory);
 	RUN_TEST(test_reset);
 	RUN_TEST(test_include);
