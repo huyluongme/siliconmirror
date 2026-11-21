@@ -29,6 +29,13 @@
 #include "util/fdt.h"
 #include "util/macros.h"
 
+/*
+ * What the firmware puts between the device tree's bootargs and
+ * cmdline.txt: the frame buffer of 656 by 416 and the VideoCore's memory.
+ */
+#define FW_ARGS                                                                \
+	"bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 "      \
+	"vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  "
 #define MB (1024u * 1024u)
 #define KERNEL_FILE "test_raspi3b_firmware_kernel.bin"
 
@@ -483,7 +490,7 @@ static void test_card_boot(void)
 	CHECK_EQ(load_be32(v), 0);
 	CHECK_EQ(load_be32(v + 4), 0x3b400000);
 	v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &len);
-	CHECK(v != NULL && strcmp((const char *)v, "coherent_pool=1M "
+	CHECK(v != NULL && strcmp((const char *)v, "coherent_pool=1M " FW_ARGS
 	                                           "console=ttyS0,115200 "
 	                                           "root=/dev/mmcblk0p2") == 0);
 	node = fdt_find(fdt, "/soc/usb@7e980000/ethernet@1");
@@ -891,7 +898,7 @@ static void test_device_tree(void)
 	CHECK_EQ(load_be32(v + 4), 0);
 	CHECK_EQ(load_be32(v + 8), 0x3b400000);
 	v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &len);
-	CHECK(v != NULL && strcmp((const char *)v, "quiet") == 0);
+	CHECK(v != NULL && strcmp((const char *)v, FW_ARGS "quiet") == 0);
 	fdt_free(fdt);
 	machine_destroy(m);
 	block_mem_free(&c.fs.m);
@@ -909,9 +916,10 @@ static void test_device_tree(void)
 		v = fdt_get(fdt_find(fdt, "/memory"), "reg", &len);
 		CHECK(v != NULL && len == 12);
 		CHECK_EQ(load_be32(v + 8), 0x3b400000);
-		/* No command line: the tree's bootargs stay. */
+		/* No command line: the tree's bootargs, the firmware's own. */
 		v = fdt_get(fdt_find(fdt, "/chosen"), "bootargs", &len);
-		CHECK(v != NULL && strcmp((const char *)v, "coherent_pool=1M") == 0);
+		CHECK(v != NULL &&
+		      strcmp((const char *)v, "coherent_pool=1M " FW_ARGS) == 0);
 		fdt_free(fdt);
 		machine_destroy(m);
 		block_mem_free(&c.fs.m);
@@ -1201,7 +1209,7 @@ static void test_include(void)
 	CHECK_EQ(rd(m, RASPI3B_STUB_KERNEL, 4), 0x100000);
 	CHECK_EQ(rd(m, RASPI3B_STUB_DTB, 4), 0x200000);
 	CHECK_EQ(gpfsel(m, 14), BCM2835_GPIO_ALT5);
-	CHECK(strcmp(bootargs(m), "coherent_pool=1M from extra") == 0);
+	CHECK(strcmp(bootargs(m), "coherent_pool=1M " FW_ARGS "from extra") == 0);
 	CHECK_EQ(chosen_u32(m, "linux,initrd-start"), 0x800000);
 	run_kernel(m, &x0, &where);
 	CHECK_EQ(where, 0x100000);
@@ -1297,7 +1305,7 @@ static void test_card_layout(void)
 	card_config(&c, "arm_64bit=1\n");
 	add_dir(&c.fs, &c.root, "CMDLINE TXT", "cmdline.txt");
 	m = boot_ok(&c);
-	CHECK(strcmp(bootargs(m), "coherent_pool=1M") == 0);
+	CHECK(strcmp(bootargs(m), "coherent_pool=1M " FW_ARGS) == 0);
 	machine_destroy(m);
 	block_mem_free(&c.fs.m);
 	card(&c, true, false);
@@ -1377,37 +1385,41 @@ static void test_read_errors(void)
 static void test_cmdline_edges(void)
 {
 	static char x4096[4097], x4097[4098];
-	static char expected[4200];
+	static char expected[4400];
 	static const struct {
 		const char *file;
 		const char *bootargs; /* NULL: the boot fails */
 	} cases[] = {
-		{"", "coherent_pool=1M"},
-		{"\nquiet\n", "coherent_pool=1M"},
-		{"   \n", "coherent_pool=1M"},
-		{" ", "coherent_pool=1M"},
-		{"quiet \t\t\n", "coherent_pool=1M quiet"},
-		{"x", "coherent_pool=1M x"},
+		{"", "coherent_pool=1M " FW_ARGS},
+		{"\nquiet\n", "coherent_pool=1M " FW_ARGS},
+		{"   \n", "coherent_pool=1M " FW_ARGS},
+		{" ", "coherent_pool=1M " FW_ARGS},
+		{"quiet \t\t\n", "coherent_pool=1M " FW_ARGS "quiet"},
+		{"x", "coherent_pool=1M " FW_ARGS "x"},
 		{x4096, expected},
 		{x4097, NULL},
 		/* serial0, the mini UART, as the firmware names it. */
 		{"console=serial0,115200 earlycon",
-	     "coherent_pool=1M console=ttyS0,115200 earlycon"},
-		{"quiet console=serial0", "coherent_pool=1M quiet console=ttyS0"},
+	     "coherent_pool=1M " FW_ARGS "console=ttyS0,115200 earlycon"},
+		{"quiet console=serial0",
+	     "coherent_pool=1M " FW_ARGS "quiet console=ttyS0"},
 		{"a\tconsole=serial0 console=serial0,9600",
-	     "coherent_pool=1M a\tconsole=ttyS0 console=ttyS0,9600"},
+	     "coherent_pool=1M " FW_ARGS "a\tconsole=ttyS0 console=ttyS0,9600"},
 		{"xconsole=serial0 console=serial01 console=serial2",
-	     "coherent_pool=1M xconsole=serial0 console=serial01 console=serial2"},
-		{"console=serial", "coherent_pool=1M console=serial"},
-		{"console=tty1 console=serial1x", "coherent_pool=1M console=tty1 "
-	                                      "console=serial1x"},
+	     "coherent_pool=1M " FW_ARGS
+	     "xconsole=serial0 console=serial01 console=serial2"},
+		{"console=serial", "coherent_pool=1M " FW_ARGS "console=serial"},
+		{"console=tty1 console=serial1x",
+	     "coherent_pool=1M " FW_ARGS "console=tty1 "
+	     "console=serial1x"},
 		{"console=serial1,115200", NULL},
 		{"quiet console=serial1", NULL},
 	};
 
 	memset(x4096, 'x', 4096);
 	memset(x4097, 'x', 4097);
-	snprintf(expected, sizeof(expected), "coherent_pool=1M %s", x4096);
+	snprintf(expected, sizeof(expected), "coherent_pool=1M " FW_ARGS "%s",
+	         x4096);
 	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
 		Card c;
 		Machine *m;
@@ -1588,10 +1600,10 @@ static void test_device_tree_edges(void)
 		size_t len;
 		const char *expected;
 	} args[] = {
-		{"", 0, "quiet"},
-		{"", 1, "quiet"},
-		{"x", 2, "x quiet"},
-		{"abc", 3, "quiet"}, /* not a string */
+		{"", 0, FW_ARGS "quiet"},
+		{"", 1, FW_ARGS "quiet"},
+		{"x", 2, "x " FW_ARGS "quiet"},
+		{"abc", 3, FW_ARGS "quiet"}, /* not a string */
 	};
 	static const struct {
 		const char *alias;
@@ -1692,6 +1704,107 @@ static void test_device_tree_edges(void)
 	block_mem_free(&c.fs.m);
 }
 
+/*
+ * Who the board is, the seeds, and what the firmware does to the
+ * command line: 8250.nr_uarts after enable_uart, in the tree's bootargs
+ * alone, and the VideoCore's memory after total_mem.
+ */
+static void test_identity(void)
+{
+	static const struct {
+		const char *config;
+		const char *args;
+		const char *expected;
+	} uarts[] = {
+		{"", "a 8250.nr_uarts=1 b", "a 8250.nr_uarts=0 b " FW_ARGS "x"},
+		{"enable_uart=1\n", "a 8250.nr_uarts=1 b",
+	     "a 8250.nr_uarts=1 b " FW_ARGS "x"},
+		{"enable_uart=1\n", "8250.nr_uarts=0", "8250.nr_uarts=1 " FW_ARGS "x"},
+		{"", "8250.nr_uarts=0", "8250.nr_uarts=0 " FW_ARGS "x"},
+		{"", "8250.nr_uarts=2", "8250.nr_uarts=2 " FW_ARGS "x"},
+		{"", "8250.nr_uarts=", "8250.nr_uarts= " FW_ARGS "x"},
+	};
+	uint8_t *blob;
+	Card c;
+	Machine *m;
+	Fdt *fdt;
+	FdtNode *root, *chosen, *system;
+	uint32_t dtb;
+	const uint8_t *v;
+	size_t len, size;
+
+	for (int boot = 0; boot < 2; boot++) {
+		card_config(&c, "arm_64bit=1\n");
+		m = boot_ok(&c);
+		fdt = guest_dtb(m, &dtb);
+		root = fdt_find(fdt, "/");
+		system = fdt_find(fdt, "/system");
+		chosen = fdt_find(fdt, "/chosen");
+		v = fdt_get(root, "model", &len);
+		CHECK(v != NULL && len == 31 &&
+		      strcmp((const char *)v, "Raspberry Pi 3 Model B Rev 1.2") == 0);
+		v = fdt_get(root, "serial-number", &len);
+		CHECK(v != NULL && len == 17 &&
+		      strcmp((const char *)v, "00000000c0ffee03") == 0);
+		v = fdt_get(system, "linux,revision", &len);
+		CHECK(v != NULL && len == 4 && load_be32(v) == 0xa02082);
+		v = fdt_get(system, "linux,serial", &len);
+		CHECK(v != NULL && len == 8 && load_be64(v) == 0xc0ffee03);
+		/*
+		 * The same seeds at each boot: SplitMix64's first 9 numbers from
+		 * 0x534d4657, as a Python version of it gives them (which gives
+		 * 6457827717110365317 and 3203168211198807973 from 1234567, as
+		 * the reference implementation does).
+		 */
+		v = fdt_get(chosen, "kaslr-seed", &len);
+		CHECK(v != NULL && len == 8 && load_be64(v) == 0x2238535099c9327cull);
+		v = fdt_get(chosen, "rng-seed", &len);
+		CHECK(v != NULL && len == 64);
+		if (v != NULL && len == 64) {
+			CHECK_EQ(load_be64(v), 0x32b403423f514e26ull);
+			CHECK_EQ(load_be64(v + 8), 0x950d0a29e2f9c916ull);
+			CHECK_EQ(load_be64(v + 56), 0x82cb6c5c79b77eb4ull);
+		}
+		fdt_free(fdt);
+		machine_destroy(m);
+		block_mem_free(&c.fs.m);
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(uarts); i++) {
+		char config[64];
+
+		size = custom_dtb(&blob, 1, 1, uarts[i].args, strlen(uarts[i].args) + 1,
+		                  NULL, 0);
+		snprintf(config, sizeof(config), "arm_64bit=1\n%s", uarts[i].config);
+		card(&c, true, true);
+		add_text(&c, "CONFIG  TXT", "config.txt", config);
+		add_text(&c, "CMDLINE TXT", "cmdline.txt", "x");
+		add(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+		free(blob);
+		m = boot_ok(&c);
+		CHECK(strcmp(bootargs(m), uarts[i].expected) == 0);
+		machine_destroy(m);
+		block_mem_free(&c.fs.m);
+	}
+
+	/* Not in cmdline.txt: the tree's bootargs have none. */
+	card_config(&c, "arm_64bit=1\n");
+	add_text(&c, "CMDLINE TXT", "cmdline.txt", "8250.nr_uarts=1");
+	m = boot_ok(&c);
+	CHECK(strcmp(bootargs(m), "coherent_pool=1M " FW_ARGS "8250.nr_uarts=1") ==
+	      0);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* The VideoCore's memory: the SDRAM in use, and 20 MB below its top. */
+	card_config(&c, "arm_64bit=1\ntotal_mem=512\n");
+	m = boot_ok(&c);
+	CHECK(strstr(bootargs(m), " vc_mem.mem_base=0x1ec00000 "
+	                          "vc_mem.mem_size=0x20000000  ") != NULL);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_card_errors);
@@ -1712,6 +1825,7 @@ int main(void)
 	RUN_TEST(test_kernel_edges);
 	RUN_TEST(test_initramfs_edges);
 	RUN_TEST(test_device_tree_edges);
+	RUN_TEST(test_identity);
 	remove(KERNEL_FILE);
 	return test_summary();
 }

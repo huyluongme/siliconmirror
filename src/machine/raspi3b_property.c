@@ -421,6 +421,12 @@ uint32_t raspi3b_property_arm_memory(const Raspi3bProperty *p)
 	return (p->settings.total_mem_mb - p->settings.gpu_mem_mb) * MIB;
 }
 
+void raspi3b_property_fb_size(uint32_t *width, uint32_t *height)
+{
+	*width = DISPLAY_WIDTH - 2 * OVERSCAN;
+	*height = DISPLAY_HEIGHT - 2 * OVERSCAN;
+}
+
 void raspi3b_property_mac(uint8_t mac[6])
 {
 	/* B8-27-EB: the IEEE OUI of the Raspberry Pi Foundation. */
@@ -1099,8 +1105,7 @@ static uint32_t natural_pitch(const Display *d)
 static void reset_display(Display *d)
 {
 	memset(d, 0, sizeof(*d));
-	d->v[D_WIDTH] = DISPLAY_WIDTH - 2 * OVERSCAN;
-	d->v[D_HEIGHT] = DISPLAY_HEIGHT - 2 * OVERSCAN;
+	raspi3b_property_fb_size(&d->v[D_WIDTH], &d->v[D_HEIGHT]);
 	d->v[D_VWIDTH] = d->v[D_WIDTH];
 	d->v[D_VHEIGHT] = d->v[D_HEIGHT];
 	d->v[D_DEPTH] = FB_DEPTH;

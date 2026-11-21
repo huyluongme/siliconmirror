@@ -91,6 +91,8 @@ typedef struct Boot {
 	RpiConfig config;   /* its config.txt */
 	const char *prefix; /* os_prefix, or "" */
 	uint32_t arm_memory;
+	uint32_t total_mem; /* total_mem, in bytes */
+	bool enable_uart;
 	uint64_t kernel_start, kernel_end;
 	uint64_t initrd_start, initrd_end; /* 0, 0 without an initramfs */
 	char *cmdline;                     /* NULL without one */
@@ -340,6 +342,7 @@ static bool memory_split(Boot *b, Raspi3bVcSettings *s)
 	s->total_mem_mb = (uint32_t)total;
 	s->gpu_mem_mb = (uint32_t)gpu;
 	b->arm_memory = (uint32_t)(total - gpu) * MIB;
+	b->total_mem = (uint32_t)total * MIB;
 	return true;
 }
 
@@ -716,9 +719,127 @@ static size_t cells(uint32_t *out, uint32_t count, uint64_t value)
 }
 
 /*
- * The values the firmware writes into the device tree: the memory, the
- * command line, the initramfs and the MAC address. Overlays and
- * parameters are not applied.
+ * The VideoCore's memory, as the firmware gives it to Linux's vc_mem
+ * driver, which only reports it: a real Pi 3 Model B or 3B+ of 1 GB says
+ * vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000, the SDRAM's
+ * size and 20 MB below its top, whatever gpu_mem (Raspberry Pi's Linux,
+ * issues 5320 and 7749). With less total_mem, smirror keeps the 20 MB.
+ */
+#define VC_MEM_TOP (20 * MIB)
+
+/*
+ * The seeds that the firmware puts in /chosen, kaslr-seed and rng-seed;
+ * a real board's are random. smirror takes them from SplitMix64, from
+ * the same seed at each boot, so that a run repeats, as its random
+ * number generator does. Linux takes kaslr-seed only as 8 bytes
+ * (kaslr_early.c); rng-seed may have any size, and how many bytes the
+ * real firmware gives is not documented: 64 is smirror's choice. That
+ * Linux trusts them shows in a real Pi 3 Model B's boot log, "random:
+ * crng init done" at 0 s and "KASLR enabled" (issue 5320).
+ */
+#define SEED_START 0x534d4657u /* "SMFW" */
+#define RNG_SEED_SIZE 64
+
+static uint64_t splitmix64(uint64_t *state)
+{
+	uint64_t z = *state += 0x9e3779b97f4a7c15ull;
+
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+	z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+	return z ^ (z >> 31);
+}
+
+/*
+ * The command line: the device tree's bootargs, then the firmware's
+ * own parameters, then cmdline.txt, as start.elf's strings give the
+ * pieces and real command lines show them put together, for example a
+ * Pi 3 Model B's "coherent_pool=1M 8250.nr_uarts=0 ... bcm2708_fb.fbwidth=720
+ * bcm2708_fb.fbheight=480 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000
+ * vc_mem.mem_size=0x40000000  console=ttyS0,115200 ..." (issue 5320):
+ *  - 8250.nr_uarts in bootargs is 1 with enable_uart=1 and 0 without,
+ *    as on the Pi 3 Model B and 3B+ that leave it out (start.elf holds
+ *    "8250.nr_uarts=0" and "8250.nr_uarts=1");
+ *  - the frame buffer that the firmware set up: its size, and fbswap 1,
+ *    framebuffer_swap's default. That Pi 3 Model B's firmware, of 2022,
+ *    gives no fbdepth for the default depth, 16;
+ *  - the VideoCore's memory, a space before and after: the two spaces
+ *    before cmdline.txt.
+ */
+static bool command_line(Boot *b, FdtNode *chosen)
+{
+	const char *bootargs;
+	const char *cmdline = b->cmdline != NULL ? b->cmdline : "";
+	uint32_t width, height;
+	size_t len, size;
+	char *joined, *uarts;
+	bool ok;
+
+	bootargs = fdt_get(chosen, "bootargs", &len);
+	if (bootargs == NULL || len == 0 || bootargs[len - 1] != '\0')
+		bootargs = "";
+	raspi3b_property_fb_size(&width, &height);
+	size = strlen(bootargs) + strlen(cmdline) + 256;
+	joined = malloc(size);
+	if (joined == NULL)
+		return fail(b, "out of memory");
+	snprintf(joined, size,
+	         "%s%sbcm2708_fb.fbwidth=%" PRIu32 " bcm2708_fb.fbheight=%" PRIu32
+	         " bcm2708_fb.fbswap=1 vc_mem.mem_base=0x%" PRIx32
+	         " vc_mem.mem_size=0x%" PRIx32 "  %s",
+	         bootargs, bootargs[0] != '\0' ? " " : "", width, height,
+	         b->total_mem - VC_MEM_TOP, b->total_mem, cmdline);
+	uarts = strstr(joined, "8250.nr_uarts=");
+	if (uarts != NULL && uarts < joined + strlen(bootargs) &&
+	    (uarts[14] == '0' || uarts[14] == '1'))
+		uarts[14] = b->enable_uart ? '1' : '0';
+	ok = fdt_set_string(chosen, "bootargs", joined);
+	free(joined);
+	return ok || fail(b, "out of memory");
+}
+
+/*
+ * Who the board is, as the firmware says it (start.elf's strings): /model,
+ * "Raspberry Pi %s Rev %s", 1.2 for the revision a02082;
+ * /serial-number, the serial in 16 digits, and /system's linux,revision
+ * and linux,serial, of which Linux's /proc/cpuinfo shows Revision,
+ * Serial and Model, as on a real Pi 3 Model B: "Revision : a02082",
+ * "Serial : 000000009507a5a9", "Model : Raspberry Pi 3 Model B Rev 1.2"
+ * (issue 5320).
+ */
+static bool identity(FdtNode *root)
+{
+	FdtNode *system = fdt_add_node(root, "system");
+	uint64_t serial = RASPI3B_BOARD_SERIAL;
+	char number[17];
+
+	snprintf(number, sizeof(number), "%016" PRIx64, serial);
+	return system != NULL &&
+	       fdt_set_string(root, "model", "Raspberry Pi 3 Model B Rev 1.2") &&
+	       fdt_set_string(root, "serial-number", number) &&
+	       fdt_set_cells(system, "linux,revision",
+	                     (uint32_t[]){RASPI3B_BOARD_REVISION}, 1) &&
+	       fdt_set_cells(
+			   system, "linux,serial",
+			   (uint32_t[]){(uint32_t)(serial >> 32), (uint32_t)serial}, 2);
+}
+
+/* kaslr-seed and rng-seed, in /chosen. */
+static bool seeds(FdtNode *chosen)
+{
+	uint64_t state = SEED_START;
+	uint8_t kaslr[8], rng[RNG_SEED_SIZE];
+
+	store_be64(kaslr, splitmix64(&state));
+	for (size_t i = 0; i < sizeof(rng); i += 8)
+		store_be64(rng + i, splitmix64(&state));
+	return fdt_set(chosen, "kaslr-seed", kaslr, sizeof(kaslr)) &&
+	       fdt_set(chosen, "rng-seed", rng, sizeof(rng));
+}
+
+/*
+ * The values the firmware writes into the device tree: the board's
+ * identity, the memory, the command line, the seeds, the initramfs and
+ * the MAC address. Overlays and parameters are not applied.
  */
 static bool fixups(Boot *b, Fdt *fdt)
 {
@@ -726,7 +847,6 @@ static bool fixups(Boot *b, Fdt *fdt)
 	FdtNode *aliases = fdt_find(fdt, "/aliases");
 	uint32_t address_cells = 2, size_cells = 1, reg[4];
 	size_t n = 0, len;
-	const char *bootargs;
 	uint8_t mac[6];
 
 	fdt_get_u32(root, "#address-cells", &address_cells);
@@ -737,6 +857,8 @@ static bool fixups(Boot *b, Fdt *fdt)
 		            "the device tree has #address-cells %u and "
 		            "#size-cells %u, which the firmware cannot use",
 		            (unsigned)address_cells, (unsigned)size_cells);
+	if (!identity(root))
+		return fail(b, "out of memory");
 	memory = fdt_find(fdt, "/memory");
 	if (memory == NULL) {
 		memory = fdt_add_node(root, "memory@0");
@@ -748,25 +870,10 @@ static bool fixups(Boot *b, Fdt *fdt)
 	chosen = fdt_add_node(root, "chosen");
 	if (chosen == NULL || !fdt_set_cells(memory, "reg", reg, n))
 		return fail(b, "out of memory");
-
-	/* The command line comes after what the device tree has. */
-	bootargs = fdt_get(chosen, "bootargs", &len);
-	if (b->cmdline != NULL) {
-		char *joined = malloc((bootargs ? len : 0) + strlen(b->cmdline) + 2);
-
-		if (joined == NULL)
-			return fail(b, "out of memory");
-		if (bootargs != NULL && len > 1 && bootargs[len - 1] == '\0')
-			snprintf(joined, len + strlen(b->cmdline) + 2, "%s %s", bootargs,
-			         b->cmdline);
-		else
-			strcpy(joined, b->cmdline);
-		if (!fdt_set_string(chosen, "bootargs", joined)) {
-			free(joined);
-			return fail(b, "out of memory");
-		}
-		free(joined);
-	}
+	if (!command_line(b, chosen))
+		return false;
+	if (!seeds(chosen))
+		return fail(b, "out of memory");
 	if (b->initrd_end != 0 &&
 	    (!fdt_set_cells(chosen, "linux,initrd-start",
 	                    (uint32_t[]){(uint32_t)b->initrd_start}, 1) ||
@@ -934,6 +1041,7 @@ bool raspi3b_firmware_boot(const Raspi3bFirmwareConfig *config, char *error,
 	ok = ok && memory_split(&b, &settings) && read_cmdline(&b);
 	if (ok) {
 		settings.core_freq_fixed = enable_uart != 0;
+		b.enable_uart = enable_uart != 0;
 		settings.cmdline = b.cmdline != NULL ? b.cmdline : "";
 		if (!raspi3b_property_configure(config->property, &settings))
 			ok = fail(&b, "out of memory");

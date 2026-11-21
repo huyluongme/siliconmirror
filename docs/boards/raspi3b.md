@@ -1061,16 +1061,48 @@ smirror does what that firmware does, without running it:
 10. The device tree: `device_tree=`, or `bcm2710-rpi-3-b.dtb`, or else
     the upstream `bcm2837-rpi-3-b.dtb`; `device_tree=` with no name boots
     without one. The firmware fills in the memory node (`reg`, after
-    `#address-cells` and `#size-cells` of the root), adds the command
-    line after the tree's own `/chosen/bootargs`, sets
-    `/chosen/linux,initrd-start` and `linux,initrd-end`, and gives the
-    node that the alias `ethernet0` names the board's MAC address in
-    `local-mac-address`. It goes at `device_tree_address`, or ends just
-    below `0x2f000000` (or the end of the Arm's memory, or
-    `device_tree_end`), on 256 bytes: U-Boot on a real Pi 3 found it at
-    `0x2effb300`, but the firmware's rule is not documented.
+    `#address-cells` and `#size-cells` of the root), sets
+    `/chosen/bootargs` as below, sets `/chosen/linux,initrd-start` and
+    `linux,initrd-end`, and gives the node that the alias `ethernet0`
+    names the board's MAC address in `local-mac-address`. It says who
+    the board is, as `start.elf`'s strings name the properties: `/model`
+    "Raspberry Pi 3 Model B Rev 1.2", `/serial-number`
+    "00000000c0ffee03", and `/system/linux,revision` and `linux,serial`,
+    which Linux's `/proc/cpuinfo` shows as Revision, Serial and Model,
+    as on a real Pi 3 Model B. It gives `/chosen/kaslr-seed`, 8 bytes,
+    and `/chosen/rng-seed`, 64: random on the board, the same at each
+    boot in smirror, from SplitMix64, so that a run repeats; Linux then
+    places its kernel at random (`nokaslr` on the command line turns
+    that off), as "KASLR enabled" in a real Pi 3 Model B's boot log
+    shows, and its random numbers are ready at once. How many bytes the
+    real `rng-seed` has is not documented. The tree goes at
+    `device_tree_address`, or ends just below `0x2f000000` (or the end
+    of the Arm's memory, or `device_tree_end`), on 256 bytes: U-Boot on
+    a real Pi 3 found it at `0x2effb300`, but the firmware's rule is not
+    documented.
 11. The stub, as with `-kernel` below, with the kernel's address and the
     device tree's.
+
+The command line that the firmware gives is the tree's `bootargs`, its
+own parameters, then the line of `cmdline.txt`, as `start.elf`'s
+strings give the pieces and real command lines put them together; a
+Pi 3 Model B's: "coherent_pool=1M 8250.nr_uarts=0 ... bcm2708_fb.fbwidth=720
+bcm2708_fb.fbheight=480 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000
+vc_mem.mem_size=0x40000000  console=ttyS0,115200 ...". In `bootargs`,
+`8250.nr_uarts` is 1 with `enable_uart=1` and 0 without, as on the Pi 3
+Model B and 3B+ that leave it out. Then come the frame buffer that the
+firmware set up, 656 by 416, with `fbswap` 1, the default of
+`framebuffer_swap` (the firmware of 2022 gives no `fbdepth` for the
+default depth, 16), and the VideoCore's memory, which Linux's `vc_mem`
+only reports: the SDRAM's size, and 20 MB below its top, as on a real
+Pi 3 of 1 GB; with less `total_mem`, smirror keeps the 20 MB. That
+part ends in two spaces, as on the board. Without `cmdline.txt`,
+nothing follows: `start.elf` holds a default line, but when it uses it
+is not documented. smirror's card gives Linux:
+
+```
+coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200
+```
 
 What `config.txt` sets but smirror does not apply, such as `dtoverlay`,
 `dtparam` or the video settings, is listed in a warning, and the boot
@@ -1256,6 +1288,25 @@ to quit.
   ([a gist from 2019](https://gist.github.com/cleverca22/2c3bd998e08a2d2c282bc735494792e3)):
   `tsens` at 1920000 Hz beside `osc` at 19200000 Hz, with the UART,
   EMMC and VPU clocks at the rates the Pi 3 shows.
+- What the firmware writes into the device tree: the strings of
+  `start.elf` ("Raspberry Pi %s Rev %s", `/serial-number`,
+  `/system/linux,revision`, `/system/linux,serial`, `/chosen/kaslr-seed`,
+  `/chosen/rng-seed`, `8250.nr_uarts=0`, `bcm2708_fb.fbwidth=%d
+  bcm2708_fb.fbheight=%d`, ` bcm2708_fb.fbswap=%d`, ` vc_mem.mem_base=0x%x
+  vc_mem.mem_size=0x%x `); PhilE's list in the Raspberry Pi forums,
+  [Firmware Device Tree Manipulation](https://forums.raspberrypi.com/viewtopic.php?t=329799)
+  ("Passing the board revision, serial number, kaslr seed and rng
+  seed"); a real Pi 3 Model B's command line, `/proc/cpuinfo` and boot
+  log in Raspberry Pi's Linux
+  [issue 5320](https://github.com/raspberrypi/linux/issues/5320), and a
+  Pi 3B+'s with Linux 6.18.50 in
+  [issue 7749](https://github.com/raspberrypi/linux/issues/7749); and
+  what Linux reads:
+  [cpuinfo.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/arch/arm64/kernel/cpuinfo.c),
+  [kaslr_early.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/arch/arm64/kernel/pi/kaslr_early.c),
+  [fdt.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/of/fdt.c)
+  (`rng-seed`) and
+  [vc_mem.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/char/broadcom/vc_mem.c).
 - The reboot's notice to the firmware: Raspberry Pi's Linux,
   [raspberrypi.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/firmware/raspberrypi.c)
   (`NOTIFY_REBOOT`, from a reboot notifier and at shutdown), and Linux's

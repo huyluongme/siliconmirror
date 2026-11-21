@@ -1,26 +1,39 @@
 # A Linux session on the raspi3b: the card of scripts/linux-card.sh,
 # which the firmware boots as a real card, to the shell of its
-# initramfs; the CPUs, the SD card, the temperature sensor, floating
-# point, Ethernet, a reboot, after which what was written is there, and
-# a power off. drive.c runs it; see its comment for the commands.
+# initramfs; what the firmware told it, the CPUs, the SD card, the
+# temperature sensor, floating point, Ethernet, a reboot, after which
+# what was written is there, and a power off. drive.c runs it; see its
+# comment for the commands.
 #
 # Typing waits for the prompt, and for the end of what the kernel
 # prints: its console prints with the interrupts off, the mini UART
 # keeps 8 bytes, and a byte that comes then is lost, as on the board.
 
-# The boot, about a minute on a fast host. The SD card and the LAN9514
-# show up once the shell runs.
+# The boot, about a minute on a fast host: the kernel at a place of the
+# firmware's seed, the SD card, the shell, and the LAN9514 once it runs.
 timeout 900
 expect Booting Linux on physical CPU 0x0000000000 [0x410fd034]
-expect Machine model: Raspberry Pi 3 Model B
+expect KASLR enabled
+expect Machine model: Raspberry Pi 3 Model B Rev 1.2
 expect smp: Brought up 1 node, 4 CPUs
+expect mmcblk0: p1
 expect Run /init as init process
 expect linux-card: the initramfs runs
 expect ~ #
-expect mmcblk0: p1
 expect eth0: register 'smsc95xx'
 expect b8:27:eb:ff:ee:03
 timeout 120
+
+# What the firmware told Linux: the board, and the command line.
+type grep -E '^(Revision|Serial|Model)' /proc/cpuinfo\r
+expect a02082
+expect 00000000c0ffee03
+expect Raspberry Pi 3 Model B Rev 1.2
+expect ~ #
+type cat /proc/cmdline\r
+expect bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1
+expect vc_mem.mem_size=0x40000000  console=ttyS0,115200
+expect ~ #
 
 type uname -m\r
 expect aarch64
