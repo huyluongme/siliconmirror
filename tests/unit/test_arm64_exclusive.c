@@ -747,8 +747,11 @@ static void test_registers_and_errors(void)
 	CHECK_EQ(aborts(a, stxr(3, 2, 3, 1), 0x0f), true);
 	CHECK(a->monitor.exclusive);
 
-	/* Bit 24 set: another class, not implemented. */
-	CHECK_EQ(arm64_execute(a, 0xc9000020), ARM64_EXEC_UNIMPLEMENTED);
+	/*
+	 * Bit 24 set: the unprivileged classes of FEAT_LSUI, newer than
+	 * Armv8.0, or UNALLOCATED.
+	 */
+	CHECK_EQ(arm64_execute(a, 0xc9000020), ARM64_EXEC_UNDEFINED);
 	machine_destroy(m);
 }
 

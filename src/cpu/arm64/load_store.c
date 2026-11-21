@@ -379,17 +379,18 @@ Arm64Exec arm64_exec_load_store(Arm64Cpu *c, uint32_t insn)
 	case 0:
 		/*
 		 * Exclusive, ordered and compare and swap classes, and the
-		 * Advanced SIMD structure loads and stores. The exclusive and
-		 * ordered class is size[31:30] 001000 with V clear; the others
-		 * with V clear are newer than Armv8.0. With V set, op0 = 1x00
-		 * is UNALLOCATED and 0x00 holds the structure classes.
+		 * Advanced SIMD structure loads and stores. With V clear, bit 24
+		 * clear holds the exclusive, ordered and compare and swap
+		 * classes; bit 24 set, their unprivileged forms (FEAT_LSUI),
+		 * newer than Armv8.0, and UNALLOCATED encodings. With V set,
+		 * op0 = 1x00 is UNALLOCATED and 0x00 holds the structure classes.
 		 */
 		if (bit32(insn, 26))
 			return bit32(insn, 31) ? ARM64_EXEC_UNDEFINED
 			                       : arm64_exec_simd_ldst(c, insn);
-		if (field32(insn, 29, 24) == 0x08)
-			return arm64_exec_exclusive(c, insn);
-		return ARM64_EXEC_UNIMPLEMENTED;
+		if (bit32(insn, 24))
+			return ARM64_EXEC_UNDEFINED;
+		return arm64_exec_exclusive(c, insn);
 	case 1:
 		/*
 		 * With bit 24 set, every class here (ordered, RCW, GCS, memory

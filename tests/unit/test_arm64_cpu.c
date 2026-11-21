@@ -179,8 +179,14 @@ static void test_undefined_instruction_takes_exception(void)
 
 static void test_features_this_cpu_lacks_are_undefined(void)
 {
-	/* SME, SVE and UNALLOCATED encodings are all UNDEFINED here. */
-	static const uint32_t insns[] = {0x80000000, 0x04000000, 0x02000000};
+	/*
+	 * SME, SVE and UNALLOCATED encodings are all UNDEFINED here, and so
+	 * are the unprivileged exclusive and compare and swap classes of
+	 * FEAT_LSUI, newer than Armv8.0.
+	 */
+	static const uint32_t insns[] = {0x80000000, 0x04000000, 0x02000000,
+	                                 0x09000000, 0x49c00000, 0x89a00000,
+	                                 0xc9e0fc00};
 
 	arm64_test_check_undefined(insns, sizeof(insns) / sizeof(insns[0]));
 }
@@ -190,11 +196,13 @@ static void test_unimplemented_instruction_stops(void)
 	Arm64Cpu *c;
 	Machine *m = arm64_test_machine(&c);
 
-	/* A load/store class newer than Armv8.0, which stops for now. */
-	CHECK_EQ(arm64_test_step(m, c, 0x09000000), MACHINE_STOP_ERROR);
+	/* A reset that RMR_EL3 asks for, which smirror does not do yet. */
+	c->x[1] = 3;                                /* AA64 and RR */
+	CHECK_EQ(arm64_test_step(m, c, 0xd51ec041), /* MSR RMR_EL3, X1 */
+	         MACHINE_STOP_ERROR);
 	CHECK(strcmp(m->stop_message,
-	             "cpu0: instruction 0x09000000 at 0x0000000000080000 is not "
-	             "implemented yet (Loads and Stores)") == 0);
+	             "cpu0: instruction 0xd51ec041 at 0x0000000000080000 is not "
+	             "implemented yet (reset through RMR_EL3)") == 0);
 	CHECK_EQ(m->insns, 0);
 	machine_destroy(m);
 }
