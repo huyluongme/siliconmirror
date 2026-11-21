@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Huy Luong Duc
+
+// An overlay with the parts that the documentation describes: fragments
+// with target and target-path, labels of its own and of the base
+// (__fixups__, __local_fixups__), dormant fragments, a fragment that
+// targets the overlay itself, an exported label and parameters.
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&i2c1>;
+		__overlay__ {
+			status = "okay";
+			rtc: rtc@68 {
+				compatible = "test,rtc";
+				reg = <0x68>;
+				interrupt-gpios = <&gpio 4 0>;
+				self = <&rtc>;
+				wakeup-source;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/";
+		__overlay__ {
+			made {
+				first = <1>;
+				second = <2>;
+				inner {
+					deep;
+				};
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&chosen>;
+		__overlay__ {
+			bootargs = "rtc.on=1";
+		};
+	};
+
+	fragment@3 {
+		target = <&i2c1>;
+		__dormant__ {
+			woken;
+		};
+	};
+
+	fragment-4 {
+		target-path = "serial0";
+		__dormant__ {
+			frag4;
+		};
+	};
+
+	fragment@5 {
+		target = <&rtc>;
+		__overlay__ {
+			intra = <5>;
+		};
+	};
+
+	__exports__ {
+		rtc;
+	};
+
+	__overrides__ {
+		addr = <&rtc>,"reg:0";
+		wake = <0>,"+3";
+		frag4 = <0>,"=4";
+		nofrag4 = <0>,"!4";
+		off5 = <0>,"-5";
+		nofrag = <0>,"+9";
+		speed = <&i2c1>,"clock-frequency:0";
+		label = <&rtc>,"label";
+		nowake = <&rtc>,"wakeup-source?";
+		string = <&rtc>,"string";
+	};
+};

@@ -1,0 +1,8 @@
+# status: zero, false, no and off disable; another word is kept.
+line dtparam=i2c_arm=1,enable=0
+expect /soc/i2c@7e804000 status s okay
+expect /test_node status s disabled
+line dtparam=i2c_arm=OFF
+expect /soc/i2c@7e804000 status s disabled
+line dtparam=enable=fail
+expect /test_node status s fail

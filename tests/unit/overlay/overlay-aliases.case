@@ -1,0 +1,7 @@
+# Without __symbols__, the labels are the aliases; a node without a
+# phandle gets one above every other ("Fragments").
+base plain
+line dtoverlay=alias
+expect /soc/i2c@7e804000 status s okay
+props /soc/serial@7e215040 found phandle reg status
+expect /soc/serial@7e215040 phandle x a

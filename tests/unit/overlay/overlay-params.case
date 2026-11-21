@@ -1,0 +1,19 @@
+# An overlay's parameters, on its line and on the dtparam lines after it
+# ("DT parameters"): they win over the base's, which still apply;
+# fragment operations ("Overlay/fragment parameters"); a target-path
+# that is an alias.
+line dtoverlay=rtc,addr=0x51,wake,frag4,speed=400000,label=clock,nowake=off
+line dtparam=string=mine,enable=on
+expect /soc/i2c@7e804000/rtc@51 reg x 51
+expect /soc/i2c@7e804000/rtc@51 label s clock
+expect /soc/i2c@7e804000/rtc@51 string s mine
+absent /soc/i2c@7e804000/rtc@51 wakeup-source
+absent /soc/i2c@7e804000/rtc@68
+props /soc/i2c@7e804000 woken reg #address-cells #size-cells clock-frequency status phandle
+expect /soc/i2c@7e804000 clock-frequency u 400000
+props /soc/serial@7e215040 frag4 reg status phandle
+expect /test_node string s hello
+expect /test_node status s okay
+line dtoverlay=
+line dtparam=string=base
+expect /test_node string s base

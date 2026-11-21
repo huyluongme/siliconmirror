@@ -1,0 +1,20 @@
+# Fragments merge into their targets ("Fragments"): what is new goes
+# first; the overlay's phandles go above the base's, its references to
+# the base's labels get theirs; the fragment that targets the overlay
+# goes in before the rest; dormant fragments stay out; bootargs grows.
+# A new node's properties come out in reverse, each going first.
+line dtoverlay=rtc
+expect /soc/i2c@7e804000 status s okay
+nodes /soc/i2c@7e804000 rtc@68
+props /soc/i2c@7e804000/rtc@68 phandle wakeup-source self interrupt-gpios reg compatible intra
+expect /soc/i2c@7e804000/rtc@68 intra x 5
+expect /soc/i2c@7e804000/rtc@68 phandle x b
+expect /soc/i2c@7e804000/rtc@68 self x b
+expect /soc/i2c@7e804000/rtc@68 interrupt-gpios x 1 4 0
+nodes / made aliases chosen soc led-act test_node device@10 __overrides__ __symbols__
+props /made second first
+nodes /made inner
+expect /chosen bootargs s console=ttyS0 rtc.on=1
+absent /soc/i2c@7e804000 woken
+absent /soc/serial@7e215040 frag4
+expect /__symbols__ rtc s /soc/i2c@7e804000/rtc@68

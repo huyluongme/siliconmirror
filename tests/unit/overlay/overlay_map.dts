@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Huy Luong Duc
+
+// An overlay map, as the documentation's "The overlay map file" shows it.
+
+/dts-v1/;
+
+/ {
+	rtc {
+		bcm2835;
+		bcm2711;
+	};
+
+	old-rtc {
+		renamed = "rtc";
+	};
+
+	lirc {
+		deprecated = "use gpio-ir";
+	};
+
+	pi5-only {
+		bcm2712;
+	};
+
+	clock {
+		bcm2835 = "rtc";
+		bcm2712 = "rtc-pi5";
+	};
+
+	round {
+		renamed = "about";
+	};
+
+	about {
+		renamed = "round";
+	};
+};

@@ -1,0 +1,6 @@
+# reg names the unit address too, name the node ("Special properties").
+line dtparam=dev_addr=0x20
+expect /device@20 reg x 20 4
+absent /device@10
+line dtparam=dev_name=thing
+expect /thing reg x 20 4

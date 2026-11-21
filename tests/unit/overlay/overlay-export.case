@@ -1,0 +1,7 @@
+# A label that an overlay exports is the base's for the overlays after
+# it ("Export labels"); without it, the overlay cannot resolve.
+line dtoverlay=user
+warn Failed to resolve overlay 'user': the base tree has no label rtc
+line dtoverlay=rtc
+line dtoverlay=user
+expect /soc/i2c@7e804000/rtc@68 used s yes

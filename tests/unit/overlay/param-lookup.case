@@ -1,0 +1,19 @@
+# Lookup tables ("Lookup tables"), byte strings and literal assignments
+# ("Literal assignments").
+line dtparam=entofr=goodbye,pi_mac=2,spibus=1
+expect /test_node english s goodbye
+expect /test_node french s au revoir
+expect /test_node mac hhx b8 27 3b 98 76 54
+expect /test_node spi x 4
+line dtparam=pin,lit_str=ignored,lit_int,lit_cell=33,lit_path,audio=off
+expect /test_node pin u 18
+expect /test_node lit s fixed
+expect /test_node litnum u 42
+expect /led-act gpios x 4 21 0
+expect /chosen stdout-path s /soc/serial@7e215040
+expect /chosen bootargs s console=ttyS0 snd.hp=0
+line dtparam=entofr=weekend,pin=5,mac=01:02:03:04:05:06,audio=on
+expect /test_node french s weekend
+expect /test_node pin u 5
+expect /test_node mac hhx 1 2 3 4 5 6
+expect /chosen bootargs s console=ttyS0 snd.hp=0 snd.hp=1 snd.hdmi=1

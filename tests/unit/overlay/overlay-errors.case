@@ -1,0 +1,15 @@
+# An overlay that cannot be loaded, resolved or merged changes nothing,
+# and the dtparam lines in its scope are dropped until the next
+# dtoverlay line.
+line dtoverlay=none
+warn Failed to load overlay 'none': no none.dtbo
+line dtparam=string=dropped
+line dtoverlay=bad,x=1
+warn Failed to resolve overlay 'bad': the base tree has no label nowhere
+line dtparam=string=dropped
+line dtoverlay=path
+warn Failed to merge overlay 'path': fragment@1: the base tree has no /soc/nothing
+absent / kept
+line dtoverlay=
+line dtparam=string=later
+expect /test_node string s later

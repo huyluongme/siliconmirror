@@ -1,0 +1,13 @@
+# Integer parameters of 8, 16, 32 and 64 bits ("Integer parameters"),
+# beyond the end of a property and in a new one.
+line dtparam=byte_0=0x12,byte_1=255,u16_0=0x1234,u16_1=4660
+line dtparam=u32_0=-1,u32_1=on,u64_1=0x0123456789ABCDEF
+line dtparam=beyond=7,fresh=0x99,i2c_arm_baudrate=400000
+expect /test_node bytes hhx 12 ff
+expect /test_node u16s hx 1234 1234
+expect /test_node u32s x ffffffff 1 0 7
+expect /test_node u64s x aaaaa5a5 5a5a5555 1234567 89abcdef
+expect /test_node fresh x 0 99
+expect /soc/i2c@7e804000 clock-frequency u 400000
+line dtparam=u64_0
+expect /test_node u64s x 0 1 1234567 89abcdef

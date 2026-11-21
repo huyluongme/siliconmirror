@@ -1,0 +1,17 @@
+# What goes wrong is a warning, and the rest goes on.
+line dtparam=nope,broken=1,missing=x,frag,u32_0=abc
+warn Unknown dtparam 'nope' - ignored
+warn dtparam 'broken': a declaration ends where a value should be - ignored
+warn dtparam 'missing': no node has the phandle 0x7777 - ignored
+warn dtparam 'frag': the base tree has no fragments - ignored
+warn dtparam 'u32_0': "abc" is not an integer - ignored
+line dtparam=entofr=bye,audio,string,mac=zz,u32_0=0x,pin=,string=ok
+warn dtparam 'entofr': its table has no entry for "bye" - ignored
+warn dtparam 'audio': it needs a value: its table has no default - ignored
+warn dtparam 'string': it needs a value - ignored
+warn dtparam 'mac': "zz" is not a byte string - ignored
+warn dtparam 'u32_0': "0x" is not an integer - ignored
+warn dtparam 'pin': "" is not an integer - ignored
+expect /test_node string s ok
+expect /test_node english s bye
+expect /test_node u32s x fedcba98 76543210

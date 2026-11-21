@@ -1,0 +1,8 @@
+# Fragment operations: - hides a fragment, ! enables one when the value
+# is false; an operation on a missing fragment is a warning.
+line dtoverlay=rtc,off5,nofrag4=no,nofrag
+warn dtparam 'nofrag': fragment 9 not found - ignored
+absent /soc/i2c@7e804000/rtc@68 intra
+props /soc/serial@7e215040 frag4 reg status phandle
+line dtoverlay=rtc,frag4=maybe
+warn dtparam 'frag4': "maybe" is not a boolean - ignored

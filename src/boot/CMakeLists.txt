@@ -7,6 +7,7 @@ add_library(boot STATIC
 	direct.c
 	fat.c
 	mbr.c
-	rpi_config.c)
+	rpi_config.c
+	rpi_overlay.c)
 
 target_link_libraries(boot PUBLIC core)

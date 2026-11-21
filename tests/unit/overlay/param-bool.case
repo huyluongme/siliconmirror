@@ -1,0 +1,6 @@
+# Booleans ("Boolean parameters"): no value is true; false cannot remove
+# a property of the base tree; a literal ignores the value.
+line dtparam=bool2,bool1=on,bool3=off
+props /test_node bool3 bool2 string status bytes u16s u32s u64s bool1 mac spi phandle
+line dtparam=bool2=no
+props /test_node bool3 bool2 string status bytes u16s u32s u64s bool1 mac spi phandle

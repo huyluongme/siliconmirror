@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Huy Luong Duc
+
+// An overlay for a base without __symbols__: its labels are the base's
+// aliases.
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&i2c1>;
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target = <&serial0>;
+		__overlay__ {
+			found;
+		};
+	};
+};

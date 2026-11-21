@@ -1,0 +1,10 @@
+# String parameters (documentation, "String parameters"): status takes
+# booleans, a value that is not one goes in as it is.
+line dtparam=string=world
+line dtparam=i2c_arm=on,enable
+line dtparam=act_led_trigger=heartbeat
+expect /test_node string s world
+expect /test_node status s okay
+expect /soc/i2c@7e804000 status s okay
+expect /led-act linux,default-trigger s heartbeat
+line dtparam=nothing

@@ -131,7 +131,9 @@ The boot method decides how software gets into memory:
 - The Raspberry Pi firmware's boot, done without running the firmware:
   `boot/mbr`, `boot/fat` and `boot/rpi_config` read the SD card's
   partition table, its FAT boot partition and `config.txt`;
-  `util/fdt` reads, changes and writes the device tree; the board's own
+  `util/fdt` reads, changes and writes the device tree, and
+  `boot/rpi_overlay` applies the overlays and parameters that
+  `config.txt` names; the board's own
   `machine/raspi3b_firmware` puts them together, as the firmware does
   for that board, and `machine/raspi3b_property` answers the Arm through
   the mailboxes afterwards.
@@ -208,7 +210,12 @@ Known limits, to be handled when the devices that need it arrive:
 ## Tests
 
 - `tests/unit/`: one test program per module, linked against that module
-  only, without the rest of the emulator.
+  only, without the rest of the emulator. Where dtc and fdtget are
+  installed, they check `util/fdt` and `boot/rpi_overlay` too: the
+  cases of `tests/unit/overlay/` apply `config.txt` lines to trees that
+  dtc compiles, and read the result with fdtget. What dtc does not
+  write, such as broken declarations and fixups, `test_rpi_overlay`
+  builds in memory.
 - `tests/cli/`: run `smirror` with options and check its output and exit
   status.
 - `tests/baremetal/`: small AArch64 programs, built with the cross

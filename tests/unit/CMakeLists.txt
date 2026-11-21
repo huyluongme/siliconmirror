@@ -57,6 +57,23 @@ if(DTC AND FDTGET)
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/fdt_dtc.cmake)
 endif()
 
+# Overlays and parameters, applied to trees that dtc compiles: a test
+# for each case of tests/unit/overlay.
+add_executable(overlay_tool overlay_tool.c)
+target_link_libraries(overlay_tool PRIVATE boot)
+if(DTC AND FDTGET)
+	file(GLOB overlay_cases ${CMAKE_CURRENT_SOURCE_DIR}/overlay/*.case)
+	foreach(case ${overlay_cases})
+		get_filename_component(name ${case} NAME_WE)
+		add_test(NAME unit.overlay.${name}
+			COMMAND ${CMAKE_COMMAND} -DDTC=${DTC} -DFDTGET=${FDTGET}
+				-DTOOL=$<TARGET_FILE:overlay_tool>
+				-DSRC=${CMAKE_CURRENT_SOURCE_DIR}/overlay -DCASE=${case}
+				-DWORK=${CMAKE_CURRENT_BINARY_DIR}/overlay/${name}
+				-P ${CMAKE_CURRENT_SOURCE_DIR}/overlay.cmake)
+	endforeach()
+endif()
+
 add_executable(test_bus test_bus.c)
 target_link_libraries(test_bus PRIVATE core)
 add_test(NAME unit.bus COMMAND test_bus)
@@ -180,6 +197,10 @@ add_test(NAME unit.fat COMMAND test_fat)
 add_executable(test_rpi_config test_rpi_config.c)
 target_link_libraries(test_rpi_config PRIVATE boot)
 add_test(NAME unit.rpi_config COMMAND test_rpi_config)
+
+add_executable(test_rpi_overlay test_rpi_overlay.c)
+target_link_libraries(test_rpi_overlay PRIVATE boot)
+add_test(NAME unit.rpi_overlay COMMAND test_rpi_overlay)
 
 add_executable(test_raspi3b_serial test_raspi3b_serial.c)
 target_link_libraries(test_raspi3b_serial PRIVATE machine)

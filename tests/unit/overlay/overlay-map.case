@@ -1,0 +1,14 @@
+# The overlay map ("The overlay map file"): a rename warns and loads the
+# new name, a deprecated overlay or one for another platform is not
+# loaded, a platform can name another overlay.
+line dtoverlay=old-rtc,addr=0x10
+warn overlay 'old-rtc' has been renamed 'rtc'
+line dtoverlay=lirc
+warn overlay 'lirc' is deprecated: use gpio-ir
+line dtoverlay=pi5-only
+warn overlay 'pi5-only' is not supported on the 'bcm2835' platform
+line dtoverlay=round
+warn overlay 'round': the overlay map goes round
+line dtoverlay=clock,addr=0x11
+expect /soc/i2c@7e804000/rtc@10 reg x 10
+expect /soc/i2c@7e804000/rtc@11 reg x 11

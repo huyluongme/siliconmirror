@@ -1,0 +1,3 @@
+# Each fragment finds its target when it merges.
+line dtoverlay=sequence
+props /soc/fresh second first

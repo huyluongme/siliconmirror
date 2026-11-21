@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Huy Luong Duc
+
+// The base tree of the overlay tests, compiled with dtc -@ so that it has
+// __symbols__, as the firmware's .dtb files have. Its __overrides__ are
+// those of the documentation's examples ("Device Tree parameters").
+
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "brcm,bcm2837";
+
+	aliases {
+		i2c1 = &i2c1;
+		serial0 = &uart;
+	};
+
+	chosen: chosen {
+		bootargs = "console=ttyS0";
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		gpio: gpio@7e200000 {
+			reg = <0x7e200000 0xb4>;
+			#gpio-cells = <2>;
+		};
+
+		uart: serial@7e215040 {
+			reg = <0x7e215040 0x40>;
+			status = "okay";
+		};
+
+		i2c1: i2c@7e804000 {
+			reg = <0x7e804000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <100000>;
+			status = "disabled";
+		};
+
+		spi0: spi@7e204000 {
+			reg = <0x7e204000 0x200>;
+		};
+
+		spi1: spi@7e215080 {
+			reg = <0x7e215080 0x40>;
+		};
+
+		spi2: spi@7e2150c0 {
+			reg = <0x7e2150c0 0x40>;
+		};
+	};
+
+	act: led-act {
+		gpios = <&gpio 47 0>;
+		linux,default-trigger = "mmc0";
+	};
+
+	test: test_node {
+		string = "hello";
+		status = "disabled";
+		bytes = /bits/ 8 <0x67 0x89>;
+		u16s = /bits/ 16 <0xabcd 0xef01>;
+		u32s = /bits/ 32 <0xfedcba98 0x76543210>;
+		u64s = /bits/ 64 <0xaaaaa5a55a5a5555 0x0000111122223333>;
+		bool1;
+		mac = [01 23 45 67 89 ab];
+		spi = <&spi0>;
+	};
+
+	dev: device@10 {
+		reg = <0x10 0x4>;
+	};
+
+	__overrides__ {
+		nothing;
+		string = <&test>,"string";
+		enable = <&test>,"status";
+		byte_0 = <&test>,"bytes.0";
+		byte_1 = <&test>,"bytes.1";
+		u16_0 = <&test>,"u16s;0";
+		u16_1 = <&test>,"u16s;2";
+		u32_0 = <&test>,"u32s:0";
+		u32_1 = <&test>,"u32s:4";
+		u64_0 = <&test>,"u64s#0";
+		u64_1 = <&test>,"u64s#8";
+		beyond = <&test>,"u32s:12";
+		fresh = <&test>,"fresh:4";
+		bool1 = <&test>,"bool1!";
+		bool2 = <&test>,"bool2?";
+		bool3 = <&test>,"bool3?=on";
+		entofr = <&test>,"english",
+		         <&test>,"french{hello=bonjour,goodbye='au revoir',weekend}";
+		pi_mac = <&test>,"mac[{1=b8273bfedcba,2=b8273b987654}";
+		mac = <&test>,"mac[";
+		spibus = <&test>,"spi:0{0=",<&spi0>,"1=",<&spi1>,"2=",<&spi2>,"}";
+		pin = <&test>,"pin:0{,=18}";
+		lit_str = <&test>,"lit=fixed";
+		lit_int = <&test>,"litnum:0=42";
+		lit_cell = <&act>,"gpios:0=",<&spi1>,
+		           <&act>,"gpios:4";
+		lit_path = <&chosen>,"stdout-path=",&uart;
+		i2c_arm = <&i2c1>,"status";
+		i2c_arm_baudrate = <&i2c1>,"clock-frequency:0";
+		act_led_trigger = <&act>,"linux,default-trigger";
+		audio = <&chosen>,"bootargs{on='snd.hp=1 snd.hdmi=1',off='snd.hp=0'}";
+		dev_addr = <&dev>,"reg:0";
+		dev_name = <&dev>,"name";
+		frag = <0>,"+1";
+		broken = <&test>,"u32s:0=";
+		missing = <0x7777>,"string";
+	};
+};
