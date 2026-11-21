@@ -47,3 +47,7 @@ fixup*.dat
 *.swp
 *~
 .DS_Store
+
+# Claude Code: personal settings stay local
+.claude/settings.local.json
+__pycache__/
