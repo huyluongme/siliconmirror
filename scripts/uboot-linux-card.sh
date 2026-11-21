@@ -65,11 +65,25 @@ truncate -s 128M "$card"
 printf 'label-id: 0x736d6972\nstart=8192, type=c\n' | sfdisk -q "$card"
 truncate -s 124M "$part"
 mkfs.fat -F 32 --invariant -n BOOT "$part" > /dev/null
-printf 'arm_64bit=1\nenable_uart=1\nkernel=u-boot.bin\n' > "$DIR/config.txt"
+# The overlays of scripts/linux-card.sh's card, which the firmware
+# applies to the device tree that U-Boot uses and hands Linux.
+cat > "$DIR/config.txt" << 'EOF'
+arm_64bit=1
+enable_uart=1
+kernel=u-boot.bin
+dtparam=audio=on
+camera_auto_detect=1
+display_auto_detect=1
+dtoverlay=disable-wifi
+EOF
 mcopy -i "$part" "$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" \
 	"$FIRMWARE/fixup.dat" "$FIRMWARE/bcm2710-rpi-3-b.dtb" \
 	"$FIRMWARE/LICENCE.broadcom" "$BUILD/u-boot.bin" "$DIR/config.txt" \
 	"$DIR/Image" "$LINUX_DIR/initramfs/initramfs.gz" "$DIR/boot.scr" ::
+mmd -i "$part" ::overlays
+mcopy -i "$part" "$FIRMWARE/overlays/README" \
+	"$FIRMWARE/overlays/overlay_map.dtb" \
+	"$FIRMWARE/overlays/disable-wifi.dtbo" ::overlays
 dd if="$part" of="$card" bs=1M seek=4 conv=notrunc status=none
 rm "$part"
 mv "$card" "$DIR/card.img"

@@ -11,7 +11,7 @@
 # DIR, ~/.cache/siliconmirror-linux by default, gets:
 #   firmware-TAG/      the firmware files and the kernel, checked against
 #                      their SHA-256; System8.map names the kernel's
-#                      addresses
+#                      addresses; overlays/ the overlays the card uses
 #   busybox-VERSION/   BusyBox's source, and build/ with its static build
 #   initramfs/         the initramfs's files, and initramfs.gz
 #   card.img           the card: an MBR, and a FAT32 partition at 4 MiB
@@ -70,6 +70,21 @@ f80aa8bb092c0df9401065ec1b4ee8b8846c4d9a1bb3272662b50acbd89da68b boot/kernel8.im
 f917a6c89f1e4b87935db96337e3864b74467ff51b000fe1456fa1f1e074ece2 extra/System8.map
 EOF
 
+# The overlays that config.txt loads, with the overlay map and the
+# README that every card has beside them.
+mkdir -p "$FIRMWARE/overlays"
+while read -r sum name; do
+	file=$FIRMWARE/overlays/$name
+	if ! echo "$sum  $file" | sha256sum -c --status > /dev/null 2>&1; then
+		curl -fsSL -o "$file" "$FIRMWARE_URL/boot/overlays/$name"
+		echo "$sum  $file" | sha256sum -c --quiet
+	fi
+done << EOF
+48a13f1f5fa1de9f60d81447ca9166e1b355fd7449ccb6bb5d5e3bb94794f595 README
+2d4617de880e377a6a63ee1a642ec69b22700ed1b74d0e89bc5e7653b333121a overlay_map.dtb
+86aa3709da415b8be306aacfe2b0261a601e2e0b2523281d5eb72093b379d892 disable-wifi.dtbo
+EOF
+
 # BusyBox, linked statically: the initramfs has no C library.
 if [ ! -x "$BUSYBOX/build/busybox" ]; then
 	need tar bzip2 make "${CROSS_COMPILE}gcc"
@@ -121,7 +136,7 @@ chmod 755 "$ROOT/files/init"
 	gzip -9 -n > "$ROOT/initramfs.gz"
 
 # The card.
-need sfdisk mkfs.fat mcopy
+need sfdisk mkfs.fat mcopy mmd
 card=$DIR/card.img.new
 part=$DIR/part.img.new
 rm -f "$card" "$part"
@@ -129,13 +144,26 @@ truncate -s 128M "$card"
 echo 'start=8192, type=c' | sfdisk -q "$card"
 truncate -s 124M "$part"
 mkfs.fat -F 32 -n BOOT "$part" > /dev/null
-printf 'arm_64bit=1\nenable_uart=1\ninitramfs initramfs.gz followkernel\n' \
-	> "$DIR/config.txt"
+# Raspberry Pi OS's audio and camera settings, and an overlay that turns
+# the WiFi off: smirror has no WiFi chip.
+cat > "$DIR/config.txt" << 'EOF'
+arm_64bit=1
+enable_uart=1
+initramfs initramfs.gz followkernel
+dtparam=audio=on
+camera_auto_detect=1
+display_auto_detect=1
+dtoverlay=disable-wifi
+EOF
 printf 'console=serial0,115200\n' > "$DIR/cmdline.txt"
 mcopy -i "$part" "$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" \
 	"$FIRMWARE/fixup.dat" "$FIRMWARE/bcm2710-rpi-3-b.dtb" \
 	"$FIRMWARE/LICENCE.broadcom" "$FIRMWARE/kernel8.img" \
 	"$ROOT/initramfs.gz" "$DIR/config.txt" "$DIR/cmdline.txt" ::
+mmd -i "$part" ::overlays
+mcopy -i "$part" "$FIRMWARE/overlays/README" \
+	"$FIRMWARE/overlays/overlay_map.dtb" \
+	"$FIRMWARE/overlays/disable-wifi.dtbo" ::overlays
 dd if="$part" of="$card" bs=1M seek=4 conv=notrunc status=none
 rm "$part"
 mv "$card" "$DIR/card.img"

@@ -1,8 +1,8 @@
 # A Linux session on the raspi3b: the card of scripts/linux-card.sh,
 # which the firmware boots as a real card, to the shell of its
-# initramfs; what the firmware told it, the CPUs, the SD card, the
-# temperature sensor, floating point, Ethernet, a reboot, after which
-# what was written is there, and a power off. drive.c runs it; see its
+# initramfs; what the firmware told it, its overlays too, the CPUs, the
+# SD card, the temperature sensor, floating point, Ethernet, a reboot,
+# after which what was written is there, and a power off. drive.c runs it; see its
 # comment for the commands.
 #
 # Typing waits for the prompt, and for the end of what the kernel
@@ -11,12 +11,13 @@
 
 # The boot, about a minute on a fast host: the kernel at a place of the
 # firmware's seed, the SD card, the shell, and the LAN9514 once it runs.
+# The card's partitions come while /init starts, in either order.
 timeout 900
 expect Booting Linux on physical CPU 0x0000000000 [0x410fd034]
 expect KASLR enabled
 expect Machine model: Raspberry Pi 3 Model B Rev 1.2
 expect smp: Brought up 1 node, 4 CPUs
-expect mmcblk0: p1
+expect mmcblk0: mmc0:aaaa SMSD1 128 MiB
 expect Run /init as init process
 expect linux-card: the initramfs runs
 expect ~ #
@@ -24,15 +25,20 @@ expect eth0: register 'smsc95xx'
 expect b8:27:eb:ff:ee:03
 timeout 120
 
-# What the firmware told Linux: the board, and the command line.
+# What the firmware told Linux: the board, and the command line, with
+# what dtparam=audio=on adds; dtoverlay=disable-wifi turned the WiFi's
+# controller off.
 type grep -E '^(Revision|Serial|Model)' /proc/cpuinfo\r
 expect a02082
 expect 00000000c0ffee03
 expect Raspberry Pi 3 Model B Rev 1.2
 expect ~ #
 type cat /proc/cmdline\r
-expect bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1
+expect cgroup_disable=memory snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1 bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1
 expect vc_mem.mem_size=0x40000000  console=ttyS0,115200
+expect ~ #
+type cat /proc/device-tree/soc/mmcnr@7e300000/status; echo\r
+expect disabled
 expect ~ #
 
 type uname -m\r
