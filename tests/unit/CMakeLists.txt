@@ -102,6 +102,10 @@ add_executable(test_net_pcap test_net_pcap.c)
 target_link_libraries(test_net_pcap PRIVATE backend)
 add_test(NAME unit.net_pcap COMMAND test_net_pcap)
 
+add_executable(test_net_cable test_net_cable.c)
+target_link_libraries(test_net_cable PRIVATE machine)
+add_test(NAME unit.net_cable COMMAND test_net_cable)
+
 add_executable(test_audio_wav test_audio_wav.c)
 target_link_libraries(test_audio_wav PRIVATE backend)
 add_test(NAME unit.audio_wav COMMAND test_audio_wav)

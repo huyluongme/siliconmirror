@@ -5,6 +5,7 @@
 
 add_library(machine STATIC
 	board.c
+	net_cable.c
 	raspi3b.c
 	raspi3b_auds.c
 	raspi3b_firmware.c
