@@ -25,19 +25,30 @@ work (or the next one), so a new session starts from here.
   wiring of the output is checked by raspios.audio). Boot logs unchanged:
   nothing opens AUDS at boot.
 
-## Next tasks (ask the owner which)
+## Next tasks
 
-1. Task 1, part 4: MMAL streaming (formats, enable, buffers, bulk
-   transfers; the codecs' work on the host), `/effort xhigh`. Smaller
-   audio follow-ups if wanted: mixing two streams, VCHIQ bulk
-   transfers (`force_bulk=1`), IEC958 pass-through.
-2. Networking to the host (a back end behind the LAN9514): Pi OS
-   would then get an address and run ssh.
-3. Performance phase 3, the JIT (`.claude/knowledge/performance.md`):
+Task 1 (the VideoCore's VCHIQ services) is closed (2026-11-23): what
+Pi OS uses at boot and to play sound works. The owner chose networking
+next.
+
+1. **Next: networking to the host**, a back end behind the LAN9514
+   (src/hw/net/lan95xx.c, which has no cable today): Pi OS would get
+   an address and run ssh. First question for the owner: how frames
+   reach the host (a TAP device, which needs root to set up once, or a
+   user-mode network written in smirror, larger, as QEMU's -netdev
+   user does: credit the idea, never read its code), and the CLI
+   (`-net ...`). A new back end kind: core interface plus
+   `src/backend/net/`, as audio did (docs/architecture.md).
+2. Performance phase 3, the JIT (`.claude/knowledge/performance.md`):
    a Pi OS boot takes about 10 minutes.
-4. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
-5. I2C, SPI, PWM devices; Bluetooth; WiFi (SDIO chip).
-6. A second board: the add-board skill.
+3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
+4. I2C, SPI, PWM devices; Bluetooth; WiFi (SDIO chip).
+5. A second board: the add-board skill.
+6. Last, nice to have: MMAL streaming (VCHIQ bulk transfers, port
+   formats, enable, buffers; ISP and image_fx in C; video decode and
+   encode would need a host codec library, the owner's call),
+   `/effort xhigh`. Not needed by Pi OS Lite or by switch-like boards.
+   Audio extras (mixing, bulk, IEC958) only if a user needs them.
 
 ## Open questions only a real board can answer
 
