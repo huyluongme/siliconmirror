@@ -13,6 +13,7 @@
 
 #include "core/bus.h"
 #include "machine/raspi3b.h"
+#include "machine/raspi3b_smem.h"
 #include "machine/raspi3b_vchiq.h"
 #include "util/byteorder.h"
 #include "util/macros.h"
@@ -241,6 +242,7 @@ struct Raspi3bProperty {
 	Display display;
 	FbTag fb_tags[FB_TAGS_MAX]; /* those of the buffer being answered */
 	Raspi3bVchiq *vchiq;        /* the VideoCore's end of VCHIQ */
+	Raspi3bSmem *smem;          /* and its services */
 	unsigned num_fb_tags;
 	Value value;              /* the tag being answered */
 	Clock clocks[NUM_CLOCKS]; /* last: a read past them leaves the object */
@@ -391,7 +393,9 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 	p->machine = m;
 	p->ram_size = ram_size;
 	p->vchiq = raspi3b_vchiq_create(m, ram_size);
-	if (p->vchiq == NULL || !raspi3b_property_configure(p, &defaults)) {
+	if (p->vchiq != NULL)
+		p->smem = raspi3b_smem_create(m, p->vchiq, ram_size);
+	if (p->smem == NULL || !raspi3b_property_configure(p, &defaults)) {
 		raspi3b_property_destroy(p);
 		return NULL;
 	}
@@ -400,6 +404,8 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 
 void raspi3b_property_destroy(Raspi3bProperty *p)
 {
+	if (p->smem != NULL)
+		raspi3b_smem_destroy(p->smem);
 	if (p->vchiq != NULL)
 		raspi3b_vchiq_destroy(p->vchiq);
 	free(p->cmdline);

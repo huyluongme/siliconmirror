@@ -9,6 +9,7 @@ add_library(machine STATIC
 	raspi3b_firmware.c
 	raspi3b_property.c
 	raspi3b_serial.c
+	raspi3b_smem.c
 	raspi3b_vchiq.c)
 
 target_link_libraries(machine PUBLIC boot cpu hw core)
