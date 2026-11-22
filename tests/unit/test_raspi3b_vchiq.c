@@ -3,10 +3,8 @@
 
 /*
  * Unit tests for the VideoCore's end of VCHIQ
- * (src/machine/raspi3b_vchiq.c). Slot zero is laid out as Linux's
- * vchiq_init_slots (vchiq_core.c, Raspberry Pi's Linux at cff533a) lays
- * it out in the 65 slots that vchiq_arm.c allocates: the master's
- * synchronous slot 1 and slots 2 to 32, the slave's 33 and 34 to 64.
+ * (src/machine/raspi3b_vchiq.c), against the Arm's end of
+ * vchiq_link.h.
  */
 
 #include <stdbool.h>
@@ -22,105 +20,7 @@
 #include "machine/raspi3b_property.h"
 #include "machine/raspi3b_vchiq.h"
 #include "test.h"
-
-#define RAM_SIZE 0x100000
-#define SLOTS 0x10000 /* where the tests put the shared memory */
-#define BUS 0xc0000000u
-#define SLOT 4096
-#define FILL 0x5a5a5a5au
-
-/* Slot zero's fields, and a half's (vchiq_core.h). */
-enum {
-	MAGIC = 0,
-	VERSION = 4,
-	ZERO_SIZE = 8,
-	SLOT_SIZE = 12,
-	MAX_SLOTS = 16,
-	MAX_PER_SIDE = 20,
-	MASTER = 32,
-	SLAVE = 404,
-	INITIALISED = 0,
-	FIRST = 4,
-	LAST = 8,
-	SYNC = 12,
-	TRIGGER = 16,
-	TX_POS = 28,
-	RECYCLE = 32,
-	QUEUE_RECYCLE = 44,
-	SYNC_TRIGGER = 48,
-	SYNC_RELEASE = 60,
-	QUEUE = 72,
-	DEBUG = 328,
-	HALF = 372,
-};
-
-typedef struct Setup {
-	Machine *m;
-	Raspi3bVchiq *v;
-} Setup;
-
-static void setup(Setup *s)
-{
-	s->m = machine_create();
-	CHECK(s->m != NULL);
-	CHECK_EQ(bus_map_ram(s->m->bus, "ram", 0, RAM_SIZE), BUS_OK);
-	s->v = raspi3b_vchiq_create(s->m, RAM_SIZE);
-	CHECK(s->v != NULL);
-}
-
-static void teardown(Setup *s)
-{
-	raspi3b_vchiq_destroy(s->v);
-	machine_destroy(s->m);
-}
-
-static uint32_t rd(Setup *s, uint64_t address)
-{
-	uint64_t value = 0;
-
-	CHECK_EQ(bus_read(s->m->bus, address, 4, &value), BUS_OK);
-	return (uint32_t)value;
-}
-
-static void wr(Setup *s, uint64_t address, uint32_t value)
-{
-	CHECK_EQ(bus_write(s->m->bus, address, 4, value), BUS_OK);
-}
-
-/*
- * Slot zero at at, as Linux's vchiq_init_slots leaves it, and the rest of
- * the slots that the master's half points to filled with FILL.
- */
-static void slot_zero(Setup *s, uint32_t at)
-{
-	/*
-	 * The Arm clears slot zero; FILL in the VideoCore's half shows what
-	 * the VideoCore writes, and around it what it must not.
-	 */
-	for (uint32_t a = at; a < at + 33 * SLOT; a += 4)
-		wr(s, a, a >= at + MASTER + HALF && a < at + 1288 ? 0 : FILL);
-	wr(s, at + MASTER + INITIALISED, 0);
-	wr(s, at + MAGIC, 0x56434849); /* 'VCHI' */
-	wr(s, at + VERSION, 3u << 16 | 8);
-	wr(s, at + ZERO_SIZE, 1288);
-	wr(s, at + SLOT_SIZE, SLOT);
-	wr(s, at + MAX_SLOTS, 128);
-	wr(s, at + MAX_PER_SIDE, 64);
-	wr(s, at + MASTER + SYNC, 1);
-	wr(s, at + MASTER + FIRST, 2);
-	wr(s, at + MASTER + LAST, 32);
-	wr(s, at + SLAVE + SYNC, 33);
-	wr(s, at + SLAVE + FIRST, 34);
-	wr(s, at + SLAVE + LAST, 64);
-}
-
-static void check_stop(Setup *s, const char *message)
-{
-	CHECK_EQ(s->m->stop, MACHINE_STOP_ERROR);
-	CHECK(strstr(s->m->stop_message, "firmware: VCHIQ: ") != NULL);
-	CHECK(strstr(s->m->stop_message, message) != NULL);
-	s->m->stop = MACHINE_STOP_NONE;
-}
+#include "vchiq_link.h"
 
 /*
  * The master's half, once started: its 31 slots queued, the first to
@@ -308,176 +208,6 @@ static void test_places(void)
 }
 
 /* --- Messages ------------------------------------------------------------ */
-
-#define LATENCY 1000     /* ns: the VideoCore's, as the board sets it */
-#define BELL 0x3f00b840  /* the doorbells */
-#define BELL0 BELL       /* read: whether the VideoCore rang the Arm */
-#define BELL2 (BELL + 8) /* written: rings the VideoCore */
-#define VC_SLOTS 31      /* 2 to 32 */
-#define ARM_SLOTS 31     /* 34 to 64 */
-#define ARMED 0
-#define FIRED 4
-
-#define MSG(type, src, dst) ((uint32_t)(type) << 24 | (src) << 12 | (dst))
-enum { PADDING, CONNECT, OPEN, OPENACK, CLOSE, DATA };
-#define AUDS 0x41554453u /* 'AUDS' */
-#define MMAL 0x6d6d616cu /* 'mmal' */
-
-/* The Arm's end, as Linux's vchiq_core plays it, and the warnings. */
-typedef struct Link {
-	Setup s;
-	Bcm2835Doorbell *db;
-	IrqLine irq;      /* the Arm's doorbell 0 */
-	uint32_t tx_pos;  /* the Arm's */
-	unsigned vc_read; /* the VideoCore's messages the test has read */
-	unsigned warnings;
-	char warning[256];
-} Link;
-
-static void collect(void *ctx, const char *message)
-{
-	Link *l = ctx;
-
-	l->warnings++;
-	snprintf(l->warning, sizeof(l->warning), "%s", message);
-}
-
-/*
- * The VideoCore started on slot zero at SLOTS, the Arm's half as
- * vchiq_init_state leaves it: its slots queued, waiting on its trigger
- * and recycle events.
- */
-static void link_start(Link *l)
-{
-	uint32_t slave = SLOTS + SLAVE;
-
-	l->tx_pos = 0;
-	l->vc_read = 0;
-	slot_zero(&l->s, SLOTS);
-	for (uint32_t i = 0; i < ARM_SLOTS; i++)
-		wr(&l->s, slave + QUEUE + 4 * i, 34 + i);
-	wr(&l->s, slave + QUEUE_RECYCLE, ARM_SLOTS);
-	wr(&l->s, slave + TX_POS, 0);
-	wr(&l->s, slave + TRIGGER + ARMED, 1);
-	wr(&l->s, slave + TRIGGER + FIRED, 0);
-	wr(&l->s, slave + RECYCLE + ARMED, 1);
-	wr(&l->s, slave + RECYCLE + FIRED, 0);
-	wr(&l->s, SLOTS + MASTER + TRIGGER + FIRED, 0);
-	wr(&l->s, SLOTS + MASTER + RECYCLE + FIRED, 0);
-	wr(&l->s, SLOTS + MASTER + SYNC_TRIGGER + FIRED, 0);
-	CHECK(raspi3b_vchiq_init(l->s.v, BUS | SLOTS));
-}
-
-static void link_up(Link *l, bool warn)
-{
-	memset(l, 0, sizeof(*l));
-	setup(&l->s);
-	irq_init(&l->irq, NULL, NULL, 0);
-	l->db = bcm2835_doorbell_create(
-		l->s.m, &l->irq, &(Bcm2835DoorbellVc){raspi3b_vchiq_doorbell, l->s.v});
-	CHECK(l->db != NULL);
-	CHECK_EQ(bcm2835_doorbell_map(l->db, l->s.m->bus, "doorbell", BELL),
-	         BUS_OK);
-	raspi3b_vchiq_attach(l->s.v, l->db, LATENCY, warn ? collect : NULL, l);
-	link_start(l);
-}
-
-static void link_down(Link *l)
-{
-	bcm2835_doorbell_destroy(l->db);
-	teardown(&l->s);
-}
-
-/*
- * reserve_space and queue_message: the Arm's message, its data words
- * (NULL: zeros), padding the rest of a slot that it does not fit.
- */
-static void arm_put(Link *l, uint32_t msgid, uint32_t size,
-                    const uint32_t *data)
-{
-	uint32_t slave = SLOTS + SLAVE;
-	uint32_t stride = (size + 15) & ~7u;
-	uint32_t space = SLOT - (l->tx_pos & (SLOT - 1));
-	uint32_t slot, at;
-
-	if (stride > space) {
-		slot = rd(&l->s, slave + QUEUE + 4 * ((l->tx_pos / SLOT) & 63));
-		at = SLOTS + slot * SLOT + (l->tx_pos & (SLOT - 1));
-		wr(&l->s, at, MSG(PADDING, 0, 0));
-		wr(&l->s, at + 4, space - 8);
-		l->tx_pos += space;
-	}
-	/* The slot must have come back. */
-	if ((l->tx_pos & (SLOT - 1)) == 0)
-		CHECK((int32_t)(l->tx_pos / SLOT - rd(&l->s, slave + QUEUE_RECYCLE)) <
-		      0);
-	slot = rd(&l->s, slave + QUEUE + 4 * ((l->tx_pos / SLOT) & 63));
-	CHECK(slot >= 34 && slot <= 64);
-	at = SLOTS + slot * SLOT + (l->tx_pos & (SLOT - 1));
-	wr(&l->s, at, msgid);
-	wr(&l->s, at + 4, size);
-	for (uint32_t i = 0; i < (size + 3) / 4; i++)
-		wr(&l->s, at + 8 + 4 * i, data != NULL ? data[i] : 0);
-	l->tx_pos += stride;
-	wr(&l->s, slave + TX_POS, l->tx_pos);
-}
-
-/* remote_event_signal on the VideoCore's trigger. */
-static void arm_signal(Link *l)
-{
-	wr(&l->s, SLOTS + MASTER + TRIGGER + FIRED, 1);
-	if (rd(&l->s, SLOTS + MASTER + TRIGGER + ARMED) != 0)
-		wr(&l->s, BELL2, 0);
-}
-
-static void run(Link *l, uint64_t ns)
-{
-	event_queue_run_until(&l->s.m->events, l->s.m->events.now + ns);
-}
-
-/* Send, signal, and let the VideoCore answer. */
-static void arm_send(Link *l, uint32_t msgid, uint32_t size,
-                     const uint32_t *data)
-{
-	arm_put(l, msgid, size, data);
-	arm_signal(l);
-	run(l, LATENCY);
-}
-
-static void arm_open(Link *l, unsigned port, uint32_t fourcc)
-{
-	uint32_t payload[3] = {fourcc, 1234, 3u << 16 | 3};
-
-	arm_send(l, MSG(OPEN, port, 0), 12, payload);
-}
-
-/* The VideoCore's messages sent so far. */
-static unsigned vc_sent(Link *l)
-{
-	return rd(&l->s, SLOTS + MASTER + TX_POS) / 8;
-}
-
-/* The VideoCore's next message, which must be a header alone. */
-static uint32_t vc_next(Link *l)
-{
-	uint32_t pos = 8 * l->vc_read++;
-	uint32_t slot = rd(&l->s, SLOTS + MASTER + QUEUE + 4 * ((pos / SLOT) & 63));
-	uint32_t at = SLOTS + slot * SLOT + (pos & (SLOT - 1));
-
-	CHECK(slot >= 2 && slot <= 32);
-	CHECK_EQ(rd(&l->s, at + 4), 0);
-	return rd(&l->s, at);
-}
-
-/* Whether the VideoCore rang the Arm; reading BELL0 clears it. */
-static bool vc_rang(Link *l)
-{
-	bool level = irq_level(&l->irq);
-
-	CHECK_EQ(rd(&l->s, BELL0) != 0, level);
-	CHECK(!irq_level(&l->irq));
-	return level;
-}
 
 /* The Arm's CONNECT, which the VideoCore answers after its latency. */
 static void test_connect(void)
@@ -697,12 +427,44 @@ static void test_arm_slots(void)
 }
 
 /*
+ * A link whose VideoCore has filled its slots, with the answer to OPEN
+ * 4 waiting and OPEN 5, which ends one of the Arm's slots, not read;
+ * the Arm's slots recycled so far.
+ */
+static uint32_t fill_paused(Link *l)
+{
+	uint32_t space, recycled;
+
+	link_up(l, true);
+	arm_send(l, MSG(CONNECT, 0, 0), 0, NULL);
+	for (unsigned sent = 1; sent < VC_SLOTS * 512;) {
+		for (unsigned i = 0; i < 100 && sent < VC_SLOTS * 512; i++, sent++)
+			arm_put(l, MSG(OPEN, 1, 0), 12, NULL);
+		arm_signal(l);
+		run(l, LATENCY);
+	}
+	space = SLOT - (l->tx_pos & (SLOT - 1));
+	CHECK(space >= 48);
+	arm_put(l, MSG(OPEN, 4, 0), 12, NULL);
+	arm_put(l, MSG(OPEN, 5, 0), space - 24 - 8, NULL);
+	CHECK_EQ(l->tx_pos & (SLOT - 1), 0);
+	recycled = rd(&l->s, SLOTS + SLAVE + QUEUE_RECYCLE);
+	arm_signal(l);
+	run(l, LATENCY);
+	CHECK_EQ(vc_sent(l), VC_SLOTS * 512);
+	/* Its slot is not back: OPEN 5 waits. */
+	CHECK_EQ(rd(&l->s, SLOTS + SLAVE + QUEUE_RECYCLE), recycled);
+	return recycled;
+}
+
+/*
  * The VideoCore's slots: 512 messages each, the next once the Arm has
- * recycled one; none free stops the machine.
+ * recycled one; with none free, its messages wait, and the Arm's too.
  */
 static void test_vc_slots(void)
 {
 	uint32_t master = SLOTS + MASTER;
+	uint32_t recycled;
 	Link l;
 
 	link_up(&l, true);
@@ -719,11 +481,12 @@ static void test_vc_slots(void)
 	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT + SLOT - 8), MSG(CLOSE, 0, 1));
 	CHECK_EQ(rd(&l.s, SLOTS + 32 * SLOT + SLOT - 8), MSG(CLOSE, 0, 1));
 	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
-	/* None free. */
+	/* None free: the answer waits, and so does the next OPEN. */
 	arm_open(&l, 2, AUDS);
-	check_stop(&l.s, "the VideoCore has no free slot to send in: waiting "
-	                 "for the Arm to recycle one is not emulated");
+	arm_open(&l, 3, AUDS);
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
 	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT);
+	CHECK_EQ(rd(&l.s, master + TRIGGER + FIRED), 1); /* not taken */
 	/* A slot recycled that is not the VideoCore's. */
 	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 33);
 	wr(&l.s, master + QUEUE_RECYCLE, VC_SLOTS + 1);
@@ -731,23 +494,62 @@ static void test_vc_slots(void)
 	wr(&l.s, BELL2, 0);
 	run(&l, LATENCY);
 	CHECK_EQ(rd(&l.s, master + RECYCLE + FIRED), 0);
-	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE); /* no message read */
-	arm_signal(&l);
-	run(&l, LATENCY);
 	check_stop(&l.s, "the VideoCore's slot queue names slot 33, not one "
 	                 "of its own, which is not emulated");
 	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 1);
-	arm_signal(&l);
+	wr(&l.s, BELL2, 0);
 	run(&l, LATENCY);
 	check_stop(&l.s, "names slot 1, not one");
-	/* Slot 2 back: the OPEN, read again, is answered in it. */
+	/*
+	 * Slot 2 back: the answer goes in it; then, the trigger taken, the
+	 * OPEN that waited is read and answered.
+	 */
 	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 2);
-	arm_signal(&l);
+	wr(&l.s, BELL2, 0);
 	run(&l, LATENCY);
 	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
-	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT + 8);
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT + 16);
 	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT), MSG(CLOSE, 0, 2));
 	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT + 4), 0);
+	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT + 8), MSG(CLOSE, 0, 3));
+	CHECK_EQ(rd(&l.s, master + TRIGGER + FIRED), 0);
+	link_down(&l);
+
+	/*
+	 * Paused with the trigger taken: the recycle event alone, with the
+	 * slot back, sends the answer and reads on.
+	 */
+	recycled = fill_paused(&l);
+	CHECK_EQ(rd(&l.s, master + TRIGGER + FIRED), 0);
+	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 2);
+	wr(&l.s, master + QUEUE_RECYCLE, VC_SLOTS + 1);
+	wr(&l.s, master + RECYCLE + FIRED, 1);
+	wr(&l.s, BELL2, 0);
+	run(&l, LATENCY);
+	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT), MSG(CLOSE, 0, 4));
+	CHECK_EQ(rd(&l.s, SLOTS + 2 * SLOT + 8), MSG(CLOSE, 0, 5));
+	CHECK_EQ(rd(&l.s, SLOTS + SLAVE + QUEUE_RECYCLE), recycled + 1);
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT + 16);
+	/* Read to the end: a recycle event alone reads nothing more. */
+	arm_put(&l, MSG(OPEN, 6, 0), 12, NULL);
+	wr(&l.s, master + RECYCLE + FIRED, 1);
+	wr(&l.s, BELL2, 0);
+	run(&l, LATENCY);
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT + 16);
+	link_down(&l);
+
+	/* Paused, then the firmware starts again: it is paused no more. */
+	fill_paused(&l);
+	raspi3b_vchiq_reset(l.s.v);
+	link_start(&l);
+	arm_put(&l, MSG(CONNECT, 0, 0), 0, NULL);
+	wr(&l.s, master + RECYCLE + FIRED, 1);
+	wr(&l.s, BELL2, 0);
+	run(&l, LATENCY);
+	CHECK_EQ(rd(&l.s, master + TX_POS), 0);
+	arm_signal(&l);
+	run(&l, LATENCY);
+	CHECK_EQ(rd(&l.s, master + TX_POS), 8);
 	link_down(&l);
 }
 
@@ -791,6 +593,498 @@ static void test_events(void)
 	link_down(&l);
 }
 
+#define SMEM 0x534d454du /* 'SMEM' */
+
+/* A service of the VideoCore's, as the tests play it. */
+typedef struct Svc {
+	Link *l;
+	unsigned opens, datas, closes, resets;
+	unsigned port; /* the last call's */
+	uint32_t size;
+	uint8_t bytes[SLOT];
+	bool echo; /* sends back what it gets */
+	bool fail; /* stops the machine on DATA */
+} Svc;
+
+static void svc_open(void *ctx, unsigned port)
+{
+	Svc *v = ctx;
+
+	v->opens++;
+	v->port = port;
+}
+
+static bool svc_data(void *ctx, unsigned port, const uint8_t *data,
+                     uint32_t size)
+{
+	Svc *v = ctx;
+
+	v->datas++;
+	v->port = port;
+	v->size = size;
+	memcpy(v->bytes, data, size);
+	if (v->fail) {
+		machine_stop(v->l->s.m, MACHINE_STOP_ERROR, "svc");
+		return false;
+	}
+	return !v->echo || raspi3b_vchiq_send(v->l->s.v, port, data, size);
+}
+
+static void svc_close(void *ctx, unsigned port)
+{
+	Svc *v = ctx;
+
+	v->closes++;
+	v->port = port;
+}
+
+static void svc_reset(void *ctx)
+{
+	Svc *v = ctx;
+
+	v->resets++;
+}
+
+/* A link with the CONNECTs done, and SMEM version 3, from 2. */
+static void svc_up(Link *l, Svc *v)
+{
+	Raspi3bVchiqService s = {SMEM,     3,         2, svc_open,
+	                         svc_data, svc_close, v, svc_reset};
+
+	link_up(l, true);
+	memset(v, 0, sizeof(*v));
+	v->l = l;
+	CHECK(raspi3b_vchiq_add_service(l->s.v, &s));
+	arm_send(l, MSG(CONNECT, 0, 0), 0, NULL);
+	CHECK_EQ(vc_header(l), MSG(CONNECT, 0, 0));
+}
+
+static void arm_open_v(Link *l, unsigned port, uint32_t fourcc,
+                       uint16_t version, uint16_t version_min)
+{
+	uint32_t payload[3] = {fourcc, 99, (uint32_t)version_min << 16 | version};
+
+	arm_send(l, MSG(OPEN, port, 0), 12, payload);
+}
+
+/* The VideoCore's next message is the OPENACK from port to arm_port. */
+static void check_openack(Link *l, unsigned port, unsigned arm_port)
+{
+	uint32_t size;
+	uint8_t ack[SLOT];
+
+	CHECK_EQ(vc_message(l, &size, ack), MSG(OPENACK, port, arm_port));
+	CHECK_EQ(size, 2);
+	CHECK_EQ(ack[0] | ack[1] << 8, 3); /* the service's version */
+}
+
+/*
+ * parse_open: a service the VideoCore has, whose versions meet the
+ * Arm's, is acknowledged from its lowest free port; the others are
+ * refused.
+ */
+static void test_service_open(void)
+{
+	static const struct {
+		uint16_t version, version_min;
+		bool meets;
+	} versions[] = {
+		{2, 0, true}, /* the Arm's version the VideoCore's oldest */
+		{3, 3, true}, /* the Arm's oldest the VideoCore's version */
+		{9, 1, true},
+		{1, 0, false},      /* older than the VideoCore's oldest */
+		{9, 4, false},      /* the Arm's oldest newer than the VideoCore's */
+		{0xffff, 0, false}, /* -1 */
+		{9, 0xffff, true},  /* from -1 */
+	};
+	Link l;
+	Svc v;
+
+	for (size_t i = 0; i < ARRAY_SIZE(versions); i++) {
+		svc_up(&l, &v);
+		arm_open_v(&l, 7, SMEM, versions[i].version, versions[i].version_min);
+		if (versions[i].meets) {
+			check_openack(&l, 1, 7);
+			CHECK_EQ(v.opens, 1);
+			CHECK_EQ(v.port, 1);
+			CHECK_EQ(l.warnings, 0);
+		} else {
+			CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 7));
+			CHECK_EQ(v.opens, 0);
+			CHECK_EQ(l.warnings, 1);
+		}
+		link_down(&l);
+	}
+	svc_up(&l, &v);
+	arm_open_v(&l, 7, SMEM, 1, 0);
+	CHECK(strcmp(l.warning, "VCHIQ: the Arm's 'SMEM' version 1 (from 0) does "
+	                        "not meet the VideoCore's, 3 (from 2): it refuses "
+	                        "the OPEN") == 0);
+	arm_open_v(&l, 8, SMEM, 1, 0);
+	CHECK_EQ(l.warnings, 2); /* each time */
+	/* The lowest free port each time; the Arm's ports as they come. */
+	arm_open_v(&l, 0x123, SMEM, 3, 2);
+	arm_open_v(&l, 0xfff, SMEM, 3, 2);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 7));
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 8));
+	check_openack(&l, 1, 0x123);
+	check_openack(&l, 2, 0xfff);
+	CHECK_EQ(v.opens, 2);
+	CHECK_EQ(v.port, 2);
+	/*
+	 * An OPENACK with no slot to go in, the slot queue broken: the
+	 * service is open, and the OPENACK waits; it goes once mended.
+	 */
+	wr(&l.s, SLOTS + MASTER + QUEUE, 33);
+	arm_open_v(&l, 0x124, SMEM, 3, 2);
+	check_stop(&l.s, "the VideoCore's slot queue names slot 33");
+	CHECK_EQ(v.opens, 3);
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), l.vc_pos);
+	wr(&l.s, SLOTS + MASTER + QUEUE, 2);
+	arm_signal(&l);
+	run(&l, LATENCY);
+	check_openack(&l, 3, 0x124);
+	CHECK_EQ(v.opens, 3);
+	arm_send(&l, MSG(CLOSE, 0x124, 3), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 3, 0x124));
+	/* What it does not have is refused, and named, as before. */
+	arm_open_v(&l, 9, MMAL, 3, 2);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 9));
+	CHECK(strstr(l.warning, "service 'mmal' is not emulated") != NULL);
+	/* Too short to name one. */
+	arm_send(&l, MSG(OPEN, 10, 0), 11, (uint32_t[3]){SMEM, 0, 0x00020003});
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 10));
+	CHECK_EQ(l.warnings, 3);
+	/* 32 ports: the 33rd OPEN stops. */
+	for (unsigned port = 3; port <= 32; port++) {
+		arm_open_v(&l, 100 + port, SMEM, 3, 2);
+		check_openack(&l, port, 100 + port);
+	}
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	/* Port 32, the last, is one like the others. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 32, "x", 1));
+	CHECK_EQ(vc_message(&l, &(uint32_t){0}, NULL), MSG(DATA, 32, 132));
+	arm_send(&l, MSG(DATA, 132, 32), 4, NULL);
+	CHECK_EQ(v.datas, 1);
+	CHECK_EQ(v.port, 32);
+	arm_send(&l, MSG(CLOSE, 132, 0), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 32, 132));
+	arm_send(&l, MSG(CLOSE, 0x123, 0), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 1, 0x123));
+	CHECK_EQ(v.closes, 3); /* with port 3 before */
+	arm_open_v(&l, 300, SMEM, 3, 2);
+	arm_open_v(&l, 301, SMEM, 3, 2);
+	check_openack(&l, 1, 300);
+	check_openack(&l, 32, 301);
+	arm_open_v(&l, 200, SMEM, 3, 2);
+	check_stop(&l.s, "more than 32 of the VideoCore's services open is "
+	                 "not emulated");
+	/* Not read: the next signal stops again. */
+	arm_signal(&l);
+	run(&l, LATENCY);
+	check_stop(&l.s, "more than 32 of the VideoCore's services open");
+	/* The firmware starts again: the 32 close. */
+	raspi3b_vchiq_reset(l.s.v);
+	CHECK_EQ(v.closes, 3 + 32);
+	link_down(&l);
+
+	/* Without warnings, and with no callbacks. */
+	link_up(&l, false);
+	CHECK(raspi3b_vchiq_add_service(
+		l.s.v,
+		&(Raspi3bVchiqService){SMEM, 3, 2, NULL, NULL, NULL, NULL, NULL}));
+	arm_send(&l, MSG(CONNECT, 0, 0), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CONNECT, 0, 0));
+	arm_open_v(&l, 7, SMEM, 1, 0);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 0, 7));
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	check_openack(&l, 1, 7);
+	arm_send(&l, MSG(DATA, 7, 1), 4, NULL);
+	arm_send(&l, MSG(CLOSE, 7, 1), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 1, 7));
+	CHECK_EQ(l.warnings, 0);
+	arm_open_v(&l, 8, SMEM, 3, 2);
+	check_openack(&l, 1, 8);
+	raspi3b_vchiq_reset(l.s.v); /* nothing to call */
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	link_down(&l);
+
+	/* Eight services, then no room. */
+	link_up(&l, false);
+	for (uint32_t i = 0; i < 8; i++)
+		CHECK(raspi3b_vchiq_add_service(
+			l.s.v, &(Raspi3bVchiqService){SMEM + i, 1, 1, NULL, NULL, NULL,
+		                                  NULL, NULL}));
+	CHECK(!raspi3b_vchiq_add_service(
+		l.s.v,
+		&(Raspi3bVchiqService){MMAL, 1, 1, NULL, NULL, NULL, NULL, NULL}));
+	arm_send(&l, MSG(CONNECT, 0, 0), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CONNECT, 0, 0));
+	arm_open_v(&l, 7, SMEM + 7, 1, 1);
+	CHECK_EQ(vc_message(&l, &(uint32_t){0}, NULL), MSG(OPENACK, 1, 7));
+	link_down(&l);
+}
+
+/* DATA, both ways, between the Arm's port and the service it opened. */
+static void test_service_data(void)
+{
+	uint32_t words[3] = {0x04030201u, 0x08070605u, 0x0c0b0a09u};
+	uint8_t big[SLOT];
+	uint32_t size;
+	Link l;
+	Svc v;
+
+	svc_up(&l, &v);
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	arm_open_v(&l, 8, SMEM, 3, 2);
+	check_openack(&l, 1, 7);
+	check_openack(&l, 2, 8);
+	arm_send(&l, MSG(DATA, 8, 2), 9, words);
+	CHECK_EQ(v.datas, 1);
+	CHECK_EQ(v.port, 2);
+	CHECK_EQ(v.size, 9);
+	CHECK(memcmp(v.bytes, words, 9) == 0);
+	arm_send(&l, MSG(DATA, 7, 1), 0, NULL);
+	CHECK_EQ(v.datas, 2);
+	CHECK_EQ(v.port, 1);
+	CHECK_EQ(v.size, 0);
+	/* Dropped: from another Arm port, to no port, port 0, past 32. */
+	arm_send(&l, MSG(DATA, 8, 1), 4, words);
+	arm_send(&l, MSG(DATA, 7, 3), 4, words);
+	arm_send(&l, MSG(DATA, 7, 0), 4, words);
+	arm_send(&l, MSG(DATA, 7, 33), 4, words);
+	arm_send(&l, MSG(DATA, 7, 0x801), 4, words);
+	CHECK_EQ(v.datas, 2);
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+
+	/* The service's DATA to the Arm's port, from its own. */
+	v.echo = true;
+	arm_send(&l, MSG(DATA, 8, 2), 9, words);
+	CHECK_EQ(vc_message(&l, &size, big), MSG(DATA, 2, 8));
+	CHECK_EQ(size, 9);
+	CHECK(memcmp(big, words, 9) == 0);
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), l.vc_pos);
+	/* The largest, a whole slot: the rest of slot 2 is padding. */
+	for (unsigned i = 0; i < SLOT; i++)
+		big[i] = (uint8_t)(i * 7);
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, RASPI3B_VCHIQ_MSG_MAX));
+	CHECK_EQ(vc_message(&l, &size, NULL), MSG(PADDING, 0, 0));
+	CHECK_EQ(size, SLOT - 64 - 8); /* 64 bytes sent before it */
+	CHECK_EQ(l.vc_pos, SLOT);
+	{
+		uint8_t back[SLOT];
+
+		CHECK_EQ(vc_message(&l, &size, back), MSG(DATA, 1, 7));
+		CHECK_EQ(size, RASPI3B_VCHIQ_MSG_MAX);
+		CHECK(memcmp(back, big, size) == 0);
+	}
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), 2 * SLOT);
+	/* Exactly the rest of a slot: no padding. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 4000));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 4008 - 16));
+	CHECK(raspi3b_vchiq_send(l.s.v, 2, big, 0));
+	CHECK_EQ(vc_message(&l, &size, NULL), MSG(DATA, 1, 7));
+	CHECK_EQ(vc_message(&l, &size, NULL), MSG(DATA, 1, 7));
+	CHECK_EQ(size, SLOT - 4008 - 16);
+	CHECK_EQ(l.vc_pos, 3 * SLOT - 8);
+	CHECK_EQ(vc_header(&l), MSG(DATA, 2, 8));
+	CHECK_EQ(l.vc_pos, 3 * SLOT);
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	/* One byte. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 2, "\xa5", 1));
+	CHECK_EQ(vc_message(&l, &size, big), MSG(DATA, 2, 8));
+	CHECK_EQ(size, 1);
+	CHECK_EQ(big[0], 0xa5);
+	/*
+	 * The slot that padding goes in, broken in the slot queue: it stops,
+	 * and the message waits; mended, it goes before the next.
+	 */
+	wr(&l.s, SLOTS + MASTER + QUEUE + 4 * 3, 33);
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, RASPI3B_VCHIQ_MSG_MAX));
+	check_stop(&l.s, "the VideoCore's slot queue names slot 33");
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), 3 * SLOT + 16);
+	wr(&l.s, SLOTS + MASTER + QUEUE + 4 * 3, 5);
+	CHECK(raspi3b_vchiq_send(l.s.v, 2, big, 0));
+	CHECK_EQ(vc_message(&l, &size, NULL), MSG(PADDING, 0, 0));
+	CHECK_EQ(vc_message(&l, &size, NULL), MSG(DATA, 1, 7));
+	CHECK_EQ(size, RASPI3B_VCHIQ_MSG_MAX);
+	CHECK_EQ(vc_header(&l), MSG(DATA, 2, 8));
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), 5 * SLOT + 8);
+	/* What does not go stops. */
+	CHECK(!raspi3b_vchiq_send(l.s.v, 1, big, RASPI3B_VCHIQ_MSG_MAX + 1));
+	check_stop(&l.s, "a message of 4089 bytes does not fit a slot");
+	CHECK(!raspi3b_vchiq_send(l.s.v, 3, big, 4));
+	check_stop(&l.s, "a service sends from port 3, which is not open");
+	CHECK(!raspi3b_vchiq_send(l.s.v, 0, big, 4));
+	check_stop(&l.s, "from port 0, which");
+	CHECK(!raspi3b_vchiq_send(l.s.v, 33, big, 4));
+	check_stop(&l.s, "from port 33, which");
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), 5 * SLOT + 8);
+	/* A service that stops: the DATA is read again at the next signal. */
+	v.echo = false;
+	v.fail = true;
+	arm_send(&l, MSG(DATA, 7, 1), 4, words);
+	CHECK_EQ(v.datas, 4);
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_ERROR);
+	l.s.m->stop = MACHINE_STOP_NONE;
+	arm_signal(&l);
+	run(&l, LATENCY);
+	CHECK_EQ(v.datas, 5);
+	link_down(&l);
+}
+
+/*
+ * vchiq_close_service_internal, open and CLOSE received: the service
+ * closes, answers with a CLOSE, and its port is free again.
+ */
+static void test_service_close(void)
+{
+	Link l;
+	Svc v;
+
+	svc_up(&l, &v);
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	arm_open_v(&l, 8, SMEM, 3, 2);
+	arm_open_v(&l, 9, SMEM, 3, 2);
+	check_openack(&l, 1, 7);
+	check_openack(&l, 2, 8);
+	check_openack(&l, 3, 9);
+	/* Not the Arm's port that opened it, nor an open port: dropped. */
+	arm_send(&l, MSG(CLOSE, 8, 1), 0, NULL);
+	arm_send(&l, MSG(CLOSE, 7, 4), 0, NULL);
+	arm_send(&l, MSG(CLOSE, 7, 33), 0, NULL);
+	arm_send(&l, MSG(CLOSE, 10, 0), 0, NULL);
+	CHECK_EQ(v.closes, 0);
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), l.vc_pos);
+	arm_send(&l, MSG(CLOSE, 8, 2), 0, NULL);
+	CHECK_EQ(v.closes, 1);
+	CHECK_EQ(v.port, 2);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 2, 8));
+	/* Closed: its DATA and a second CLOSE are dropped. */
+	arm_send(&l, MSG(DATA, 8, 2), 0, NULL);
+	arm_send(&l, MSG(CLOSE, 8, 2), 0, NULL);
+	CHECK_EQ(v.datas, 0);
+	CHECK_EQ(v.closes, 1);
+	/* To port 0: the port the Arm's opened. */
+	arm_send(&l, MSG(CLOSE, 9, 0), 0, NULL);
+	CHECK_EQ(v.port, 3);
+	CHECK_EQ(vc_header(&l), MSG(CLOSE, 3, 9));
+	CHECK_EQ(rd(&l.s, SLOTS + MASTER + TX_POS), l.vc_pos);
+	/* Port 2 is the lowest free again. */
+	arm_open_v(&l, 11, SMEM, 3, 2);
+	check_openack(&l, 2, 11);
+	CHECK_EQ(v.opens, 4);
+	/*
+	 * The firmware starts again: what is open closes, then each service
+	 * resets, a second one too.
+	 */
+	{
+		Svc w = {.l = &l};
+
+		CHECK(raspi3b_vchiq_add_service(
+			l.s.v, &(Raspi3bVchiqService){MMAL, 1, 1, NULL, NULL, NULL, &w,
+		                                  svc_reset}));
+		CHECK_EQ(v.resets, 0);
+		raspi3b_vchiq_reset(l.s.v);
+		CHECK_EQ(v.closes, 4);
+		CHECK_EQ(v.resets, 1);
+		CHECK_EQ(w.resets, 1);
+	}
+	link_start(&l);
+	arm_send(&l, MSG(CONNECT, 0, 0), 0, NULL);
+	CHECK_EQ(vc_header(&l), MSG(CONNECT, 0, 0));
+	arm_send(&l, MSG(CLOSE, 7, 1), 0, NULL);
+	CHECK_EQ(v.closes, 4);
+	arm_open_v(&l, 12, SMEM, 3, 2);
+	check_openack(&l, 1, 12);
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	link_down(&l);
+}
+
+/* The messages waiting for slots: in order, and at most 64 KB. */
+static void test_service_waiting(void)
+{
+	uint32_t master = SLOTS + MASTER;
+	static uint8_t big[SLOT];
+	Link l;
+	Svc v;
+
+	svc_up(&l, &v);
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	check_openack(&l, 1, 7);
+	/* 24 bytes so far; fill the 31 slots, less 8 bytes. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 24 - 8));
+	for (unsigned i = 1; i < VC_SLOTS - 1; i++)
+		CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 8));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 16));
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT - 8);
+	/* A header alone fits; the next waits, the padding not yet sent. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 0));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 100));
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT);
+	/* 64 KB wait, in all. */
+	for (unsigned i = 0; i < 16; i++)
+		CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 8));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 65536 - 100 - 16 * (SLOT - 8)));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 0));
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	CHECK(!raspi3b_vchiq_send(l.s.v, 1, big, 1));
+	check_stop(&l.s, "more than 64 KB of the VideoCore's messages waiting "
+	                 "for the Arm to recycle slots is not emulated");
+	/*
+	 * A slot back that is not the VideoCore's: what waits stops at it,
+	 * and a header alone still fits the 64 KB.
+	 */
+	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 33);
+	wr(&l.s, master + QUEUE_RECYCLE, VC_SLOTS + 1);
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 0));
+	check_stop(&l.s, "the VideoCore's slot queue names slot 33");
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT);
+	/* Two slots back: the 100 bytes, then the first that fill one. */
+	wr(&l.s, master + QUEUE + 4 * VC_SLOTS, 5);
+	wr(&l.s, master + QUEUE + 4 * (VC_SLOTS + 1), 9);
+	wr(&l.s, master + QUEUE_RECYCLE, VC_SLOTS + 2);
+	wr(&l.s, master + RECYCLE + FIRED, 1);
+	wr(&l.s, BELL2, 0);
+	run(&l, LATENCY);
+	CHECK_EQ(rd(&l.s, master + TX_POS), (VC_SLOTS + 1) * SLOT + SLOT);
+	CHECK_EQ(rd(&l.s, SLOTS + 5 * SLOT), MSG(DATA, 1, 7));
+	CHECK_EQ(rd(&l.s, SLOTS + 5 * SLOT + 4), 100);
+	CHECK_EQ(rd(&l.s, SLOTS + 5 * SLOT + 112), MSG(PADDING, 0, 0));
+	CHECK_EQ(rd(&l.s, SLOTS + 5 * SLOT + 116), SLOT - 112 - 8);
+	CHECK_EQ(rd(&l.s, SLOTS + 9 * SLOT + 4), SLOT - 8);
+	/* Room again: a byte more waits behind them. */
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 1));
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	/* A reset drops what waits. */
+	raspi3b_vchiq_reset(l.s.v);
+	link_start(&l);
+	CHECK_EQ(rd(&l.s, master + TX_POS), 0);
+	arm_send(&l, MSG(CONNECT, 0, 0), 0, NULL);
+	CHECK_EQ(rd(&l.s, master + TX_POS), 8);
+	/* The 64 KB are whole again. */
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	CHECK_EQ(rd(&l.s, master + TX_POS), 24);
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 24 - 8));
+	for (unsigned i = 1; i < VC_SLOTS; i++)
+		CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 8));
+	CHECK_EQ(rd(&l.s, master + TX_POS), VC_SLOTS * SLOT);
+	for (unsigned i = 0; i < 16; i++)
+		CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 8));
+	CHECK(raspi3b_vchiq_send(l.s.v, 1, big, 65536 - 16 * (SLOT - 8)));
+	CHECK_EQ(l.s.m->stop, MACHINE_STOP_NONE);
+	CHECK(!raspi3b_vchiq_send(l.s.v, 1, big, 1));
+	check_stop(&l.s, "more than 64 KB");
+	link_down(&l);
+
+	/* Destroyed with messages waiting. */
+	svc_up(&l, &v);
+	arm_open_v(&l, 7, SMEM, 3, 2);
+	for (unsigned i = 0; i < VC_SLOTS + 2; i++)
+		CHECK(raspi3b_vchiq_send(l.s.v, 1, big, SLOT - 8));
+	link_down(&l);
+}
+
 /* What the VideoCore does not handle stops the machine. */
 static void test_message_stops(void)
 {
@@ -799,7 +1093,6 @@ static void test_message_stops(void)
 		const char *message;
 	} stops[] = {
 		{MSG(OPENACK, 1, 2), 2, "the Arm's OPENACK message is not emulated"},
-		{MSG(DATA, 1, 2), 4, "the Arm's DATA message is not emulated"},
 		{MSG(6, 1, 2), 0, "the Arm's BULK_RX message"},
 		{MSG(7, 1, 2), 0, "the Arm's BULK_TX message"},
 		{MSG(8, 1, 2), 0, "the Arm's BULK_RX_DONE message"},
@@ -961,6 +1254,10 @@ int main(void)
 	RUN_TEST(test_arm_slots);
 	RUN_TEST(test_vc_slots);
 	RUN_TEST(test_events);
+	RUN_TEST(test_service_open);
+	RUN_TEST(test_service_data);
+	RUN_TEST(test_service_close);
+	RUN_TEST(test_service_waiting);
 	RUN_TEST(test_message_stops);
 	RUN_TEST(test_tag);
 	return test_summary();

@@ -32,26 +32,44 @@
  *
  * The messages:
  *   CONNECT: the VideoCore answers with its own, once.
- *   OPEN: none of the VideoCore's services is emulated yet, so it
- *     refuses each with a CLOSE to the Arm's port from port 0, as
- *     parse_open does for a service it does not have; the Arm's open
- *     then fails (the service waits in CLOSEWAIT). A warning names each
- *     service, once.
- *   CLOSE: there is no service on the VideoCore's side to close; it is
- *     dropped, as parse_message drops a message to a port without one.
+ *   OPEN: for one of its services (raspi3b_vchiq_add_service) whose
+ *     versions meet the Arm's, the VideoCore answers OPENACK, with its
+ *     service's version, from a port of its own to the Arm's, as
+ *     parse_open does; the service is then open. Any other OPEN it
+ *     refuses with a CLOSE to the Arm's port from port 0, as parse_open
+ *     does for a service it does not have; the Arm's open then fails
+ *     (the service waits in CLOSEWAIT). A warning names each service it
+ *     does not have, once, and each version that does not meet.
+ *   DATA: to the service open on its port, from the Arm's port that
+ *     opened it; to any other port it is dropped, as parse_message drops
+ *     a message to a port without a service.
+ *   CLOSE: the service open on its port, or, to port 0, the one the
+ *     Arm's port opened (a CLOSE before the Arm had the OPENACK), is
+ *     closed and answers with a CLOSE of its own, as
+ *     vchiq_close_service_internal does for an open service that
+ *     receives one; it listens again. Any other is dropped.
  *   PADDING: skipped.
+ * A service sends DATA from its port to the Arm's
+ * (raspi3b_vchiq_send). A message that a slot's rest does not fit goes
+ * in the next slot, the rest a PADDING message. With no slot to send
+ * in, the VideoCore's messages wait for the Arm to recycle one, and it
+ * reads no more of the Arm's until they are sent, as queue_message
+ * waits and parse_rx_slots stops when a reply finds no space.
  *
  * smirror's choices: the VideoCore speaks VCHIQ version 8 and accepts 3
  * and up, those of Linux of the same release; slot zero must start the
  * memory, at a 4 KB boundary, as Linux's always does; the VideoCore
- * answers the Arm's CONNECT rather than connecting first. Not modelled,
- * and the machine stops: a slot zero that the VideoCore does not know,
- * a second VCHIQ_INIT, the doorbell before VCHIQ_INIT, the other
- * messages (DATA, the bulk transfers, PAUSE, RESUME, the REMOTE_USE
- * family, a second CONNECT, an OPEN before CONNECT), synchronous
- * messages, a message past the end of its slot, a slot queue that names
- * a slot outside its side, and the VideoCore running out of slots to
- * send in.
+ * answers the Arm's CONNECT rather than connecting first; each OPEN of
+ * a service gets the VideoCore's lowest free port from 1, of 32, and a
+ * service may be open many times, the firmware's instances being
+ * unknown. Not modelled, and the machine stops: a slot zero that the
+ * VideoCore does not know, a second VCHIQ_INIT, the doorbell before
+ * VCHIQ_INIT, the other messages (OPENACK, the bulk transfers, PAUSE,
+ * RESUME, the REMOTE_USE family, a second CONNECT, an OPEN before
+ * CONNECT), synchronous messages, a message past the end of its slot, a
+ * slot queue that names a slot outside its side, more than 32 services
+ * open, and more than 64 KB of the VideoCore's messages waiting for
+ * slots.
  */
 
 #ifndef MACHINE_RASPI3B_VCHIQ_H
@@ -93,5 +111,43 @@ bool raspi3b_vchiq_init(Raspi3bVchiq *v, uint32_t slots);
 
 /* The Arm rang the VideoCore's doorbell (Bcm2835DoorbellVc's ring). */
 void raspi3b_vchiq_doorbell(void *ctx);
+
+/* The largest message: a slot less its header (VCHIQ_MAX_MSG_SIZE). */
+#define RASPI3B_VCHIQ_MSG_MAX 4088u
+
+/*
+ * One of the VideoCore's services, which the Arm opens by its fourcc
+ * (the four characters, the first in bits 31:24) and versions. Each
+ * call has its own ctx and the VideoCore's port that the Arm opened;
+ * NULL: none.
+ *   open: the Arm opened it (the OPENACK is on its way).
+ *   data: the Arm's DATA, size bytes. Returns false when it stopped the
+ *     machine.
+ *   close: the Arm closed it, or the firmware started again.
+ *   reset: the firmware started again (after close).
+ */
+typedef struct Raspi3bVchiqService {
+	uint32_t fourcc;
+	uint16_t version, version_min;
+	void (*open)(void *ctx, unsigned port);
+	bool (*data)(void *ctx, unsigned port, const uint8_t *data, uint32_t size);
+	void (*close)(void *ctx, unsigned port);
+	void *ctx;
+	void (*reset)(void *ctx);
+} Raspi3bVchiqService;
+
+/*
+ * Add a service, which the VideoCore keeps a copy of; at most 8.
+ * Returns false when there is no room.
+ */
+bool raspi3b_vchiq_add_service(Raspi3bVchiq *v, const Raspi3bVchiqService *s);
+
+/*
+ * The service open on port sends the Arm DATA of size bytes, at most
+ * RASPI3B_VCHIQ_MSG_MAX. Returns false when it stopped the machine
+ * before the message could go or wait; it may go and stop it after.
+ */
+bool raspi3b_vchiq_send(Raspi3bVchiq *v, unsigned port, const void *data,
+                        uint32_t size);
 
 #endif /* MACHINE_RASPI3B_VCHIQ_H */
