@@ -29,3 +29,21 @@ Facts that were checked, and where the pinned software comes from.
   one run lists several stops. About 6 minutes a run.
 - Kernel time to /init: about 19 s with `-clock host` on one core; the
   Linux session test takes about 110 s.
+- Raspberry Pi OS Lite 64-bit **2026-10-06** (trixie, Linux 6.18.50+rpt),
+  sha256 pinned in `scripts/raspios-card.sh` (cache
+  `~/.cache/siliconmirror-raspios`): the image unchanged on an 8 GB
+  sparse card plus Imager's `user-data` (pi/raspberry,
+  `rpi.interfaces.serial`). No U-Boot: firmware HLE -> kernel8.img +
+  initramfs8 -> root on mmcblk0p2. First boot silent (enable_uart=0):
+  resize, cloud-init, raspi-config sets enable_uart=1, reboot; second
+  boot to `raspberrypi login:`, about 10 min of host time in all (longer when the host is busy)
+  (`raspios.session`, `docs/boot-logs/raspi3b-raspios.log`).
+- Always the virtual clock for it: with `-clock host` systemd's 1 min
+  hardware watchdog resets the board mid first boot.
+- What the stock DT and drivers needed: BSC (I2C) with nothing on the
+  bus, the HVS as vc4 sets it up with no display, VCHIQ CONNECT and
+  OPEN (services refused: SMEM, mmal), `NOTIFY_DISPLAY_DONE`, and the
+  firmware's KMS handling of config.txt (no `bcm2708_fb.*`).
+- Exploration of the Pi OS card: `sh .claude/tools/raspios_explore.sh
+  OUT_PREFIX` (debug copy with enable_uart=1, console on serial only,
+  systemd status shown). Its systemd status goes to tty1 otherwise.

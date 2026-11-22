@@ -56,9 +56,25 @@ test (`tests/linux/`, step G). Then the firmware's device tree
 details (model, serial, KASLR and RNG seeds, command line), and
 overlays/dtparam (af104d4).
 
+## Roadmap 5: Raspberry Pi OS to its login prompt
+
+An unmodified Raspberry Pi OS Lite 64-bit image (2026-10-06), with only
+Imager's cloud-init `user-data`, boots twice (the first silent, then
+the reboot that cloud-init asks for) to `raspberrypi login:`
+(`tests/raspios/`). What it needed beyond Linux with an initramfs,
+found by exploration runs (unmodelled registers read 0 with a log
+line): the firmware's handling of Pi OS's `config.txt` (KMS: no
+`bcm2708_fb.*`; `disable_overscan`, `max_framebuffers`,
+`disable_fw_kms_setup`, `arm_boost`), the three BSC (I2C) masters with
+nothing on the bus, VCHIQ's messages (CONNECT; OPEN refused with CLOSE;
+slot recycling), `NOTIFY_DISPLAY_DONE`, and the HVS as vc4 sets it up
+with no display. The rest of the system (ext4 with writes, resize,
+systemd, the watchdog reboot) already worked. Lesson: run it on the
+virtual clock; with `-clock host` systemd's 1 min watchdog resets the
+slow board mid first boot.
+
 ## What is next (owner decides)
 
-Item 5: an unmodified Raspberry Pi OS Lite image to its login prompt
-(root file system on the SD card). Then networking to the host, display
-and USB keyboard, I2C/SPI/PWM, Bluetooth, WiFi, the JIT. A second board
-uses the add-board skill.
+Networking to the host, display and USB keyboard, the VideoCore's VCHIQ
+services (audio, `vcgencmd`), I2C/SPI/PWM devices, Bluetooth, WiFi, the
+JIT. A second board uses the add-board skill.
