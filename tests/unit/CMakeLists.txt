@@ -146,6 +146,10 @@ add_executable(test_bcm2835_doorbell test_bcm2835_doorbell.c)
 target_link_libraries(test_bcm2835_doorbell PRIVATE hw)
 add_test(NAME unit.bcm2835_doorbell COMMAND test_bcm2835_doorbell)
 
+add_executable(test_bcm2835_hvs test_bcm2835_hvs.c)
+target_link_libraries(test_bcm2835_hvs PRIVATE hw)
+add_test(NAME unit.bcm2835_hvs COMMAND test_bcm2835_hvs)
+
 add_executable(test_bcm2835_bsc test_bcm2835_bsc.c)
 target_link_libraries(test_bcm2835_bsc PRIVATE hw)
 add_test(NAME unit.bcm2835_bsc COMMAND test_bcm2835_bsc)

@@ -141,6 +141,7 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f212000` | 8 B     | Temperature sensor                                       | Read only                  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
+| `0x3f400000` | 24 KB   | HVS, the video scaler; its display lists from `0x2000`   | Yes, no display            |
 | `0x3f804000` | 32 B    | BSC1, an I2C master (the GPIO header's)                  | Yes, nothing on its bus    |
 | `0x3f805000` | 32 B    | BSC2, an I2C master (the HDMI's DDC)                     | Yes, no display            |
 | `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host                  |
@@ -996,6 +997,29 @@ written during one, a read of an empty FIFO ("invalid data"), and the
 addresses past the eight registers in the device tree's 0x200 or
 0x1000 bytes.
 
+## The video scaler (HVS)
+
+The HVS at `0x3f400000` composes the planes of up to three displays.
+Broadcom does not document it; it behaves here as Linux's vc4 driver
+(`vc4_regs.h`, `vc4_hvs.c`) uses it on a board with no display, which
+is what Raspberry Pi OS's `vc4-kms-v3d` does at boot. At bind,
+`vc4_hvs_hw_init` enables it (`DISPCTRL`) and sets the output muxes
+(`DISPECTRL`, `DISPEOLN`, `DISPDITHER`), the AXI panic levels and the
+interrupts; the two scaling filters' kernels go into the display list
+memory (`0x2000` to `0x5fff`, 4096 words); and `vc4_hvs_cob_init`
+shares the composite output buffer between the three channels
+(`DISPBASE0` to `2`). These registers and the memory keep what is
+written. With no display, no channel runs: `DISPSTAT` reads 0 and
+ignores writes, and the HVS's interrupt, GPU interrupt 33, never comes.
+smirror shows no picture.
+
+smirror's choices: the registers and the memory read 0 after a reset,
+as what the firmware leaves there when it hands the display over is
+not documented. The rest stops the machine: accesses that are not
+32-bit, and the other registers, which a running channel needs
+(`DISPLISTx`, `DISPCTRLx`, `DISPBKGNDx`, `DISPSTATx`, the gamma RAM) or
+no driver uses on this board (`DISPID`, `DISPPROF`).
+
 ## The random number generator
 
 The random number generator at `0x3f104000` is not in the datasheet;
@@ -1385,6 +1409,12 @@ to quit.
   board's device tree (the three masters' registers and their shared
   interrupt); Raspberry Pi's Linux,
   [i2c-bcm2835.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/i2c/busses/i2c-bcm2835.c).
+- The HVS: Raspberry Pi's Linux,
+  [vc4_regs.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/gpu/drm/vc4/vc4_regs.h) and
+  [vc4_hvs.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/gpu/drm/vc4/vc4_hvs.c) (`vc4_hvs_hw_init`,
+  `vc4_hvs_cob_init`, `vc4_hvs_bind`, the filter kernels); the board's
+  device tree and the `vc4-kms-v3d` overlay of Raspberry Pi OS
+  2026-10-06.
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

@@ -20,6 +20,7 @@
 #include "cpu/arm64/cpu.h"
 #include "hw/char/bcm2835_aux.h"
 #include "hw/char/pl011.h"
+#include "hw/display/bcm2835_hvs.h"
 #include "hw/dma/bcm2835_dma.h"
 #include "hw/gpio/bcm2835_gpio.h"
 #include "hw/i2c/bcm2835_bsc.h"
@@ -229,6 +230,16 @@ static void destroy_rng(void *ctx)
 static void destroy_thermal(void *ctx)
 {
 	bcm2835_thermal_destroy(ctx);
+}
+
+static void reset_hvs(void *ctx)
+{
+	bcm2835_hvs_reset(ctx);
+}
+
+static void destroy_hvs(void *ctx)
+{
+	bcm2835_hvs_destroy(ctx);
 }
 
 static void reset_bsc(void *ctx)
@@ -533,6 +544,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Bcm2835Cprman *cprman;
 	Bcm2835Rng *rng;
 	Bcm2835Thermal *thermal;
+	Bcm2835Hvs *hvs;
 	SdCard *sd_card = NULL;
 	Bcm2835Sdhost *sdhost;
 	Bcm2835Dma *dma;
@@ -720,6 +732,19 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	}
 	if (!add_bsc(m, ic, error, error_size))
 		goto fail;
+	hvs = bcm2835_hvs_create(m);
+	if (hvs == NULL)
+		goto out_of_memory;
+	if (!machine_add_device(m, hvs, reset_hvs, destroy_hvs)) {
+		bcm2835_hvs_destroy(hvs);
+		goto out_of_memory;
+	}
+	status = bcm2835_hvs_map(hvs, m->bus, "hvs", RASPI3B_HVS_BASE);
+	if (status != BUS_OK) {
+		snprintf(error, error_size, "cannot map the HVS: %s",
+		         bus_status_str(status));
+		goto fail;
+	}
 
 	for (unsigned i = 0; i < BCM2835_GPIO_NUM_IRQS; i++)
 		gpio_irqs[i] = bcm2835_ic_gpu_input(ic, BCM2835_IC_GPIO0 + i);

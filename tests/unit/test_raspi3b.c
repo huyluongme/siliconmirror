@@ -883,6 +883,28 @@ static void test_bsc(void)
 	remove(KERNEL);
 }
 
+/* The HVS at 0x3f400000, its display list memory from 0x3f402000. */
+static void test_hvs(void)
+{
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_write(m->bus, 0x3f400000, 4, 0x80000000u), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f405ffc, 4, 7), BUS_OK);
+	CHECK_EQ(bus_read(m->bus, 0x3f400000, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0x80000000u);
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, 0x3f400000, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(bus_read(m->bus, 0x3f405ffc, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
 /*
  * The AXI bridges at 0x3f00a000, the power manager's second region: 36
  * bytes, of which their ID is modelled.
@@ -1184,6 +1206,7 @@ int main(void)
 	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
 	RUN_TEST(test_bsc);
+	RUN_TEST(test_hvs);
 	RUN_TEST(test_axi_bridges);
 	RUN_TEST(test_dma);
 	RUN_TEST(test_secondary_cores);
