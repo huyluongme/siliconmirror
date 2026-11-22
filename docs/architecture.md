@@ -141,7 +141,8 @@ The boot method decides how software gets into memory:
   `machine/raspi3b_firmware` puts them together, as the firmware does
   for that board, and `machine/raspi3b_property` answers the Arm through
   the mailboxes afterwards; `machine/raspi3b_vchiq` is the VideoCore's
-  end of VCHIQ, and `machine/raspi3b_smem` one of its services.
+  end of VCHIQ, and `machine/raspi3b_smem` and `machine/raspi3b_mmal`
+  its services.
 
 Each board has a page in `docs/boards/` with its memory map, its boot
 and how it differs from the real hardware.

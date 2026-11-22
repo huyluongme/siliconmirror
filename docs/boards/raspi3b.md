@@ -677,8 +677,8 @@ recycled enough of them, then signals the Arm's `trigger`.
   `-EINVAL`, its service waiting in `CLOSEWAIT`, and the driver
   reports it. A warning names each service it does not have, once (the
   first 16), and each `OPEN` whose versions do not meet. The services:
-  `SMEM` (below). `mmal`, `AUDS` and `GCMD` are refused; a real board
-  has them, so this is a difference. Raspberry Pi OS's `vcgencmd` does
+  `SMEM` and `mmal` (below). `AUDS` and `GCMD` are refused; a real
+  board has them, so this is a difference. Raspberry Pi OS's `vcgencmd` does
   not use `GCMD` but a tag (below), and opens nothing at boot.
 - `DATA` goes to the service open on its port, from the Arm's port
   that opened it; to any other port it is dropped, as `parse_message`
@@ -736,6 +736,83 @@ The other messages stop the machine (`ALLOC`, `LOCK`, `UNLOCK`,
 `vc-sm-cma` does not send), as do a message too short for its type,
 memory outside the RAM, a `FREE` of a handle not given, and more than
 256 handles.
+
+### mmal, the multimedia service
+
+Linux's MMAL users open `mmal`, version 15 from 10 (the VideoCore's
+are the same, those of Linux of the same release), once per device:
+`bcm2835-codec` five times, `bcm2835-isp` twice, `bcm2835-camera` once
+(`vchiq_mmal_init`). The messages are those of `vchiq-mmal`'s
+`mmal-msg.h`: a header of 24 bytes (MMAL's magic `mmal`, its first
+character in bits 7:0 as for all MMAL fourccs, the type,
+`control_service`, the Arm's context, a status, padding), then a body.
+The VideoCore answers each with the same header, its status 0 (that
+it copies the rest of the Arm's header is smirror's choice), and the
+reply's body, whose first word is MMAL's status. At probe, each driver
+creates a component, reads its ports, asks what they take, and, but for
+the ISP, destroys it:
+
+- `COMPONENT_CREATE` (4): a component by name; the reply gives its
+  handle and its numbers of input, output and clock ports. Handles
+  count from 1, the lowest free, 16 components at a time: smirror's
+  choice.
+- `COMPONENT_DESTROY` (5): a component of the client's goes.
+- `PORT_INFO_GET` (8): a port by type (control 1, input 2, output 3)
+  and index; the reply gives its handle, its `mmal_port` and its
+  format. smirror's choices, as nothing documents the firmware's ports:
+  a port's handle is its index among all the component's ports (the
+  control port 0, then the inputs, then the outputs); it is disabled,
+  its buffers 1 (minimum, recommended and number), their sizes and
+  alignment 0; its format video (the control port's unknown) of its
+  first encoding, all else 0. No component has clock ports.
+- `PORT_PARAMETER_GET` (15): `SUPPORTED_ENCODINGS` (1) of an input or
+  output port, and `CAMERA_INFO` (0x1001c) of `camera_info`'s control
+  port. A parameter larger than the Arm's room answers `ENOSPC` (2),
+  with its size and as much of it as fits, as `port_parameter_get`
+  expects.
+
+When the Arm closes the service, the client's components go.
+
+| Component | Ports (in, out) | Encodings |
+|---|---|---|
+| `ril.video_decode` | 1, 1 | in: MPEG-4, H.264, H.263, MJPEG, VP8; out: I420, YV12, NV12, NV21, RGB565 |
+| `ril.video_encode` | 1, 1 | in: I420, YV12, NV12, NV21, RGB565, RGB24, BGR24, BGRA, YUYV, YVYU, UYVY, VYUY; out: H.264, MJPEG |
+| `ril.isp` | 1, 3 | in: 53 (Bayer of 8 bits, 10, 12 and 14 packed, 16; grey; YUV and RGB; Bayer and grey of 10, 12 and 14 unpacked); out: 13 YUV and RGB, 8 YUV, the statistics |
+| `ril.image_fx` | 1, 1 | in and out: I420, SAND (`YUVUV128`) |
+| `ril.image_encode` | 1, 1 | in: the video encoder's 12; out: JPEG |
+| `camera_info` | 0, 0 | `CAMERA_INFO`: no camera, no flash (144 bytes, Linux's struct) |
+
+V4L2 lists a port's encodings that it knows in the firmware's order
+(`get_supported_fmts`), and its first is the default
+(`get_default_format`), so the lists of real boards give the firmware's
+order: the ISP's input on a Zero 2 W, which has the Pi 3's VideoCore
+(Linux 6.6.74, 2025), and its outputs (2021); the decoder's output on a
+Pi 3B+ and the encoder's (2020), the encoder's input the same on a Pi 4.
+The decoder's input there is a Pi 4's, H.264, MJPEG and VP8; the Pi 3
+has MPEG-4 and H.263 too (the Pi 4 has not), and a Pi 3 of 2019, before
+the Pi 4, took MPEG-4 as the default, so it comes first; the rest
+follows the Pi 4's order, H.263 placed after H.264 (smirror's choice).
+MPEG-2 and VC-1 need a licence (`decode_MPG2`, `decode_WVC1`) that this
+board does not have. Not found, and smirror's choice: the image
+effects' (deinterlace) encodings, the image encoder's input (the video
+encoder's) and its output (JPEG alone; Linux knows no other). With no
+camera, `bcm2835-camera` makes no device, as on a board with none
+("It won't create any /dev/videoN devices if the camera isn't
+detected", Raspberry Pi's firmware issue 1141).
+
+On Raspberry Pi OS this gives the devices of a real board with no
+camera: `/dev/video10` to `12`, `18` and `31` (`bcm2835-codec`:
+decode, encode, isp, image_fx, encode_image) and `/dev/video13` to `16`
+and `20` to `23` (`bcm2835-isp`), with the boards' lists
+(`tests/raspios/session.txt` reads them with `VIDIOC_ENUM_FMT`).
+
+What is not modelled stops the machine: the other messages (enabling
+components and ports, setting formats, buffers, the other parameters:
+streaming as a whole, so no decode, encode or ISP work yet), the other
+components (`ril.camera`, the renderers...), a message without MMAL's
+magic or too short for its type, a handle or port that is not the
+client's, a `PORT_PARAMETER_GET` room larger than a reply holds, and
+more than 16 components.
 
 ### vcgencmd
 
@@ -1417,9 +1494,9 @@ hardware timeout of 1min"), misses it and the board resets in the
 middle of the first boot, as a real board would, which leaves the card
 half set up.
 
-What a real board does that this one does not: its MMAL drivers
-(`bcm2835-mmal-vchiq`, for the codecs, the ISP and the camera) fail, as
-the VideoCore refuses `mmal` (VCHIQ, above; `vc-sm-cma` opens `SMEM`);
+The MMAL drivers probe as on a real board with no camera (mmal,
+above): `bcm2835-codec` and `bcm2835-isp` make their devices, and
+`bcm2835-camera` none. What a real board does that this one does not:
 the WiFi controller finds no
 card ("mmc1: Failed to initialize a non-removable card"); and there is
 no display, sound or network to the host.
@@ -1513,9 +1590,13 @@ to quit.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
-- Of the VideoCore's VCHIQ services, only the shared memory (`SMEM`)
-  is emulated; it refuses the others (`mmal`, `AUDS` the audio, `GCMD`),
-  so the drivers that use them fail where a real board's would work.
+- Of the VideoCore's VCHIQ services, the shared memory (`SMEM`) and
+  the multimedia (`mmal`) are emulated; it refuses the others (`AUDS`
+  the audio, `GCMD`), so the drivers that use them fail where a real
+  board's would work. `mmal` does what its drivers ask at probe; the
+  first message of streaming (decode, encode, the ISP) stops the
+  machine, and some of its encodings are smirror's choice (mmal,
+  above).
 - `vcgencmd` answers seven commands (vcgencmd, above), in shapes taken
   from what real boards print; any other command stops the machine,
   where a real board answers it or reports an error. Its clocks give
@@ -1602,6 +1683,30 @@ to quit.
   [vc-sm-cma](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/vc-sm-cma)
   (`vc_sm_defs.h`: the messages; `vc_sm_cma_vchi.c`: the header, the
   transaction ids, bit 31; `vc_sm.c`: `vc_sm_vpu_event`, the import).
+- mmal: Raspberry Pi's Linux at cff533a,
+  [vchiq-mmal](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/vchiq-mmal)
+  (`mmal-msg*.h`: the messages; `mmal-parameters.h`,
+  `mmal-encodings.h`: the values; `mmal-vchiq.c`: the client),
+  [bcm2835-codec](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/bcm2835-codec),
+  [bcm2835-isp](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/bcm2835-isp)
+  (`bcm2835-isp-fmts.h`) and
+  [bcm2835-camera](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/bcm2835-camera)
+  (what each probe sends). Real boards' V4L2 lists, from Raspberry Pi's
+  forums: a Zero 2 W's ISP input
+  ([p=2342774](https://forums.raspberrypi.com/viewtopic.php?p=2342774)),
+  the ISP's outputs
+  ([t=306258](https://forums.raspberrypi.com/viewtopic.php?t=306258)),
+  the decoder and encoder of a Pi 3B+ and others, and a default of 2019
+  ([t=234778](https://forums.raspberrypi.com/viewtopic.php?t=234778)),
+  a Pi 4's
+  ([t=294161](https://forums.raspberrypi.com/viewtopic.php?t=294161)),
+  the codecs that the Pi 4 has not
+  ([t=262558](https://forums.raspberrypi.com/viewtopic.php?t=262558));
+  the devices of a Zero 2 W and a Pi 4
+  ([t=391473](https://forums.raspberrypi.com/viewtopic.php?t=391473),
+  [rpicam-apps 591](https://github.com/raspberrypi/rpicam-apps/issues/591));
+  no camera, no device
+  ([firmware 1141](https://github.com/raspberrypi/firmware/issues/1141)).
 - vcgencmd: raspberrypi/utils,
   [vcgencmd.c](https://github.com/raspberrypi/utils/blob/master/vcgencmd/vcgencmd.c)
   (`GET_GENCMD_RESULT`, `/dev/vcio`), the binary of Raspberry Pi OS
