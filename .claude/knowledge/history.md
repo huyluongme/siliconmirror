@@ -73,6 +73,16 @@ systemd, the watchdog reboot) already worked. Lesson: run it on the
 virtual clock; with `-clock host` systemd's 1 min watchdog resets the
 slow board mid first boot.
 
+## Networking to the host, part 1 (2026-11-23)
+
+`-net tap:IFNAME` and `-net pcap:PATH` behind core/net.h, the cable in
+machine/net_cable.c. The first cable ever plugged in found two bugs
+that no test without one could: the DWC2 never raised `SOF`, so Linux's
+dwc2 never polled an interrupt endpoint again after a NAK; and the
+LAN9514's lite reset cleared the PHY's interrupt mask that Linux sets
+only at bind. Lesson: a path the guest never took is untested even when
+its unit tests pass; bring real software to it (here, `linux.net`).
+
 ## What is next (owner decides)
 
 Networking to the host (chosen next), the JIT, display and USB

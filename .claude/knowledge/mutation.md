@@ -50,11 +50,23 @@ cannot happen or gives the same result; initial values always
 overwritten; `break` at the end of the last case; `free` deletions
 (leaks only); sanity checks that callers make impossible; values after
 a stop; uninitialised stack reads that happen to be zero (a one-off
-MSan build can confirm).
+MSan build can confirm). Host I/O: `EAGAIN` and `EWOULDBLOCK` are the
+same value on Linux; a regular file writes partly only at its limit,
+after which the next write fails, so the pointer's advance is never
+seen; `write()` returns 0 only for 0 bytes; code under `#else` of
+another host. A board's leaks in its failure paths: `main()` still holds
+the pointer in `BoardOptions`, so LeakSanitizer sees it reachable.
+What only root can reach (a real TAP device's flags, a read-only open)
+is checked by hand, not in CI.
 
 ## Gaps it found that tests had missed
 
-Error paths of malformed input (broken overrides, fixups); boundaries
+A test that skips when the code under test fails in a way that
+looks like the host's (net_tap test_tun took a mutant's success for
+"allowed to make devices"): decide a skip with the test's own probe,
+never with the code under test. Descriptors 0 (`close(0)` first) and
+fd leaks (`fcntl(fd, F_GETFD)` after destroy). Error paths of malformed
+input (broken overrides, fixups); boundaries
 (offset 0 vs non-zero, single-character names, the first word of a
 list); messages of warnings never checked; a dtparam dropped after a
 failed overlay. Mutation testing does not prove a model right: a

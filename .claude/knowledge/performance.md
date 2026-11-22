@@ -18,6 +18,13 @@ still stops the machine.
 Baseline then: about 70-110 M instructions/s; QEMU about 1 G/s on the
 same loop.
 
+Session times on the owner's machine (release, 2026-11-23): U-Boot
+209 s, Linux 118 s, Pi OS 1296 s alone before the DWC2's `SOF`; with
+it, and the sessions run 4 at a time, 233 s, 135 s and 1453 s. `SOF`
+interrupts the guest every 125 us of virtual time while Linux keeps a
+periodic transfer queued (always, with the hub's and the LAN9514's
+interrupt endpoints), as on the board.
+
 ## Phase 3: JIT (weeks; the owner decides when)
 
 Own design, x86-64 hosts first; the interpreter stays as the reference

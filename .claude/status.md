@@ -4,43 +4,47 @@ Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
 - **Date:** 2026-11-23
-- **master:** af1d80a (status after task 1, part 2), then this task's
-  commits.
+- **master:** ff40122 (task 1 closed, networking next), then this
+  task's commits.
 - **Board:** raspi3b. Roadmap items 1-5 done: from power on, the
   firmware HLE, U-Boot, Linux to the BusyBox shell
   (`docs/boot-logs/raspi3b-uboot-linux.log`), and an unmodified
   Raspberry Pi OS Lite to its login prompt
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
-- **Last task:** task 1, part 3, the VideoCore's audio service `AUDS`
-  (machine/raspi3b_auds) and the audio outputs (core/audio.h,
-  backend/audio: `-audio wav:PATH`, `-audio alsa[:DEVICE]` through
-  libasound, optional at build). snd-bcm2835's streams play in virtual
-  time, 10 ms blocks, `COMPLETE` with bit 30 at the end, the volume
-  applied; HDMI (no display) goes nowhere. The Pi OS session plays two
-  files with `aplay` and `raspios.audio` (tests/raspios/audio_check.c)
-  checks the WAV files sample for sample. Mutation linux26 (fresh run
-  after two OOM-killed runs, see knowledge/mutation.md): 957 mutants,
-  142 survivors, all equivalent (sizes, OOM, values after a stop, leaks,
-  the 4 GB WAV limit, ALSA paths only a real card reaches; the board's
-  wiring of the output is checked by raspios.audio). Boot logs unchanged:
-  nothing opens AUDS at boot.
+- **Last task:** networking to the host, part 1 of 2: the network link
+  interface (core/net.h, frames without FCS; net_to_wire/net_from_wire),
+  the cable (machine/net_cable: the partner's MAC, frames paced at the
+  link's speed), `-net tap:IFNAME` and `-net pcap:PATH`
+  (backend/net). Two fixes that a cable brought out: the DWC2 now
+  raises `SOF` every microframe (Linux's dwc2 waits for it after an
+  interrupt endpoint's NAK, so the LAN9514's link interrupt never came),
+  and the LAN9514's lite reset leaves the PHY as it is (Linux 6.18 sets
+  the PHY's interrupt mask at bind, lite-resets at open; our reading,
+  docs/boards/raspi3b.md). Session `linux.net`: link up at 100 Mb/s
+  full, ping, `net_check` finds the three ARP requests in the capture.
+  SOF costs about 10% on the sessions (Pi OS session 21.6 -> 24.2 min,
+  the latter with other sessions running). TAP itself is checked over a
+  socket pair in unit tests; a real TAP needs root once
+  (`ip tuntap add ... user $USER`), not in CI. Mutation linux27: 398
+  mutants, 84 survivors at first; after the new tests 44, all
+  equivalent (sizes, OOM, the board's leaks in failure paths,
+  `EAGAIN == EWOULDBLOCK`, partial writes of regular files, non-Linux
+  code, what only root reaches with a real TAP; the board's
+  `lan95xx_plug` is checked by `linux.net`).
 
 ## Next tasks
 
-Task 1 (the VideoCore's VCHIQ services) is closed (2026-11-23): what
-Pi OS uses at boot and to play sound works. The owner chose networking
-next.
-
-1. **Next: networking to the host**, a back end behind the LAN9514
-   (src/hw/net/lan95xx.c, which has no cable today): Pi OS would get
-   an address and run ssh. First question for the owner: how frames
-   reach the host (a TAP device, which needs root to set up once, or a
-   user-mode network written in smirror, larger, as QEMU's -netdev
-   user does: credit the idea, never read its code), and the CLI
-   (`-net ...`). A new back end kind: core interface plus
-   `src/backend/net/`, as audio did (docs/architecture.md).
+1. **Next: networking part 2, `-net user`**: a user-mode network in
+   smirror, no root (the idea of QEMU's `-netdev user`: credit the idea,
+   never read its code): ARP and a gateway at 10.0.2.2, DHCP giving
+   10.0.2.15, DNS forwarded to the host's resolver, ICMP echo to the
+   gateway, UDP and TCP NAT through host sockets, and `hostfwd=tcp:
+   HOSTPORT-:GUESTPORT` so that `ssh -p 2222 localhost` reaches Pi OS.
+   Its own back end in `src/backend/net/user*.c` behind core/net.h. A
+   Pi OS session that gets an address by DHCP and answers ssh would
+   check it end to end (CI can run it: no root).
 2. Performance phase 3, the JIT (`.claude/knowledge/performance.md`):
-   a Pi OS boot takes about 10 minutes.
+   the Pi OS session takes about 24 minutes.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
 4. I2C, SPI, PWM devices; Bluetooth; WiFi (SDIO chip).
 5. A second board: the add-board skill.
@@ -62,6 +66,9 @@ and `--list-formats` (ours: YU12 NC12), `-d 31 --list-formats-out`.
 `get_throttled`, and `for c in arm core v3d h264 isp uart emmc; do
 vcgencmd measure_clock $c; done` (the shapes and clock numbers ours
 follow), and `vcgencmd foo` (what an unknown command answers).
+`sudo ethtool eth0` with a cable, and `cat /sys/class/net/eth0/carrier`
+right after `ip link set eth0 down; ip link set eth0 up` (whether the
+lite reset at open drops the link: ours keeps it).
 `amixer -c Headphones contents` after boot (the controls' starting
 values; ours follow Linux: switch off, 0 dB, auto).
 On Raspberry Pi OS with no display: the HVS's `DISPCTRL` and `DISPSTAT`
