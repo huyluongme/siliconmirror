@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -191,11 +192,24 @@ static void start(char **argv)
 	}
 }
 
+static bool all_zero(const char *buf, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+		if (buf[i] != 0)
+			return false;
+	return true;
+}
+
+/*
+ * Copy a card, leaving its blocks of zeros as holes, as cp
+ * --sparse=always does: Raspberry Pi OS's card is 8 GB, mostly empty.
+ */
 static bool copy(const char *from, const char *to)
 {
 	FILE *in = fopen(from, "rb"), *out;
 	char buf[65536];
 	size_t n;
+	off_t size = 0;
 	bool ok = true;
 
 	if (in == NULL)
@@ -205,10 +219,16 @@ static bool copy(const char *from, const char *to)
 		fclose(in);
 		return false;
 	}
-	while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
-		ok &= fwrite(buf, 1, n, out) == n;
+	while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+		if (all_zero(buf, n))
+			ok &= fseeko(out, (off_t)n, SEEK_CUR) == 0;
+		else
+			ok &= fwrite(buf, 1, n, out) == n;
+		size += (off_t)n;
+	}
 	ok &= !ferror(in);
 	fclose(in);
+	ok &= fflush(out) == 0 && ftruncate(fileno(out), size) == 0;
 	ok &= fclose(out) == 0;
 	return ok;
 }

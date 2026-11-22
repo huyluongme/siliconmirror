@@ -1,0 +1,49 @@
+# A Raspberry Pi OS session on the raspi3b: the card of
+# scripts/raspios-card.sh, the release image as Raspberry Pi Imager
+# writes it (a user-data that makes the user pi and turns the serial
+# console on), which the firmware boots as a real card. drive.c runs
+# it; see its comment for the commands.
+#
+# The first boot says nothing on the serial console, as enable_uart is
+# 0: Raspberry Pi OS grows the root partition and its file system,
+# cloud-init makes the user, and raspi-config sets enable_uart=1, then
+# the board reboots: most of the ten minutes of the session.
+timeout 3600
+expect Booting Linux on physical CPU 0x0000000000 [0x410fd034]
+expect Machine model: Raspberry Pi 3 Model B Rev 1.2
+expect smp: Brought up 1 node, 4 CPUs
+expect mmcblk0: mmc0:aaaa SMSD1 8.00 GiB
+expect EXT4-fs (mmcblk0p2): mounted filesystem
+expect Debian GNU/Linux 13 raspberrypi ttyS0
+expect raspberrypi login:
+timeout 300
+type pi\r
+expect Password:
+type raspberry\r
+expect pi@raspberrypi:~$
+
+# The board, the grown root partition (from sector 1064960 to the end
+# of the card of 8 GiB), and what cloud-init and raspi-config did.
+type cat /proc/device-tree/model; echo\r
+expect Raspberry Pi 3 Model B Rev 1.2
+expect pi@raspberrypi:~$
+type cat /sys/block/mmcblk0/mmcblk0p2/size\r
+expect 15712256
+expect pi@raspberrypi:~$
+type id\r
+expect uid=1000(pi) gid=1000(pi)
+expect pi@raspberrypi:~$
+type grep --color=never enable_uart /boot/firmware/config.txt\r
+expect enable_uart=1
+expect pi@raspberrypi:~$
+
+# The board powers off: RSTS asks the firmware not to boot, smirror
+# ends. Linux waits for the mini UART for two bytes' time only, so the
+# end of its last line is lost, as on the board.
+type sudo poweroff\r
+expect password for pi:
+type raspberry\r
+timeout 900
+expect reboot: Power
+expect the board halted
+end

@@ -1307,6 +1307,41 @@ goes where the rules of 7 put it, and boots without a device tree; the
 settings are those of an empty `config.txt` with `enable_uart=1`. The
 card, if any, stays in its slot.
 
+## Raspberry Pi OS
+
+`scripts/raspios-card.sh` makes the card of Raspberry Pi OS Lite
+(64-bit) of 2026-10-06, Debian 13 "trixie", as Raspberry Pi Imager
+writes it: the release image unchanged, on a card of 8 GB, and on its
+boot partition a cloud-init `user-data` that makes the user `pi`
+(password `raspberry`) and turns the serial console on
+(`rpi.interfaces.serial`). The firmware boots it as a real card:
+`config.txt` and `cmdline.txt` of the image, its `kernel8.img` (Linux
+6.18) with `initramfs8` (`auto_initramfs`), the root file system on the
+second partition.
+
+The first boot says nothing on the serial console: `enable_uart` is 0,
+so the firmware leaves the mini UART off. Raspberry Pi OS grows the
+root partition to the end of the card (its initramfs, `resize` on the
+command line) and its file system (`systemd-growfs-root`), gives the
+card a new disk identifier, and cloud-init makes the user and runs
+`raspi-config`, which sets `enable_uart=1` and reboots the board. The
+second boot shows Linux and systemd on the serial console, to
+`raspberrypi login:`. Both take about ten minutes of a fast host's time
+(`docs/boot-logs/raspi3b-raspios.log`, the `raspios.session` test).
+
+Run it on the virtual clock, the default. With `-clock host`, the
+emulated board runs much slower than the real one, so systemd, which
+runs the watchdog with a timeout of a minute ("Watchdog running with a
+hardware timeout of 1min"), misses it and the board resets in the
+middle of the first boot, as a real board would, which leaves the card
+half set up.
+
+What a real board does that this one does not: its drivers of the
+VideoCore's services (`vc-sm-cma`, `bcm2835-mmal-vchiq`) fail, as the
+VideoCore refuses them (VCHIQ, above); the WiFi controller finds no
+card ("mmc1: Failed to initialize a non-removable card"); and there is
+no display, sound or network to the host.
+
 ## Boot with `-kernel`
 
 For `kernel8.img`, the Raspberry Pi firmware does the following:
@@ -1500,6 +1535,11 @@ to quit.
   [vc4_drv.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/gpu/drm/vc4/vc4_drv.c) and
   [raspberrypi-firmware.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/include/soc/bcm2835/raspberrypi-firmware.h)
   (`NOTIFY_DISPLAY_DONE`).
+- Raspberry Pi OS: the image of 2026-10-06 itself (its `config.txt`,
+  `cmdline.txt`, `user-data`, and cloud-init's `cc_raspberry_pi.py`
+  and `raspi-config` in its root file system), and
+  [Cloud-init on Raspberry Pi OS](https://raspberrypi.com/news/cloud-init-on-raspberry-pi-os)
+  (Imager's `user-data`, the `rpi` module).
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

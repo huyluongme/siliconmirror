@@ -77,6 +77,16 @@ it and keeps what the console shows in
 [docs/boot-logs/raspi3b-uboot-linux.log](docs/boot-logs/raspi3b-uboot-linux.log),
 which each change updates: its history shows how far the boot gets.
 
+`scripts/raspios-card.sh` makes the card of an unmodified Raspberry Pi
+OS Lite (64-bit) image, as Raspberry Pi Imager writes it: a cloud-init
+`user-data` makes the user `pi` (password `raspberry`) and turns the
+serial console on. smirror boots it as the real board does: a first
+boot, silent on the serial console, that sets the system up and
+reboots, then a second to the login prompt, in about ten minutes. A test
+logs in and powers the board off (`release` builds only, skipped
+without the card), and `scripts/boot-log.sh` keeps that boot too, in
+[docs/boot-logs/raspi3b-raspios.log](docs/boot-logs/raspi3b-raspios.log).
+
 `scripts/fuzz.sh [SECONDS]` fuzzes, with clang's libFuzzer, what
 smirror reads from an SD card: the MBR, FAT, `config.txt`, device
 trees and gzip kernels, each for SECONDS (60 by default).
@@ -180,7 +190,7 @@ pages in [docs/boards/](docs/boards/) describe how each board boots.
    Done.
 3. MMU, SD host, mailbox, firmware emulation: U-Boot prompt. Done.
 4. SMP (spin table): Linux with an initramfs to a serial shell. Done.
-5. Root file system on SD: Raspberry Pi OS Lite login.
+5. Root file system on SD: Raspberry Pi OS Lite login. Done.
 6. USB, networking (Ethernet, and the WiFi chip on SDIO), framebuffer.
 
 ## Contributing

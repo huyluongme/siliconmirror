@@ -35,6 +35,8 @@ src/
     sd/               SD host controllers and SD cards
     usb/              USB: host controllers (dwc2), devices, hubs
     net/              Ethernet controllers (lan95xx, on USB)
+    i2c/              I2C masters (bcm2835_bsc)
+    display/          Display blocks (bcm2835_hvs)
     misc/             Everything else (bcm2835_mbox, bcm2835_pm)
   backend/            Host resources used by devices
     char/             Character streams: stdio, file, socket
@@ -50,6 +52,8 @@ tests/
   cli/                Command-line tests
   baremetal/          AArch64 test programs run inside the emulator
   uboot/              A U-Boot session on the raspi3b
+  linux/              A Linux session on the raspi3b
+  raspios/            A Raspberry Pi OS session on the raspi3b
   fuzz/               Fuzzers for what an SD card holds
 ```
 
@@ -232,6 +236,11 @@ Known limits, to be handled when the devices that need it arrive:
   `scripts/linux-card.sh`, which the firmware boots, to the shell of
   its initramfs, then commands, a reboot and a power off. Optimized
   builds only, on a host that has the card.
+- `tests/raspios/`: Raspberry Pi OS the same way: the card of
+  `scripts/raspios-card.sh`, the release image as Raspberry Pi Imager
+  writes it, through its first boot, which reboots, to the login
+  prompt, then a login, commands and a power off. About ten minutes;
+  optimized builds only, on a host that has the card.
 - `tests/fuzz/`: libFuzzer targets for what smirror reads from an SD
   card, which may be anything: the MBR, FAT volumes, `config.txt` and
   devicetree blobs. `scripts/fuzz.sh` builds them with clang,
