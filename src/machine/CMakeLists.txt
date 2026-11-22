@@ -6,6 +6,7 @@
 add_library(machine STATIC
 	board.c
 	raspi3b.c
+	raspi3b_auds.c
 	raspi3b_firmware.c
 	raspi3b_mmal.c
 	raspi3b_property.c
@@ -14,6 +15,8 @@ add_library(machine STATIC
 	raspi3b_vchiq.c)
 
 target_link_libraries(machine PUBLIC boot cpu hw core)
+# pow(), for the audio service's volume.
+target_link_libraries(machine PRIVATE m)
 
 # The boot stub of the raspi3b board, raspi3b_stub.s, is AArch64 code
 # that runs inside the emulator. smirror is built from its bytes kept in

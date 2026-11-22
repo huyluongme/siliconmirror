@@ -14,6 +14,7 @@
 #include "core/bus.h"
 #include "hw/misc/bcm2835_thermal.h"
 #include "machine/raspi3b.h"
+#include "machine/raspi3b_auds.h"
 #include "machine/raspi3b_mmal.h"
 #include "machine/raspi3b_smem.h"
 #include "machine/raspi3b_vchiq.h"
@@ -247,6 +248,7 @@ struct Raspi3bProperty {
 	Raspi3bVchiq *vchiq;        /* the VideoCore's end of VCHIQ */
 	Raspi3bSmem *smem;          /* and its services */
 	Raspi3bMmal *mmal;
+	Raspi3bAuds *auds;
 	unsigned num_fb_tags;
 	Value value;              /* the tag being answered */
 	Clock clocks[NUM_CLOCKS]; /* last: a read past them leaves the object */
@@ -402,7 +404,9 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 		p->smem = raspi3b_smem_create(m, p->vchiq, ram_size);
 	if (p->smem != NULL)
 		p->mmal = raspi3b_mmal_create(m, p->vchiq);
-	if (p->mmal == NULL || !raspi3b_property_configure(p, &defaults)) {
+	if (p->mmal != NULL)
+		p->auds = raspi3b_auds_create(m, p->vchiq);
+	if (p->auds == NULL || !raspi3b_property_configure(p, &defaults)) {
 		raspi3b_property_destroy(p);
 		return NULL;
 	}
@@ -411,6 +415,8 @@ Raspi3bProperty *raspi3b_property_create(Machine *m, uint32_t ram_size)
 
 void raspi3b_property_destroy(Raspi3bProperty *p)
 {
+	if (p->auds != NULL)
+		raspi3b_auds_destroy(p->auds);
 	if (p->mmal != NULL)
 		raspi3b_mmal_destroy(p->mmal);
 	if (p->smem != NULL)
@@ -424,6 +430,11 @@ void raspi3b_property_destroy(Raspi3bProperty *p)
 Raspi3bVchiq *raspi3b_property_vchiq(Raspi3bProperty *p)
 {
 	return p->vchiq;
+}
+
+void raspi3b_property_set_audio(Raspi3bProperty *p, AudioOut *out)
+{
+	raspi3b_auds_set_output(p->auds, out);
 }
 
 bool raspi3b_property_configure(Raspi3bProperty *p,

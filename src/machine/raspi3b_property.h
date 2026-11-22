@@ -35,6 +35,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "core/audio.h"
 #include "core/machine.h"
 #include "machine/raspi3b_vchiq.h"
 
@@ -93,6 +94,13 @@ uint32_t raspi3b_property_arm_memory(const Raspi3bProperty *p);
 
 /* The VideoCore's end of VCHIQ, which VCHIQ_INIT starts. */
 Raspi3bVchiq *raspi3b_property_vchiq(Raspi3bProperty *p);
+
+/*
+ * Where the VideoCore's audio service (raspi3b_auds.h) sends the
+ * headphones' sound: out, which the caller keeps, or NULL for nothing
+ * plugged in.
+ */
+void raspi3b_property_set_audio(Raspi3bProperty *p, AudioOut *out);
 
 /*
  * The size of the frame buffer that the firmware sets up at boot, with

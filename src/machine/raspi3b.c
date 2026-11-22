@@ -387,6 +387,11 @@ static void destroy_card(void *ctx)
 	block_destroy(ctx);
 }
 
+static void destroy_audio(void *ctx)
+{
+	audio_destroy(ctx);
+}
+
 /*
  * The SD card. A reset of the board does not cut its power, but the boot
  * ROM's CMD0 puts it back in the idle state.
@@ -559,16 +564,24 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	if (m == NULL) {
 		char_stream_destroy(options->serial);
 		block_destroy(options->sd);
+		audio_destroy(options->audio);
 		goto out_of_memory;
 	}
 	if (!machine_add_device(m, options->serial, NULL, destroy_serial)) {
 		char_stream_destroy(options->serial);
 		block_destroy(options->sd);
+		audio_destroy(options->audio);
 		goto out_of_memory;
 	}
 	if (options->sd != NULL &&
 	    !machine_add_device(m, options->sd, NULL, destroy_card)) {
 		block_destroy(options->sd);
+		audio_destroy(options->audio);
+		goto out_of_memory;
+	}
+	if (options->audio != NULL &&
+	    !machine_add_device(m, options->audio, NULL, destroy_audio)) {
+		audio_destroy(options->audio);
 		goto out_of_memory;
 	}
 
@@ -639,6 +652,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		raspi3b_property_destroy(property);
 		goto out_of_memory;
 	}
+	raspi3b_property_set_audio(property, options->audio);
 	mbox = bcm2835_mbox_create(
 		m, &(Bcm2835MboxVc){raspi3b_property_receive, property}, VC_LATENCY_NS,
 		bcm2835_ic_arm_input(ic, BCM2835_IC_ARM_MAILBOX));

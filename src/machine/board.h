@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 
+#include "core/audio.h"
 #include "core/block.h"
 #include "core/char_stream.h"
 #include "core/machine.h"
@@ -30,6 +31,13 @@ typedef struct BoardOptions {
 	 * the call to create() on, even if create() fails.
 	 */
 	BlockDevice *sd;
+
+	/*
+	 * -audio: where the board's sound goes, or NULL for nothing plugged
+	 * in. The board owns it from the call to create() on, even if
+	 * create() fails.
+	 */
+	AudioOut *audio;
 
 	/* Messages that do not stop the board, such as what it ignores. */
 	void (*warn)(void *ctx, const char *message);
