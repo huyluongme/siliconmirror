@@ -18,4 +18,24 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 		SKIP_RETURN_CODE 77
 		TIMEOUT 3600
 		LABELS linux)
+
+	# The cable into a capture (net.txt), and what Linux sent (net_check).
+	set(net_card ${CMAKE_CURRENT_BINARY_DIR}/net-card.img)
+	set(pcap ${CMAKE_CURRENT_BINARY_DIR}/net.pcap)
+	add_test(NAME linux.net
+		COMMAND drive ${SMIRROR_LINUX_CARD} ${net_card}
+			${CMAKE_CURRENT_SOURCE_DIR}/net.txt
+			$<TARGET_FILE:smirror> -M raspi3b -sd ${net_card} -net pcap:${pcap})
+	set_tests_properties(linux.net PROPERTIES
+		SKIP_RETURN_CODE 77
+		TIMEOUT 3600
+		LABELS linux)
+	add_executable(net_check net_check.c)
+	target_link_libraries(net_check PRIVATE util)
+	add_test(NAME linux.net_check
+		COMMAND net_check ${SMIRROR_LINUX_CARD} ${pcap})
+	set_tests_properties(linux.net_check PROPERTIES
+		DEPENDS linux.net
+		SKIP_RETURN_CODE 77
+		LABELS linux)
 endif()

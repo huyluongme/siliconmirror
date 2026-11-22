@@ -1,0 +1,24 @@
+# A Linux session on the raspi3b with its cable plugged into a capture
+# (-net pcap:PATH): the link comes up at 100 Mb/s, full duplex, as the
+# partner offers, and what Linux sends reaches the file; net_check.c
+# checks it. drive.c runs it; see its comment for the commands.
+
+timeout 900
+expect Booting Linux on physical CPU
+expect eth0: register 'smsc95xx'
+expect b8:27:eb:ff:ee:03
+timeout 120
+
+# The cable is in: negotiation, then the link.
+type ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up\r
+expect Link is Up - 100Mbps/Full - flow control off
+
+# Nobody answers on a capture: Linux asks who has 10.0.2.2, three times.
+type ping -c 1 -W 3 10.0.2.2\r
+expect 1 packets transmitted, 0 packets received
+expect ~ #
+
+type poweroff -f\r
+expect reboot: Power
+expect the board halted
+end
