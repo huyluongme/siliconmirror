@@ -1857,6 +1857,150 @@ static void test_gpio_expander(void)
 }
 
 /*
+ * GET_GENCMD_RESULT as raspberrypi/utils' vcgencmd sends it: a word for
+ * the answer's code, then the command, in a value of 1028 bytes. The
+ * answer's text goes to text.
+ */
+#define GENCMD_WORDS (6 + 1024 / 4 + 1)
+
+static void gencmd_buffer(uint32_t *buf, const char *command)
+{
+	memset(buf, 0x5a, 4 * GENCMD_WORDS);
+	buf[0] = 4 * GENCMD_WORDS;
+	buf[1] = 0;
+	buf[2] = 0x00030080;
+	buf[3] = 1028;
+	buf[4] = 0;
+	buf[5] = 0; /* the code's word, which vcgencmd clears */
+	memcpy(&buf[6], command, strlen(command) + 1);
+	buf[GENCMD_WORDS - 1] = 0;
+}
+
+static void gencmd(Setup *s, const char *command, const char *expected)
+{
+	uint32_t buf[GENCMD_WORDS];
+	char text[1024];
+	size_t len = strlen(expected);
+
+	gencmd_buffer(buf, command);
+	send(s, buf, ARRAY_SIZE(buf));
+	CHECK_EQ(word(s, BUF + 4), OK);
+	CHECK_EQ(word(s, BUF + 16), RESPONSE(4 + len + 1));
+	CHECK_EQ(word(s, BUF + 20), 0);
+	CHECK_EQ(bus_read_block(s->m->bus, BUF + 24, text, len + 1), BUS_OK);
+	CHECK(memcmp(text, expected, len + 1) == 0);
+}
+
+static void gencmd_stops(Setup *s, const char *command, const char *message)
+{
+	uint32_t buf[GENCMD_WORDS];
+
+	gencmd_buffer(buf, command);
+	send_stops(s, buf, ARRAY_SIZE(buf), message);
+}
+
+/* vcgencmd's commands, from the state the tags answer from. */
+static void test_gencmd(void)
+{
+	Setup s;
+	uint32_t buf[GENCMD_WORDS];
+
+	setup(&s);
+	gencmd(&s, "version",
+	       "Nov  2 2026 13:42:00 \nCopyright (c) 2012 Broadcom\nversion "
+	       "13c4219f16dbe58c5b9946086b474baf572512bb (clean) (release) "
+	       "(start)");
+	gencmd(&s, "measure_temp", "temp=45.1'C");
+	gencmd(&s, "get_throttled", "throttled=0x0");
+	gencmd(&s, "get_mem arm", "arm=948M");
+	gencmd(&s, "get_mem gpu", "gpu=76M");
+	gencmd(&s, "measure_volts", "volt=1.2000V");
+	gencmd(&s, "measure_volts core", "volt=1.2000V");
+	gencmd(&s, "get_config total_mem", "total_mem=1024");
+	gencmd(&s, "get_config gpu_mem", "gpu_mem=76");
+	gencmd(&s, "get_config arm_freq", "arm_freq=1200");
+	gencmd(&s, "get_config core_freq", "core_freq=400");
+	gencmd(&s, "measure_clock arm", "frequency(48)=1200000000");
+	gencmd(&s, "measure_clock core", "frequency(1)=400000000");
+	gencmd(&s, "measure_clock v3d", "frequency(46)=400000000");
+	gencmd(&s, "measure_clock h264", "frequency(28)=400000000");
+	gencmd(&s, "measure_clock isp", "frequency(45)=400000000");
+	gencmd(&s, "measure_clock uart", "frequency(22)=48000000");
+	gencmd(&s, "measure_clock emmc", "frequency(47)=200000000");
+	/* Spaces around and between the words. */
+	gencmd(&s, "  get_mem   gpu ", "gpu=76M");
+	/* The rate that a tag set, and another split. */
+	set_rate(&s, 3, 600 * MHZ, 600 * MHZ);
+	gencmd(&s, "measure_clock arm", "frequency(48)=600000000");
+	gencmd(&s, "get_config arm_freq", "arm_freq=1200");
+	CHECK(raspi3b_property_configure(
+		s.p, &(Raspi3bVcSettings){.total_mem_mb = 512,
+	                              .gpu_mem_mb = 64,
+	                              .core_freq_fixed = true,
+	                              .cmdline = ""}));
+	raspi3b_property_reset(s.p);
+	gencmd(&s, "get_mem arm", "arm=448M");
+	gencmd(&s, "get_mem gpu", "gpu=64M");
+	gencmd(&s, "get_config total_mem", "total_mem=512");
+	gencmd(&s, "get_config gpu_mem", "gpu_mem=64");
+	gencmd(&s, "get_config core_freq", "core_freq=250");
+	gencmd(&s, "measure_clock core", "frequency(1)=250000000");
+
+	/* What is not modelled stops. */
+	gencmd_stops(&s, "commands", "vcgencmd 'commands' is not emulated");
+	gencmd_stops(&s, "", "vcgencmd '' is not emulated");
+	gencmd_stops(&s, "   ", "vcgencmd '   ' is not");
+	gencmd_stops(&s, "version x", "vcgencmd 'version x' is not");
+	gencmd_stops(&s, "get_mem", "vcgencmd 'get_mem' is not");
+	gencmd_stops(&s, "get_mem arm x", "vcgencmd 'get_mem arm x' is not");
+	gencmd_stops(&s, "get_mem arm x y", "vcgencmd 'get_mem arm x y' is not");
+	gencmd_stops(&s, "get_mem vc", "is not emulated");
+	gencmd_stops(&s, "measure_clock", "is not emulated");
+	gencmd_stops(&s, "measure_clock pwm", "is not emulated");
+	gencmd_stops(&s, "measure_clock arm core", "is not emulated");
+	gencmd_stops(&s, "measure_volts sdram_c", "is not emulated");
+	gencmd_stops(&s, "get_config int", "is not emulated");
+	gencmd_stops(&s, "measure_temp pmic", "is not emulated");
+	gencmd_stops(&s, "versions", "is not emulated");
+	gencmd_stops(&s, "get_throttle", "is not emulated");
+	/* No NUL in the value; a value with no room for a command. */
+	gencmd_buffer(buf, "version");
+	memset(&buf[6], 'a', 1024);
+	send_stops(&s, buf, ARRAY_SIZE(buf),
+	           "vcgencmd: a command with no NUL in its value, or of more "
+	           "than 4095 bytes, is not emulated");
+	{
+		/* A value of 4104 bytes: 4095 of command fit, 4096 do not. */
+		static uint32_t big[6 + 4100 / 4 + 1];
+		char *text = (char *)&big[6];
+
+		big[0] = sizeof(big);
+		big[2] = 0x00030080;
+		big[3] = 4104;
+		memset(text, 'a', 4100);
+		text[4095] = '\0';
+		send_stops(
+			&s, big, ARRAY_SIZE(big),
+			"vcgencmd 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			"aaaaaaaaa' is not emulated");
+		text[4095] = 'a';
+		text[4096] = '\0';
+		send_stops(&s, big, ARRAY_SIZE(big), "or of more than 4095 bytes");
+		text[4096] = 'a';
+		send_stops(&s, big, ARRAY_SIZE(big), "with no NUL in its value");
+	}
+	{
+		uint32_t tiny[] = {sizeof(uint32_t[7]), 0, 0x00030080, 4, 0, 0, 0};
+		uint32_t five[] = {sizeof(uint32_t[8]), 0, 0x00030080, 5, 0, 0, 0, 0};
+
+		send_stops(&s, tiny, ARRAY_SIZE(tiny), "with no NUL in its value");
+		/* Five bytes: the NUL alone, an empty command. */
+		send_stops(&s, five, ARRAY_SIZE(five), "vcgencmd '' is not");
+	}
+	teardown(&s);
+}
+
+/*
  * Every tag of the wiki and of Linux's raspberrypi-firmware.h. Those that
  * smirror does not answer stop the machine; tags next to them that
  * neither names are unknown, and ignored.
@@ -1872,19 +2016,19 @@ static void test_known_tags(void)
 		0x0003000f, 0x00030010, 0x00030011, 0x00030012, 0x00030014, 0x00030020,
 		0x00030021, 0x00030023, 0x00030030, 0x00030041, 0x00030043, 0x00030045,
 		0x00030046, 0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058,
-		0x00030064, 0x00030066, 0x00030087, 0x0003008a, 0x00034041, 0x00038001,
-		0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030, 0x00038041,
-		0x00038042, 0x00038043, 0x00038045, 0x00038049, 0x00038064, 0x00038087,
-		0x0003808a, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
-		0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a, 0x0004000b,
-		0x0004000c, 0x0004000d, 0x0004000e, 0x0004000f, 0x00040010, 0x00040013,
-		0x00040014, 0x00040016, 0x00040017, 0x00040018, 0x00044003, 0x00044004,
-		0x00044005, 0x00044006, 0x00044007, 0x00044009, 0x0004400a, 0x0004400b,
-		0x0004400c, 0x0004400d, 0x0004400e, 0x00048001, 0x00048003, 0x00048004,
-		0x00048005, 0x00048006, 0x00048007, 0x00048008, 0x00048009, 0x0004800a,
-		0x0004800b, 0x0004800c, 0x0004800d, 0x0004800e, 0x0004800f, 0x00048010,
-		0x00048013, 0x00048015, 0x00048017, 0x00048019, 0x0004801f, 0x00048020,
-		0x00050001, 0x00060001,
+		0x00030064, 0x00030066, 0x00030080, 0x00030087, 0x0003008a, 0x00034041,
+		0x00038001, 0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030,
+		0x00038041, 0x00038042, 0x00038043, 0x00038045, 0x00038049, 0x00038064,
+		0x00038087, 0x0003808a, 0x00040001, 0x00040002, 0x00040003, 0x00040004,
+		0x00040005, 0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a,
+		0x0004000b, 0x0004000c, 0x0004000d, 0x0004000e, 0x0004000f, 0x00040010,
+		0x00040013, 0x00040014, 0x00040016, 0x00040017, 0x00040018, 0x00044003,
+		0x00044004, 0x00044005, 0x00044006, 0x00044007, 0x00044009, 0x0004400a,
+		0x0004400b, 0x0004400c, 0x0004400d, 0x0004400e, 0x00048001, 0x00048003,
+		0x00048004, 0x00048005, 0x00048006, 0x00048007, 0x00048008, 0x00048009,
+		0x0004800a, 0x0004800b, 0x0004800c, 0x0004800d, 0x0004800e, 0x0004800f,
+		0x00048010, 0x00048013, 0x00048015, 0x00048017, 0x00048019, 0x0004801f,
+		0x00048020, 0x00050001, 0x00060001,
 	};
 	static const uint32_t answered[] = {
 		0x00000001,
@@ -1898,6 +2042,7 @@ static void test_known_tags(void)
 		0x00038043,
 		0x00030048,
 		0x00030066,
+		0x00030080,
 		0x00010002,
 		0x00010003,
 		0x00010004,
@@ -2173,6 +2318,7 @@ int main(void)
 {
 	RUN_TEST(test_identity);
 	RUN_TEST(test_firmware_build);
+	RUN_TEST(test_gencmd);
 	RUN_TEST(test_gpio_expander);
 	RUN_TEST(test_memory);
 	RUN_TEST(test_cmdline);

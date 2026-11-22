@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "core/bus.h"
+#include "hw/misc/bcm2835_thermal.h"
 #include "machine/raspi3b.h"
 #include "machine/raspi3b_smem.h"
 #include "machine/raspi3b_vchiq.h"
@@ -35,6 +36,7 @@
  */
 #define FIRMWARE_REVISION 0x6ae89328u /* 2026-11-02 13:42:00 UTC */
 #define FIRMWARE_VARIANT 1
+#define FIRMWARE_BUILT "Nov  2 2026 13:42:00" /* the two VC_BUILD_ID_TIME */
 static const uint32_t firmware_hash[5] = {0x13c4219f, 0x16dbe58c, 0x5b994608,
                                           0x6b474baf, 0x572512bb};
 
@@ -251,7 +253,8 @@ struct Raspi3bProperty {
 /*
  * Every tag that the firmware knows: those of the wiki and those of
  * raspberrypi-firmware.h in Raspberry Pi's Linux, at commit cff533a, the
- * kernel of firmware release 1.20260915. Sorted.
+ * kernel of firmware release 1.20260915, and GET_GENCMD_RESULT, of
+ * raspberrypi/utils' vcgencmd. Sorted.
  */
 static const uint32_t known_tags[] = {
 	0x00000001, 0x00000002, 0x00000003, 0x00008010, 0x00008011, 0x00008012,
@@ -262,19 +265,19 @@ static const uint32_t known_tags[] = {
 	0x0003000f, 0x00030010, 0x00030011, 0x00030012, 0x00030014, 0x00030020,
 	0x00030021, 0x00030023, 0x00030030, 0x00030041, 0x00030043, 0x00030045,
 	0x00030046, 0x00030047, 0x00030048, 0x00030049, 0x00030050, 0x00030058,
-	0x00030064, 0x00030066, 0x00030087, 0x0003008a, 0x00034041, 0x00038001,
-	0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030, 0x00038041,
-	0x00038042, 0x00038043, 0x00038045, 0x00038049, 0x00038064, 0x00038087,
-	0x0003808a, 0x00040001, 0x00040002, 0x00040003, 0x00040004, 0x00040005,
-	0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a, 0x0004000b,
-	0x0004000c, 0x0004000d, 0x0004000e, 0x0004000f, 0x00040010, 0x00040013,
-	0x00040014, 0x00040016, 0x00040017, 0x00040018, 0x00044003, 0x00044004,
-	0x00044005, 0x00044006, 0x00044007, 0x00044009, 0x0004400a, 0x0004400b,
-	0x0004400c, 0x0004400d, 0x0004400e, 0x00048001, 0x00048003, 0x00048004,
-	0x00048005, 0x00048006, 0x00048007, 0x00048008, 0x00048009, 0x0004800a,
-	0x0004800b, 0x0004800c, 0x0004800d, 0x0004800e, 0x0004800f, 0x00048010,
-	0x00048013, 0x00048015, 0x00048017, 0x00048019, 0x0004801f, 0x00048020,
-	0x00050001, 0x00060001,
+	0x00030064, 0x00030066, 0x00030080, 0x00030087, 0x0003008a, 0x00034041,
+	0x00038001, 0x00038002, 0x00038003, 0x00038009, 0x00038021, 0x00038030,
+	0x00038041, 0x00038042, 0x00038043, 0x00038045, 0x00038049, 0x00038064,
+	0x00038087, 0x0003808a, 0x00040001, 0x00040002, 0x00040003, 0x00040004,
+	0x00040005, 0x00040006, 0x00040007, 0x00040008, 0x00040009, 0x0004000a,
+	0x0004000b, 0x0004000c, 0x0004000d, 0x0004000e, 0x0004000f, 0x00040010,
+	0x00040013, 0x00040014, 0x00040016, 0x00040017, 0x00040018, 0x00044003,
+	0x00044004, 0x00044005, 0x00044006, 0x00044007, 0x00044009, 0x0004400a,
+	0x0004400b, 0x0004400c, 0x0004400d, 0x0004400e, 0x00048001, 0x00048003,
+	0x00048004, 0x00048005, 0x00048006, 0x00048007, 0x00048008, 0x00048009,
+	0x0004800a, 0x0004800b, 0x0004800c, 0x0004800d, 0x0004800e, 0x0004800f,
+	0x00048010, 0x00048013, 0x00048015, 0x00048017, 0x00048019, 0x0004801f,
+	0x00048020, 0x00050001, 0x00060001,
 };
 
 static bool known(uint32_t tag)
@@ -1511,6 +1514,160 @@ static bool vchiq_init(Raspi3bProperty *p, Value *v)
 	return true;
 }
 
+/* --- vcgencmd --------------------------------------------------------------
+ */
+
+/*
+ * GET_GENCMD_RESULT: a command of vcgencmd, the text after the first
+ * word of the value, which the firmware answers with a word, 0 for
+ * success, and its text, ended by a NUL. raspberrypi/utils' vcgencmd
+ * (the one of Raspberry Pi OS, through /dev/vcio) sends it, and prints
+ * the text; it exits with the word.
+ *
+ * Raspberry Pi's documentation names the commands and their arguments
+ * but not what they answer; the answers here have the shape that
+ * vcgencmd prints on a real board ("temp=", "frequency(N)=", "volt=",
+ * "arm=", "throttled="), smirror's choice where nothing official says
+ * so (docs/boards/raspi3b.md). Each answers from the state that the
+ * tags answer from, so that both agree:
+ *   version: the build time, the copyright and the Git hash of the
+ *     firmware's start.elf (VC_BUILD_ID_*).
+ *   measure_temp: the sensor's one temperature (bcm2835_thermal.h),
+ *     with one decimal.
+ *   get_throttled: 0, as the tag.
+ *   get_mem arm|gpu: the split, in MB.
+ *   measure_clock arm|core|v3d|h264|isp|uart|emmc: the clock's rate,
+ *     after the firmware's number for it; the rate set, where a real
+ *     board measures it and is a little off.
+ *   measure_volts [core]: the core's 1.2 V.
+ *   get_config total_mem|gpu_mem|arm_freq|core_freq: in MB and MHz.
+ * Not modelled, and the machine stops: any other command or argument,
+ * and a command with no NUL in the value or of more than 4095 bytes
+ * (vcgencmd sends at most 4094).
+ */
+#define GENCMD_TAG 0x00030080
+
+/* The VideoCore's numbers of its clocks, in measure_clock's answer. */
+static const struct {
+	const char *name;
+	unsigned number, clock;
+} gencmd_clocks[] = {
+	{"arm", 48, CLOCK_ARM},   {"core", 1, CLOCK_CORE}, {"v3d", 46, CLOCK_V3D},
+	{"h264", 28, CLOCK_H264}, {"isp", 45, CLOCK_ISP},  {"uart", 22, CLOCK_UART},
+	{"emmc", 47, CLOCK_EMMC},
+};
+
+/* Thousandths of a degree from the sensor's ADC, as the device tree. */
+#define THERMAL_MILLI(adc) (412000 - 538 * (adc))
+
+/* Whether the command's words are word0, then word1 (NULL: none). */
+static bool gencmd_is(char *const words[3], const char *word0,
+                      const char *word1)
+{
+	if (strcmp(words[0], word0) != 0)
+		return false;
+	if (word1 == NULL)
+		return words[1] == NULL;
+	return words[1] != NULL && strcmp(words[1], word1) == 0 && words[2] == NULL;
+}
+
+/* The answer's text for the command's words; false: none. */
+static bool gencmd_text(Raspi3bProperty *p, char *const words[3], char *text,
+                        size_t size)
+{
+	uint32_t mb = raspi3b_property_arm_memory(p) / MIB;
+
+	if (gencmd_is(words, "version", NULL)) {
+		snprintf(text, size,
+		         FIRMWARE_BUILT " \nCopyright (c) 2012 Broadcom\nversion "
+		                        "%08" PRIx32 "%08" PRIx32 "%08" PRIx32
+		                        "%08" PRIx32 "%08" PRIx32
+		                        " (clean) (release) (start)",
+		         firmware_hash[0], firmware_hash[1], firmware_hash[2],
+		         firmware_hash[3], firmware_hash[4]);
+	} else if (gencmd_is(words, "measure_temp", NULL)) {
+		int milli = THERMAL_MILLI(BCM2835_THERMAL_ADC);
+
+		snprintf(text, size, "temp=%d.%d'C", (milli + 50) / 1000,
+		         (milli + 50) / 100 % 10);
+	} else if (gencmd_is(words, "get_throttled", NULL)) {
+		snprintf(text, size, "throttled=0x0");
+	} else if (gencmd_is(words, "get_mem", "arm")) {
+		snprintf(text, size, "arm=%" PRIu32 "M", mb);
+	} else if (gencmd_is(words, "get_mem", "gpu")) {
+		snprintf(text, size, "gpu=%" PRIu32 "M", p->settings.gpu_mem_mb);
+	} else if (gencmd_is(words, "measure_volts", NULL) ||
+	           gencmd_is(words, "measure_volts", "core")) {
+		snprintf(text, size, "volt=1.2000V");
+	} else if (gencmd_is(words, "get_config", "total_mem")) {
+		snprintf(text, size, "total_mem=%" PRIu32, p->settings.total_mem_mb);
+	} else if (gencmd_is(words, "get_config", "gpu_mem")) {
+		snprintf(text, size, "gpu_mem=%" PRIu32, p->settings.gpu_mem_mb);
+	} else if (gencmd_is(words, "get_config", "arm_freq")) {
+		snprintf(text, size, "arm_freq=%" PRIu32,
+		         p->clocks[CLOCK_ARM].max / MB);
+	} else if (gencmd_is(words, "get_config", "core_freq")) {
+		snprintf(text, size, "core_freq=%" PRIu32,
+		         p->clocks[CLOCK_CORE].max / MB);
+	} else {
+		for (size_t i = 0; i < ARRAY_SIZE(gencmd_clocks); i++) {
+			if (!gencmd_is(words, "measure_clock", gencmd_clocks[i].name))
+				continue;
+			snprintf(text, size, "frequency(%u)=%" PRIu32,
+			         gencmd_clocks[i].number,
+			         p->clocks[gencmd_clocks[i].clock].rate);
+			return true;
+		}
+		return false;
+	}
+	return true;
+}
+
+static bool get_gencmd_result(Raspi3bProperty *p, Value *v)
+{
+	char command[ANSWER_MAX], text[ANSWER_MAX - 4];
+	char *words[3] = {NULL, NULL, NULL};
+	const uint8_t *at = v->request + 4; /* after the code's word */
+	const uint8_t *end = NULL;
+	unsigned n = 0;
+	size_t len = 0;
+	char *w;
+
+	if (v->request_len > 4)
+		end = memchr(at, '\0', v->request_len - 4);
+	if (end != NULL)
+		len = (size_t)(end - at);
+	if (end == NULL || len >= sizeof(command)) {
+		stop(p, "vcgencmd: a command with no NUL in its value, or of more "
+		        "than 4095 bytes, is not emulated");
+		return false;
+	}
+	memcpy(command, at, len);
+	command[len] = '\0';
+	/* Its words, between spaces; a third fails every command. */
+	w = command;
+	while (n < 3) {
+		while (*w == ' ')
+			w++;
+		if (*w == '\0')
+			break;
+		words[n++] = w;
+		while (*w != ' ' && *w != '\0')
+			w++;
+		if (*w == ' ')
+			*w++ = '\0';
+	}
+	if (n == 0 || !gencmd_text(p, words, text, sizeof(text))) {
+		stop(p, "vcgencmd '%.60s' is not emulated", (const char *)at);
+		return false;
+	}
+	answer(v, 0, 0);
+	len = strlen(text);
+	memcpy(v->answer + 4, text, len + 1);
+	v->answer_len = 4 + (uint32_t)len + 1;
+	return true;
+}
+
 typedef struct Handler {
 	uint32_t tag;
 	bool (*fn)(Raspi3bProperty *p, Value *v);
@@ -1528,6 +1685,7 @@ static const Handler handlers[] = {
 	{0x00038043, set_gpio_config},
 	{0x00030048, notify_reboot},
 	{0x00030066, notify_display_done},
+	{GENCMD_TAG, get_gencmd_result},
 	{0x00010002, get_board_revision},
 	{0x00010003, get_mac_address},
 	{0x00010004, get_board_serial},

@@ -37,6 +37,18 @@ type grep --color=never enable_uart /boot/firmware/config.txt\r
 expect enable_uart=1
 expect pi@raspberrypi:~$
 
+# vcgencmd, through /dev/vcio and the firmware's GET_GENCMD_RESULT.
+type vcgencmd version\r
+expect Copyright (c) 2012 Broadcom
+expect version 13c4219f16dbe58c5b9946086b474baf572512bb (clean) (release) (start)
+expect pi@raspberrypi:~$
+type vcgencmd measure_temp\r
+expect temp=45.1'C
+expect pi@raspberrypi:~$
+type vcgencmd measure_clock arm\r
+expect frequency(48)=
+expect pi@raspberrypi:~$
+
 # The board powers off: RSTS asks the firmware not to boot, smirror
 # ends. Linux waits for the mini UART for two bytes' time only, so the
 # end of its last line is lost, as on the board.
