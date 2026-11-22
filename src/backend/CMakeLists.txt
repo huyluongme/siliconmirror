@@ -7,7 +7,9 @@ add_library(backend STATIC
 	block/file.c
 	clock/host.c
 	char/file.c
-	char/stdio.c)
+	char/stdio.c
+	net/pcap.c
+	net/tap.c)
 
 target_link_libraries(backend PUBLIC core)
 

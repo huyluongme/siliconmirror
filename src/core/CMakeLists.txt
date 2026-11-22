@@ -8,7 +8,8 @@ add_library(core STATIC
 	counter.c
 	event.c
 	irq.c
-	machine.c)
+	machine.c
+	net.c)
 
 # PUBLIC: core uses util, and so does anything that links core.
 target_link_libraries(core PUBLIC util)

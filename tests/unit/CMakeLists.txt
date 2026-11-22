@@ -90,6 +90,18 @@ add_executable(test_machine test_machine.c)
 target_link_libraries(test_machine PRIVATE core)
 add_test(NAME unit.machine COMMAND test_machine)
 
+add_executable(test_net test_net.c)
+target_link_libraries(test_net PRIVATE core)
+add_test(NAME unit.net COMMAND test_net)
+
+add_executable(test_net_tap test_net_tap.c)
+target_link_libraries(test_net_tap PRIVATE backend)
+add_test(NAME unit.net_tap COMMAND test_net_tap)
+
+add_executable(test_net_pcap test_net_pcap.c)
+target_link_libraries(test_net_pcap PRIVATE backend)
+add_test(NAME unit.net_pcap COMMAND test_net_pcap)
+
 add_executable(test_audio_wav test_audio_wav.c)
 target_link_libraries(test_audio_wav PRIVATE backend)
 add_test(NAME unit.audio_wav COMMAND test_audio_wav)
