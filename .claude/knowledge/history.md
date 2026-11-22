@@ -76,5 +76,5 @@ slow board mid first boot.
 ## What is next (owner decides)
 
 Networking to the host, display and USB keyboard, the VideoCore's VCHIQ
-services (audio, `vcgencmd`), I2C/SPI/PWM devices, Bluetooth, WiFi, the
+services (audio done: `AUDS`; MMAL streaming, `GCMD`), I2C/SPI/PWM devices, Bluetooth, WiFi, the
 JIT. A second board uses the add-board skill.

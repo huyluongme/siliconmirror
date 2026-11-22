@@ -31,6 +31,17 @@ sót nào": every task gets a full mutation run on the lines it changed.
 5. Commit the config as its own commit, `scripts/mutation: <topic>`.
    Report only totals and the classes of survivors.
 
+## Tests that stay bounded
+
+A mutant can make a loop endless. A test must then end, not flood: a
+fake that CHECKs each call printed without end and ctest kept 13 GB of
+output in RAM (the OOM killer took VS Code); a WAV test's back end made
+2.6 million files. Fakes print once and `abort()` on a call out of
+contract; tests that make files or memory grow are bounded (`alarm()`,
+capped sizes). After an OOM, clean `w*/build` and run again from the
+start: under memory pressure tests fail for other reasons, and mutants
+pass for killed. 3 workers on the owner's 14 GB machine.
+
 ## Equivalent classes seen
 
 Buffer sizes and limit constants off by one; out-of-memory paths;

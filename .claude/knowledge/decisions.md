@@ -55,6 +55,11 @@ written anywhere else in the repo.
   interface (`make`, `make test`, `make run ARGS=`, `make format`,
   `make check-format`, `PRESET=`, `CC=`). The owner knows Make, not
   CMake: explain every CMake line you add.
+- Libraries: the C library and libm only, and ALSA's libasound
+  (LGPL-2.1) for `-audio alsa`, the host's sound card: the owner chose
+  it (2026-11-22) over dlopen, so the build uses the real header
+  (`libasound2-dev`). It is optional: without it, smirror builds
+  without `-audio alsa`. CI installs it. Ask before adding another.
 - License GPL-2.0-or-later: LICENSE stays the verbatim GPLv2 text; every
   source file starts with `SPDX-License-Identifier: GPL-2.0-or-later`
   and the copyright line of the other files.

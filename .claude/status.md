@@ -3,30 +3,34 @@
 Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
-- **Date:** 2026-11-22
-- **master:** d3e76d9 (status after task 1, part 1), then this task's
+- **Date:** 2026-11-23
+- **master:** af1d80a (status after task 1, part 2), then this task's
   commits.
 - **Board:** raspi3b. Roadmap items 1-5 done: from power on, the
   firmware HLE, U-Boot, Linux to the BusyBox shell
   (`docs/boot-logs/raspi3b-uboot-linux.log`), and an unmodified
   Raspberry Pi OS Lite to its login prompt
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
-- **Last task:** task 1, part 2, the VideoCore's `mmal` at probe
-  (machine/raspi3b_mmal): COMPONENT_CREATE, PORT_INFO_GET,
-  PORT_PARAMETER_GET (SUPPORTED_ENCODINGS, CAMERA_INFO), COMPONENT_DESTROY,
-  for `ril.video_decode`, `ril.video_encode`, `ril.isp`, `ril.image_fx`,
-  `ril.image_encode` and `camera_info` (no camera). Pi OS makes
-  /dev/video10-16, 18, 20-23, 31 as a real board with no camera; the
-  session reads every queue's formats with VIDIOC_ENUM_FMT. Encodings
-  from real boards' V4L2 lists where found, the rest smirror's choice
-  (docs/boards/raspi3b.md, mmal). Streaming stops the machine.
-  Mutation linux25: 13 survivors of 503, all equivalent.
+- **Last task:** task 1, part 3, the VideoCore's audio service `AUDS`
+  (machine/raspi3b_auds) and the audio outputs (core/audio.h,
+  backend/audio: `-audio wav:PATH`, `-audio alsa[:DEVICE]` through
+  libasound, optional at build). snd-bcm2835's streams play in virtual
+  time, 10 ms blocks, `COMPLETE` with bit 30 at the end, the volume
+  applied; HDMI (no display) goes nowhere. The Pi OS session plays two
+  files with `aplay` and `raspios.audio` (tests/raspios/audio_check.c)
+  checks the WAV files sample for sample. Mutation linux26 (fresh run
+  after two OOM-killed runs, see knowledge/mutation.md): 957 mutants,
+  142 survivors, all equivalent (sizes, OOM, values after a stop, leaks,
+  the 4 GB WAV limit, ALSA paths only a real card reaches; the board's
+  wiring of the output is checked by raspios.audio). Boot logs unchanged:
+  nothing opens AUDS at boot.
 
 ## Next tasks (ask the owner which)
 
-1. Task 1, part 3: `AUDS` (audio, with a host back end), its own task;
-   then MMAL streaming (formats, enable, buffers, bulk transfers; the
-   codecs' work on the host), `/effort xhigh`.
+1. Task 1, part 4: MMAL streaming (formats, enable, buffers, bulk
+   transfers; the codecs' work on the host), `/effort xhigh`. Smaller
+   audio follow-ups if wanted: mixing two streams, VCHIQ bulk
+   transfers (`force_bulk=1`), IEC958 pass-through.
 2. Networking to the host (a back end behind the LAN9514): Pi OS
    would then get an address and run ssh.
 3. Performance phase 3, the JIT (`.claude/knowledge/performance.md`):
@@ -47,6 +51,8 @@ and `--list-formats` (ours: YU12 NC12), `-d 31 --list-formats-out`.
 `get_throttled`, and `for c in arm core v3d h264 isp uart emmc; do
 vcgencmd measure_clock $c; done` (the shapes and clock numbers ours
 follow), and `vcgencmd foo` (what an unknown command answers).
+`amixer -c Headphones contents` after boot (the controls' starting
+values; ours follow Linux: switch off, 0 dB, auto).
 On Raspberry Pi OS with no display: the HVS's `DISPCTRL` and `DISPSTAT`
 as the firmware leaves them (`sudo busybox devmem 0x3f400000` with vc4
 blacklisted; ours read 0), and which VCHIQ services the firmware has

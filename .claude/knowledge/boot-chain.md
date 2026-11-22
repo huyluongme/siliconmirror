@@ -67,6 +67,15 @@ Facts that were checked, and where the pinned software comes from.
   encodings in the firmware's order and its first is the default, so a
   board's `v4l2-ctl --list-formats*` or a default in `--all` gives the
   firmware's order (a Pi 3 of 2019 had MPG4 as decode's default).
+- Audio: snd-bcm2835 (a module, on the vchiq bus) opens `AUDS` only
+  when a program opens a PCM, never at boot; Pi OS Lite's card is
+  `Headphones` (`hw:Headphones`; the KMS overlay leaves HDMI to vc4)
+  and it has `aplay`, `amixer` and `speaker-test`; user pi is in group
+  audio. The card's switch starts off (chip zeroed: Linux then sends
+  `CHIP_MIN_VOLUME`, mute), so the session sets
+  `PCM Playback Switch` on and the volume. aplay fills its last period
+  with silence (the second file gave 48 bytes more). Source at cff533a
+  cached in `~/.cache/siliconmirror-linux/src/bcm2835-audio`.
 - To check MMAL lists on Pi OS without v4l-utils: python3 with
   `fcntl.ioctl(f, 0xc0405602, ...)` (VIDIOC_ENUM_FMT; the codec's types
   are 10 and 9, mplane; the ISP's 2, 1 and 13), as `tests/raspios/session.txt`.
