@@ -1996,6 +1996,267 @@ static void test_identity(void)
 	block_mem_free(&c.fs.m);
 }
 
+/*
+ * A device tree with the display's nodes: vc4 (NULL: none) with its
+ * compatible list of compat_len bytes and status (NULL: none), and the
+ * composite output with vec_status (NULL: no node).
+ */
+static size_t display_dtb(uint8_t **blob, const char *compat, size_t compat_len,
+                          const char *status, const char *vec_status)
+{
+	static Builder b;
+	uint8_t reg[8] = {0};
+
+	memset(&b, 0, sizeof(b));
+	begin(&b, "");
+	prop_u32(&b, "#address-cells", 1);
+	prop_u32(&b, "#size-cells", 1);
+	begin(&b, "chosen");
+	prop(&b, "bootargs", "coherent_pool=1M", 17);
+	end(&b);
+	begin(&b, "memory@0");
+	prop(&b, "device_type", "memory", 7);
+	prop(&b, "reg", reg, 8);
+	end(&b);
+	begin(&b, "soc");
+	begin(&b, "fb");
+	prop(&b, "compatible", "brcm,bcm2708-fb", 16);
+	end(&b);
+	if (vec_status != NULL) {
+		begin(&b, "vec@7e806000");
+		prop(&b, "compatible", "brcm,bcm2835-vec", 17);
+		prop(&b, "status", vec_status, strlen(vec_status) + 1);
+		end(&b);
+	}
+	end(&b);
+	if (compat != NULL) {
+		begin(&b, "gpu");
+		prop(&b, "compatible", compat, compat_len);
+		if (status != NULL)
+			prop(&b, "status", status, strlen(status) + 1);
+		end(&b);
+	}
+	end(&b);
+	return finish(&b, blob);
+}
+
+/* The firmware's overscan at the top, from the mailbox. */
+static uint32_t overscan_top(Machine *m)
+{
+	uint32_t buf[] = {40, 0, 0x0004000a, 16, 0, 0, 0, 0, 0, 0};
+	uint64_t now = m->events.now;
+
+	for (size_t i = 0; i < ARRAY_SIZE(buf); i++)
+		CHECK_EQ(bus_write(m->bus, 0x2000 + 4 * i, 4, buf[i]), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, RASPI3B_MBOX_BASE + 0x20, 4, 0x2008), BUS_OK);
+	event_queue_run_until(&m->events, now + 1000);
+	CHECK_EQ(rd(m, RASPI3B_MBOX_BASE + 0x00, 4), 0x2008);
+	return (uint32_t)rd(m, 0x2000 + 20, 4);
+}
+
+static Machine *boot_display(const char *config, const char *compat,
+                             size_t compat_len, const char *status,
+                             const char *vec_status)
+{
+	static Card c;
+	uint8_t *blob;
+	size_t size = display_dtb(&blob, compat, compat_len, status, vec_status);
+	Machine *m;
+
+	card(&c, true, true);
+	add_text(&c, "CONFIG  TXT", "config.txt", config);
+	add(&c, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+	free(blob);
+	m = boot_ok(&c);
+	block_mem_free(&c.fs.m);
+	return m;
+}
+
+#define VC4 "brcm,bcm2835-vc4"
+#define FB_656 "bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 "
+
+/*
+ * The display's settings of config.txt that Raspberry Pi OS has:
+ * disable_overscan, max_framebuffers, disable_fw_kms_setup, arm_boost;
+ * and the vc4 KMS driver, which leaves the firmware's frame buffer out.
+ */
+static void test_display_settings(void)
+{
+	Card c;
+	Machine *m;
+
+	/* The defaults: the overscan of 32 pixels. */
+	card_config(&c, "arm_64bit=1\n");
+	m = boot_ok(&c);
+	CHECK_EQ(property(m, 0x00040003, 0), 416); /* the height */
+	CHECK_EQ(overscan_top(m), 32);
+	CHECK(bootargs_has(m, FB_656 "bcm2708_fb.fbswap=1 vc_mem."));
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* Raspberry Pi OS's settings, without its overlay: no warnings. */
+	card_config(&c, "arm_64bit=1\ndisable_overscan=1\nmax_framebuffers=2\n"
+	                "disable_fw_kms_setup=1\narm_boost=1\n");
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "") == 0);
+	CHECK_EQ(property(m, 0x00040003, 0), 480);
+	CHECK_EQ(property(m, 0x00040004, 0), 480); /* the virtual height */
+	CHECK_EQ(overscan_top(m), 0);
+	CHECK(bootargs_has(m, " bcm2708_fb.fbwidth=720 bcm2708_fb.fbheight=480 "
+	                      "bcm2708_fb.fbswap=1 vc_mem.mem_base="));
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* disable_overscan=0 keeps it; any other number takes it away. */
+	card_config(&c, "arm_64bit=1\ndisable_overscan=0\n");
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "") == 0);
+	CHECK_EQ(overscan_top(m), 32);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+	card_config(&c, "arm_64bit=1\ndisable_overscan=2\n");
+	m = boot_ok(&c);
+	CHECK_EQ(overscan_top(m), 0);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* max_framebuffers=0 is not emulated; 1 is the default. */
+	card_config(&c, "arm_64bit=1\nmax_framebuffers=0\n");
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "max_framebuffers=0 is not emulated: the "
+	                       "firmware sets up its frame buffer\n") == 0);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+	card_config(&c, "arm_64bit=1\nmax_framebuffers=1\n");
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "") == 0);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+
+	/* KMS: no frame buffer of the firmware on the command line. */
+	m = boot_display("arm_64bit=1\nmax_framebuffers=0\n", VC4, sizeof(VC4),
+	                 NULL, NULL);
+	CHECK(strcmp(warnings, "") == 0);
+	CHECK(bootargs_start(m, "coherent_pool=1M vc_mem.mem_base=0x3ec00000 "
+	                        "vc_mem.mem_size=0x40000000  "));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), "okay", "disabled");
+	CHECK(strcmp(warnings, "") == 0);
+	CHECK(bootargs_start(m, "coherent_pool=1M vc_mem."));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), "ok", NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M vc_mem."));
+	machine_destroy(m);
+	/* The compatible later in the list. */
+	m = boot_display("arm_64bit=1\n", "x,y\0" VC4, 4 + sizeof(VC4), NULL, NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M vc_mem."));
+	machine_destroy(m);
+
+	/* Not KMS: disabled, another status, near names, a bad list. */
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), "disabled", NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), "okay!", NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), "o", NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", "brcm,bcm2835-vc", 16, NULL, NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", "brcm,bcm2835-vc44", 18, NULL, NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4) - 1, NULL, NULL);
+	CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+	machine_destroy(m);
+
+	/* Not KMS: a status or a compatible that is not a whole string. */
+	{
+		static Card c2;
+		static Builder b;
+		uint8_t *blob;
+		size_t size;
+		static const struct {
+			const char *compat, *status;
+			size_t compat_len, status_len;
+		} odd[] = {
+			{VC4, "okayx", sizeof(VC4), 5},
+			{VC4, "okx", sizeof(VC4), 3},
+			{VC4 "xxxx", NULL, sizeof(VC4) + 3, 0}, /* no NUL at all */
+			{"x\0" VC4 "xxxx", NULL, sizeof(VC4) + 5, 0},
+		};
+
+		for (size_t i = 0; i < ARRAY_SIZE(odd); i++) {
+			memset(&b, 0, sizeof(b));
+			begin(&b, "");
+			prop_u32(&b, "#address-cells", 1);
+			prop_u32(&b, "#size-cells", 1);
+			begin(&b, "chosen");
+			prop(&b, "bootargs", "coherent_pool=1M", 17);
+			end(&b);
+			begin(&b, "gpu");
+			prop(&b, "compatible", odd[i].compat, odd[i].compat_len);
+			if (odd[i].status != NULL)
+				prop(&b, "status", odd[i].status, odd[i].status_len);
+			end(&b);
+			end(&b);
+			size = finish(&b, &blob);
+			card(&c2, true, true);
+			add_text(&c2, "CONFIG  TXT", "config.txt", "arm_64bit=1\n");
+			add(&c2, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+			free(blob);
+			m = boot_ok(&c2);
+			CHECK(bootargs_start(m, "coherent_pool=1M " FB_656));
+			machine_destroy(m);
+			block_mem_free(&c2.fs.m);
+		}
+	}
+
+	/* The settings count from included files too. */
+	card_config(&c, "arm_64bit=1\ninclude extra.txt\n");
+	add_text(&c, "EXTRA   TXT", "extra.txt",
+	         "disable_overscan=1\nmax_framebuffers=0\narm_boost=1\n");
+	m = boot_ok(&c);
+	CHECK(strcmp(warnings, "max_framebuffers=0 is not emulated: the "
+	                       "firmware sets up its frame buffer\n") == 0);
+	CHECK_EQ(overscan_top(m), 0);
+	machine_destroy(m);
+	block_mem_free(&c.fs.m);
+	{
+		static Card c3;
+		uint8_t *blob;
+		size_t size = display_dtb(&blob, VC4, sizeof(VC4), NULL, "okay");
+
+		card(&c3, true, true);
+		add_text(&c3, "CONFIG  TXT", "config.txt",
+		         "arm_64bit=1\ninclude extra.txt\n");
+		add_text(&c3, "EXTRA   TXT", "extra.txt", "disable_fw_kms_setup=1\n");
+		add(&c3, "BCM271~1DTB", "bcm2710-rpi-3-b.dtb", blob, size);
+		free(blob);
+		m = boot_ok(&c3);
+		CHECK(strcmp(warnings, "") == 0);
+		machine_destroy(m);
+		block_mem_free(&c3.fs.m);
+	}
+
+	/* The composite output under KMS needs disable_fw_kms_setup=1. */
+	m = boot_display("arm_64bit=1\n", VC4, sizeof(VC4), NULL, "okay");
+	CHECK(strcmp(warnings,
+	             "the firmware's KMS set-up of the composite output "
+	             "(disable_fw_kms_setup=0) is not emulated: no video mode "
+	             "on the command line\n") == 0);
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\ndisable_fw_kms_setup=1\n", VC4, sizeof(VC4),
+	                 NULL, "okay");
+	CHECK(strcmp(warnings, "") == 0);
+	machine_destroy(m);
+	m = boot_display("arm_64bit=1\n", NULL, 0, NULL, "okay");
+	CHECK(strcmp(warnings, "") == 0);
+	machine_destroy(m);
+}
+
 int main(void)
 {
 	RUN_TEST(test_card_errors);
@@ -2018,6 +2279,7 @@ int main(void)
 	RUN_TEST(test_initramfs_edges);
 	RUN_TEST(test_device_tree_edges);
 	RUN_TEST(test_identity);
+	RUN_TEST(test_display_settings);
 	remove(KERNEL_FILE);
 	return test_summary();
 }

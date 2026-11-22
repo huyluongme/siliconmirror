@@ -156,13 +156,19 @@ static const ExpLine exp_boot[EXP_LINES] = {
  * documentation, config.txt, "Composite video mode": enable_tvout is 1
  * on it, and HDMI is off when no HDMI display is detected), in NTSC
  * (sdtv_mode 0), 480 lines of 720 pixels. The firmware's overscan for
- * that SD mode is 32 pixels on each edge (disable_overscan), and the
- * console's frame buffer is the display less the overscan, 656 by 416,
- * of 16 bits per pixel (framebuffer_width, framebuffer_height,
- * framebuffer_depth). A real Pi 3 Model B+ without a display says the
- * same in its boot log: "FB found 1 display(s)", "Registered framebuffer
- * for display 0, size 656x416". max_framebuffers is 1 before the Pi 4:
- * one display.
+ * that SD mode is 32 pixels on each edge, and the console's frame buffer
+ * is the display less the overscan, 656 by 416, of 16 bits per pixel
+ * (framebuffer_width, framebuffer_height, framebuffer_depth). A real Pi 3 Model
+ * B+ without a display says the same in its boot log: "FB found 1 display(s)",
+ * "Registered framebuffer for display 0, size 656x416". max_framebuffers is 1
+ * before the Pi 4: one display.
+ *
+ * disable_overscan=1 takes the firmware's overscan away (Raspberry Pi
+ * documentation, legacy config.txt options, "disable_overscan": "the
+ * default values of overscan that are set by the firmware"): the frame
+ * buffer is then the whole display, 720 by 480, as a real Pi 3 Model B
+ * gives it in its command line, "bcm2708_fb.fbwidth=720
+ * bcm2708_fb.fbheight=480" (raspberrypi/linux issue 5320).
  *
  * smirror shows no picture: it keeps the settings of the frame buffer,
  * and where it is.
@@ -347,12 +353,18 @@ static void reset_clocks(Raspi3bProperty *p)
 	}
 }
 
-static void reset_display(Display *d);
+static void reset_display(Display *d, uint32_t edge);
+
+/* The firmware's overscan on each edge of the display. */
+static uint32_t overscan(const Raspi3bProperty *p)
+{
+	return p->settings.overscan_disabled ? 0 : OVERSCAN;
+}
 
 void raspi3b_property_reset(Raspi3bProperty *p)
 {
 	reset_clocks(p);
-	reset_display(&p->display);
+	reset_display(&p->display, overscan(p));
 	raspi3b_vchiq_reset(p->vchiq);
 	p->turbo = 0;
 	memset(p->power_known, 0, sizeof(p->power_known));
@@ -421,10 +433,11 @@ uint32_t raspi3b_property_arm_memory(const Raspi3bProperty *p)
 	return (p->settings.total_mem_mb - p->settings.gpu_mem_mb) * MIB;
 }
 
-void raspi3b_property_fb_size(uint32_t *width, uint32_t *height)
+void raspi3b_property_fb_size(const Raspi3bProperty *p, uint32_t *width,
+                              uint32_t *height)
 {
-	*width = DISPLAY_WIDTH - 2 * OVERSCAN;
-	*height = DISPLAY_HEIGHT - 2 * OVERSCAN;
+	*width = DISPLAY_WIDTH - 2 * overscan(p);
+	*height = DISPLAY_HEIGHT - 2 * overscan(p);
 }
 
 void raspi3b_property_mac(uint8_t mac[6])
@@ -1102,19 +1115,20 @@ static uint32_t natural_pitch(const Display *d)
 }
 
 /* The display at boot: the console's frame buffer, not yet allocated. */
-static void reset_display(Display *d)
+static void reset_display(Display *d, uint32_t edge)
 {
 	memset(d, 0, sizeof(*d));
-	raspi3b_property_fb_size(&d->v[D_WIDTH], &d->v[D_HEIGHT]);
+	d->v[D_WIDTH] = DISPLAY_WIDTH - 2 * edge;
+	d->v[D_HEIGHT] = DISPLAY_HEIGHT - 2 * edge;
 	d->v[D_VWIDTH] = d->v[D_WIDTH];
 	d->v[D_VHEIGHT] = d->v[D_HEIGHT];
 	d->v[D_DEPTH] = FB_DEPTH;
 	d->v[D_ORDER] = UNSET;
 	d->v[D_ALPHA] = UNSET;
-	d->v[D_TOP] = OVERSCAN;
-	d->v[D_BOTTOM] = OVERSCAN;
-	d->v[D_LEFT] = OVERSCAN;
-	d->v[D_RIGHT] = OVERSCAN;
+	d->v[D_TOP] = edge;
+	d->v[D_BOTTOM] = edge;
+	d->v[D_LEFT] = edge;
+	d->v[D_RIGHT] = edge;
 	d->v[D_PITCH] = natural_pitch(d);
 }
 

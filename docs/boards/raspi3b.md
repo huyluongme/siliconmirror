@@ -529,6 +529,32 @@ framebuffer for display 0, size 656x416"). `max_framebuffers` is 1:
 one display. smirror shows no picture; it keeps the settings and where
 the buffer is.
 
+The display's settings of `config.txt` that Raspberry Pi OS sets:
+
+- `disable_overscan=1` (any number but 0) takes the firmware's overscan
+  away: the frame buffer is the whole display, 720 by 480, and the
+  overscan tag gives 0, as a real Pi 3 Model B's command line shows
+  ("bcm2708_fb.fbwidth=720 bcm2708_fb.fbheight=480", raspberrypi/linux
+  issue 5320).
+- `max_framebuffers`: one display, so 1 and 2 are the same; 0, no frame
+  buffer at all, is not emulated and gets a warning.
+- With the vc4 KMS driver (`dtoverlay=vc4-kms-v3d`), Linux drives the
+  display and the firmware sets up no frame buffer: the command line
+  has no `bcm2708_fb.*`, as those of real Pi 3 Model B and 3B+ boards
+  with that overlay show (Raspberry Pi forums, topics 2308905 and
+  2308642; raspberrypi/linux issue 5732). How the firmware tells is not
+  documented: smirror looks for an enabled node compatible with
+  `brcm,bcm2835-vc4`, which the overlay enables (it also disables the
+  firmware's `brcm,bcm2708-fb` node).
+- `disable_fw_kms_setup`: with KMS, the firmware passes the video mode
+  of an attached display on the command line unless this is 1. No HDMI
+  display is attached, and the overlay leaves the composite output
+  (`brcm,bcm2835-vec`) off unless its `composite` parameter turns it
+  on; that case, with `disable_fw_kms_setup=0`, is not emulated and
+  gets a warning.
+- `arm_boost` raises the turbo clock of later Pi 4B revisions and the
+  Pi 400 only: nothing on a Pi 3 Model B.
+
 The frame buffer's tags of a buffer are one operation, as the wiki
 says: the values of set and test tags replace the settings in a copy,
 which is checked; get tags are answered after the set tags, test tags
@@ -1149,7 +1175,7 @@ bcm2708_fb.fbheight=480 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000
 vc_mem.mem_size=0x40000000  console=ttyS0,115200 ...". In `bootargs`,
 `8250.nr_uarts` is 1 with `enable_uart=1` and 0 without, as on the Pi 3
 Model B and 3B+ that leave it out. Then come the frame buffer that the
-firmware set up, 656 by 416, with `fbswap` 1, the default of
+firmware set up, 656 by 416 (none with KMS, above), with `fbswap` 1, the default of
 `framebuffer_swap` (the firmware of 2022 gives no `fbdepth` for the
 default depth, 16), and the VideoCore's memory, which Linux's `vc_mem`
 only reports: the SDRAM's size, and 20 MB below its top, as on a real
@@ -1415,6 +1441,16 @@ to quit.
   `vc4_hvs_cob_init`, `vc4_hvs_bind`, the filter kernels); the board's
   device tree and the `vc4-kms-v3d` overlay of Raspberry Pi OS
   2026-10-06.
+- The display's settings and KMS: the Raspberry Pi documentation,
+  [config.txt](https://www.raspberrypi.com/documentation/computers/config_txt.html)
+  (`arm_boost`, `disable_fw_kms_setup`) and
+  [legacy config.txt options](https://www.raspberrypi.com/documentation/computers/legacy_config_txt.html)
+  (`disable_overscan`, `max_framebuffers`); the command lines of real
+  Pi 3 Model B and 3B+ boards with `vc4-kms-v3d` in the Raspberry Pi
+  forums ([topic 2308905](https://forums.raspberrypi.com/viewtopic.php?p=2312525),
+  [topic 2308642](https://forums.raspberrypi.com/viewtopic.php?p=2328867))
+  and Raspberry Pi's Linux
+  [issue 5732](https://github.com/raspberrypi/linux/issues/5732).
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

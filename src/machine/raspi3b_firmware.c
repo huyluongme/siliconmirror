@@ -752,6 +752,79 @@ static uint64_t splitmix64(uint64_t *state)
 	return z ^ (z >> 31);
 }
 
+/* Whether a node's compatible, a list of strings, holds name. */
+static bool compatible(const FdtNode *node, const char *name)
+{
+	size_t len, n = strlen(name) + 1;
+	const char *list = fdt_get(node, "compatible", &len);
+
+	for (size_t at = 0; list != NULL && at + n <= len;) {
+		const char *end = memchr(list + at, '\0', len - at);
+
+		if (end == NULL)
+			return false;
+		if (memcmp(list + at, name, n) == 0)
+			return true;
+		at = (size_t)(end - list) + 1;
+	}
+	return false;
+}
+
+/*
+ * Whether the tree has an enabled node (no status, or "okay" or "ok",
+ * Devicetree Specification 2.3.4) compatible with name.
+ */
+static bool has_enabled(const FdtNode *node, const char *name)
+{
+	size_t len;
+	const char *status = fdt_get(node, "status", &len);
+
+	if (compatible(node, name) &&
+	    (status == NULL || (len == 5 && memcmp(status, "okay", 5) == 0) ||
+	     (len == 3 && memcmp(status, "ok", 3) == 0)))
+		return true;
+	for (const FdtNode *c = fdt_first_child(node); c != NULL;
+	     c = fdt_next_child(c))
+		if (has_enabled(c, name))
+			return true;
+	return false;
+}
+
+/*
+ * Whether Linux drives the display itself, with its vc4 KMS driver:
+ * vc4-kms-v3d enables the "brcm,bcm2835-vc4" node and disables the
+ * firmware's frame buffer, "brcm,bcm2708-fb". How the real firmware
+ * tells is not documented; smirror looks for that enabled node.
+ *
+ * The firmware's own KMS set-up (disable_fw_kms_setup, 0 by default)
+ * passes the video mode of an attached display to Linux on its command
+ * line (Raspberry Pi documentation, config.txt). smirror has no HDMI
+ * display, and the composite output (the "brcm,bcm2835-vec" node) is
+ * off under vc4-kms-v3d unless its composite parameter turns it on:
+ * then the mode the firmware would pass is not emulated.
+ *
+ * max_framebuffers, 1 by default before the Pi 4 (Raspberry Pi
+ * documentation, legacy config.txt options), counts the firmware's frame
+ * buffers: one display, so 1 and 2 are the same, and with KMS there
+ * are none. 0, no frame buffer at all, is not emulated.
+ */
+static bool kms_enabled(Boot *b, const FdtNode *root)
+{
+	bool kms = has_enabled(root, "brcm,bcm2835-vc4");
+	uint64_t fw_kms_off = 0, framebuffers = 1;
+
+	get_int(b, "disable_fw_kms_setup", false, &fw_kms_off);
+	if (kms && fw_kms_off == 0 && has_enabled(root, "brcm,bcm2835-vec"))
+		warnf(b, "the firmware's KMS set-up of the composite output "
+		         "(disable_fw_kms_setup=0) is not emulated: no video "
+		         "mode on the command line");
+	if (get_int(b, "max_framebuffers", false, &framebuffers) &&
+	    framebuffers == 0 && !kms)
+		warnf(b, "max_framebuffers=0 is not emulated: the firmware "
+		         "sets up its frame buffer");
+	return kms;
+}
+
 /*
  * The command line: the device tree's bootargs, then the firmware's
  * own parameters, then cmdline.txt, as start.elf's strings give the
@@ -764,32 +837,39 @@ static uint64_t splitmix64(uint64_t *state)
  *    "8250.nr_uarts=0" and "8250.nr_uarts=1");
  *  - the frame buffer that the firmware set up: its size, and fbswap 1,
  *    framebuffer_swap's default. That Pi 3 Model B's firmware, of 2022,
- *    gives no fbdepth for the default depth, 16;
+ *    gives no fbdepth for the default depth, 16. With the KMS driver
+ *    (kms_enabled()) the firmware sets none up, and these are left out,
+ *    as the command lines of Pi 3 Model B and 3B+ boards with
+ *    vc4-kms-v3d show (Raspberry Pi forums, topics 2308905 and 2308642;
+ *    raspberrypi/linux issue 5732);
  *  - the VideoCore's memory, a space before and after: the two spaces
  *    before cmdline.txt.
  */
-static bool command_line(Boot *b, FdtNode *chosen)
+static bool command_line(Boot *b, FdtNode *chosen, bool kms)
 {
 	const char *bootargs;
 	const char *cmdline = b->cmdline != NULL ? b->cmdline : "";
 	uint32_t width, height;
 	size_t len, size;
-	char *joined, *uarts;
+	char *joined, *uarts, fb[96];
 	bool ok;
 
 	bootargs = fdt_get(chosen, "bootargs", &len);
 	if (bootargs == NULL || len == 0 || bootargs[len - 1] != '\0')
 		bootargs = "";
-	raspi3b_property_fb_size(&width, &height);
+	raspi3b_property_fb_size(b->cfg->property, &width, &height);
+	snprintf(fb, sizeof(fb),
+	         "bcm2708_fb.fbwidth=%" PRIu32 " bcm2708_fb.fbheight=%" PRIu32
+	         " bcm2708_fb.fbswap=1 ",
+	         width, height);
 	size = strlen(bootargs) + strlen(cmdline) + 256;
 	joined = malloc(size);
 	if (joined == NULL)
 		return fail(b, "out of memory");
 	snprintf(joined, size,
-	         "%s%sbcm2708_fb.fbwidth=%" PRIu32 " bcm2708_fb.fbheight=%" PRIu32
-	         " bcm2708_fb.fbswap=1 vc_mem.mem_base=0x%" PRIx32
-	         " vc_mem.mem_size=0x%" PRIx32 "  %s",
-	         bootargs, bootargs[0] != '\0' ? " " : "", width, height,
+	         "%s%s%svc_mem.mem_base=0x%" PRIx32 " vc_mem.mem_size=0x%" PRIx32
+	         "  %s",
+	         bootargs, bootargs[0] != '\0' ? " " : "", kms ? "" : fb,
 	         b->total_mem - VC_MEM_TOP, b->total_mem, cmdline);
 	uarts = strstr(joined, "8250.nr_uarts=");
 	if (uarts != NULL && uarts < joined + strlen(bootargs) &&
@@ -873,7 +953,7 @@ static bool fixups(Boot *b, Fdt *fdt)
 	chosen = fdt_add_node(root, "chosen");
 	if (chosen == NULL || !fdt_set_cells(memory, "reg", reg, n))
 		return fail(b, "out of memory");
-	if (!command_line(b, chosen))
+	if (!command_line(b, chosen, kms_enabled(b, root)))
 		return false;
 	if (!seeds(chosen))
 		return fail(b, "out of memory");
@@ -1145,6 +1225,16 @@ bool raspi3b_firmware_boot(const Raspi3bFirmwareConfig *config, char *error,
 	}
 	ok = ok && memory_split(&b, &settings) && read_cmdline(&b);
 	if (ok) {
+		uint64_t disable_overscan = 0;
+
+		get_int(&b, "disable_overscan", false, &disable_overscan);
+		settings.overscan_disabled = disable_overscan != 0;
+		/*
+		 * arm_boost raises the turbo clock of later Pi 4B revisions and
+		 * the Pi 400 only (Raspberry Pi documentation, config.txt):
+		 * nothing on a Pi 3 Model B. Raspberry Pi OS sets it.
+		 */
+		get(&b, "arm_boost", false);
 		settings.core_freq_fixed = enable_uart != 0;
 		b.enable_uart = enable_uart != 0;
 		settings.cmdline = b.cmdline != NULL ? b.cmdline : "";

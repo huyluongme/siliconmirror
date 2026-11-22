@@ -61,6 +61,12 @@ typedef struct Raspi3bVcSettings {
 	 */
 	bool core_freq_fixed;
 
+	/*
+	 * disable_overscan=1: no overscan around the frame buffer that the
+	 * firmware sets up, which then fills the display.
+	 */
+	bool overscan_disabled;
+
 	const char *cmdline; /* the kernel's command line; copied */
 } Raspi3bVcSettings;
 
@@ -88,8 +94,12 @@ uint32_t raspi3b_property_arm_memory(const Raspi3bProperty *p);
 /* The VideoCore's end of VCHIQ, which VCHIQ_INIT starts. */
 Raspi3bVchiq *raspi3b_property_vchiq(Raspi3bProperty *p);
 
-/* The size of the frame buffer that the firmware sets up at boot. */
-void raspi3b_property_fb_size(uint32_t *width, uint32_t *height);
+/*
+ * The size of the frame buffer that the firmware sets up at boot, with
+ * the settings of the last raspi3b_property_configure().
+ */
+void raspi3b_property_fb_size(const Raspi3bProperty *p, uint32_t *width,
+                              uint32_t *height);
 
 /* The MAC address of the board's Ethernet. */
 void raspi3b_property_mac(uint8_t mac[6]);
