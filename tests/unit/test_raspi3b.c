@@ -760,7 +760,7 @@ static void test_clock_manager(void)
 
 /*
  * The doorbells at 0x3f00b840: none rung at boot; the Arm ringing the
- * VideoCore's reaches its end of VCHIQ, which handles no messages yet.
+ * VideoCore's reaches its end of VCHIQ, not started yet.
  */
 static void test_doorbells(void)
 {
@@ -775,6 +775,56 @@ static void test_doorbells(void)
 	CHECK_EQ(m->stop, MACHINE_STOP_ERROR);
 	CHECK(strstr(m->stop_message, "firmware: VCHIQ: the Arm rang the "
 	                              "VideoCore's doorbell") != NULL);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
+ * VCHIQ through the board: VCHIQ_INIT by the mailbox, the Arm's CONNECT
+ * by its doorbell, and the VideoCore's answer by the Arm's, ARM
+ * interrupt 2, a VideoCore's latency (1 us) later.
+ */
+static void test_vchiq(void)
+{
+	static const uint32_t head[][2] = {
+		{0, 0x56434849}, {4, 3u << 16 | 8}, {8, 1288},     {12, 4096},
+		{16, 128},       {20, 64},          {32 + 4, 2},   {32 + 8, 32},
+		{32 + 12, 1},    {404 + 4, 34},     {404 + 8, 64}, {404 + 12, 33},
+		{404 + 16, 1}, /* the Arm waits on its trigger */
+		{404 + 72, 34},
+	};
+	const uint32_t zero = 0x100000;
+	uint32_t init[] = {sizeof(uint32_t[7]), 0, 0x00048010, 4, 0,
+	                   0xc0000000u | zero,  0};
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t value;
+
+	for (size_t i = 0; i < ARRAY_SIZE(head); i++)
+		CHECK_EQ(bus_write(m->bus, zero + head[i][0], 4, head[i][1]), BUS_OK);
+	property_call(m, init, ARRAY_SIZE(init));
+	CHECK_EQ(bus_read(m->bus, 0x1014, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0);
+	CHECK_EQ(bus_read(m->bus, zero + 32, 4, &value), BUS_OK);
+	CHECK_EQ(value, 1); /* the VideoCore's half is initialised */
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x18, 4, 1u << 2), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, zero + 34 * 4096, 4, 0x01000000), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, zero + 404 + 28, 4, 8), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, zero + 32 + 16 + 4, 4, 1), BUS_OK);
+	CHECK_EQ(bus_write(m->bus, 0x3f00b848, 4, 0), BUS_OK); /* BELL2 */
+	event_queue_run_until(&m->events, m->events.now + 999);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x00, 4, &value), BUS_OK);
+	CHECK_EQ(value & 0xff, 0);
+	event_queue_run_until(&m->events, m->events.now + 1);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x00, 4, &value), BUS_OK);
+	CHECK_EQ(value & 0xff, 1u << 2);
+	CHECK_EQ(bus_read(m->bus, zero + 2 * 4096, 4, &value), BUS_OK);
+	CHECK_EQ(value, 0x01000000); /* the VideoCore's CONNECT */
+	CHECK_EQ(bus_read(m->bus, 0x3f00b840, 4, &value), BUS_OK); /* BELL0 */
+	CHECK_EQ(value, 4);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
 	machine_destroy(m);
 	fclose(out);
 	remove(KERNEL);
@@ -1203,6 +1253,7 @@ int main(void)
 	RUN_TEST(test_mini_uart_clock);
 	RUN_TEST(test_clock_manager);
 	RUN_TEST(test_doorbells);
+	RUN_TEST(test_vchiq);
 	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
 	RUN_TEST(test_bsc);

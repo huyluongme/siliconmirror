@@ -642,10 +642,46 @@ The two sides ring each other's doorbell, at `0x3f00b840`, which the
 device tree gives the vchiq node with ARM interrupt 2, the Arm's
 doorbell 0. Reading `BELL0` gives in bit 2 whether the VideoCore rang
 the Arm since the last read, and clears it and the interrupt; writing
-`BELL2` rings the VideoCore. The VideoCore does not handle messages
-yet: when the Arm rings it, to connect or to open a service, the
-machine stops. Linux only does so when a client of VCHIQ starts: its
-audio, camera and codec drivers are modules, and `vcgencmd` a program.
+`BELL2` rings the VideoCore.
+
+The VideoCore then plays its side of `vchiq_core.c`, the same code on
+both ends. A side signals one of the other's events (`trigger` for new
+messages, `recycle` for slots handed back) by setting `fired`, and
+rings the other's doorbell when that side waits on it (`armed`). The
+VideoCore's events stay armed; 1 us after the Arm rings (the
+VideoCore's latency, as for the mailboxes) it reads the Arm's messages
+up to the Arm's `tx_pos`, 8 bytes of header (`msgid`: type, source and
+destination ports; `size`) and the data, rounded up to 8 bytes,
+skipping the `PADDING` that fills the end of a slot, and hands each of
+the Arm's slots back once it has read to its end, in the Arm's slot
+queue at `slot_queue_recycle`, signalling the Arm's `recycle`
+(`parse_rx_slots`, `release_slot`). It sends its own in its slots in the
+order of its slot queue, taking a new slot only once the Arm has
+recycled enough of them, then signals the Arm's `trigger`.
+
+- `CONNECT`: the VideoCore answers with its own (the Arm's
+  `vchiq_connect` waits for it). That it answers rather than connects
+  first is smirror's choice; Linux takes either.
+- `OPEN` names a service by its fourcc (`AUDS` the audio, `mmal` the
+  camera and codecs, `SMEM` the shared memory, `GCMD` `vcgencmd`...).
+  None of the VideoCore's services is emulated yet: the VideoCore
+  refuses each with a `CLOSE` from port 0 to the Arm's port, which is
+  what `parse_open` sends for a service it does not have. The Arm's
+  open then fails with `-EINVAL`, its service waiting in `CLOSEWAIT`,
+  and the driver reports it; a real board has these services, so this
+  is a difference. A warning names each service, once (the first 16).
+- A `CLOSE` from the Arm finds no service on the VideoCore's side, and
+  is dropped, as `parse_message` drops a message to a port without
+  one.
+
+What else the Arm sends stops the machine: `DATA`, the bulk transfers,
+`PAUSE` and `RESUME`, the `REMOTE_USE` family (Linux sends
+`REMOTE_USE_ACTIVE` only to answer the VideoCore's `REMOTE_USE`), a
+second `CONNECT`, an `OPEN` before `CONNECT`, synchronous messages, a
+message past the end of its slot, a slot queue that names a slot
+outside its side, the doorbell before `VCHIQ_INIT`, and the VideoCore
+running out of slots to send in. Its own messages are all 8-byte
+headers, which a slot holds 512 of: they never need padding.
 
 ## The SD card
 
@@ -1360,6 +1396,9 @@ to quit.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
+- The VideoCore's VCHIQ services (audio, MMAL, the shared memory,
+  `vcgencmd`...) are not emulated: it refuses each, so the drivers that
+  use them fail where a real board's would work.
 - The settings of `config.txt` that smirror does not list above are
   not applied; a warning names each. Of the overlays, the firmware
   itself acts on some (it changes its own console or display for
@@ -1431,6 +1470,12 @@ to quit.
   sizes) and [vchiq_arm.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_arm.c) (the slots' memory,
   `VCHIQ_INIT`, the doorbells); the board's device tree (the vchiq
   node's registers and interrupt).
+  Its messages: `vchiq_core.c` again (`remote_event_signal`,
+  `reserve_space`, `queue_message`, `parse_rx_slots`, `parse_message`,
+  `parse_open`, `release_slot`, `process_free_queue`,
+  `vchiq_open_service_internal`, `vchiq_close_service_internal`,
+  `vchiq_connect_internal`) and `vchiq_arm.c` (the doorbell's handler,
+  the keepalive service, `vchiq_use_internal`).
 - The BSC: the BCM2835 ARM Peripherals, chapter 3, and the BCM2711 ARM
   Peripherals, its BSC chapter (the fractions of TXW and RXR); the
   board's device tree (the three masters' registers and their shared

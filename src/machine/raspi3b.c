@@ -671,6 +671,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+	raspi3b_vchiq_attach(raspi3b_property_vchiq(property), doorbell,
+	                     VC_LATENCY_NS, options->warn, options->warn_ctx);
 	pm = bcm2835_pm_create(m);
 	if (pm == NULL)
 		goto out_of_memory;
