@@ -218,6 +218,10 @@ add_executable(test_raspi3b_property test_raspi3b_property.c)
 target_link_libraries(test_raspi3b_property PRIVATE machine)
 add_test(NAME unit.raspi3b_property COMMAND test_raspi3b_property)
 
+add_executable(test_raspi3b_mmal test_raspi3b_mmal.c)
+target_link_libraries(test_raspi3b_mmal PRIVATE machine)
+add_test(NAME unit.raspi3b_mmal COMMAND test_raspi3b_mmal)
+
 add_executable(test_raspi3b_smem test_raspi3b_smem.c)
 target_link_libraries(test_raspi3b_smem PRIVATE machine)
 add_test(NAME unit.raspi3b_smem COMMAND test_raspi3b_smem)

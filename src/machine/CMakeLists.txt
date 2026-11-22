@@ -7,6 +7,7 @@ add_library(machine STATIC
 	board.c
 	raspi3b.c
 	raspi3b_firmware.c
+	raspi3b_mmal.c
 	raspi3b_property.c
 	raspi3b_serial.c
 	raspi3b_smem.c
