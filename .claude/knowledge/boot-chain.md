@@ -42,8 +42,17 @@ Facts that were checked, and where the pinned software comes from.
   hardware watchdog resets the board mid first boot.
 - What the stock DT and drivers needed: BSC (I2C) with nothing on the
   bus, the HVS as vc4 sets it up with no display, VCHIQ CONNECT and
-  OPEN (services refused: SMEM, mmal), `NOTIFY_DISPLAY_DONE`, and the
+  OPEN (SMEM open, mmal refused), `NOTIFY_DISPLAY_DONE`, and the
   firmware's KMS handling of config.txt (no `bcm2708_fb.*`).
 - Exploration of the Pi OS card: `sh .claude/tools/raspios_explore.sh
   OUT_PREFIX` (debug copy with enable_uart=1, console on serial only,
   systemd status shown). Its systemd status goes to tty1 otherwise.
+- Pi OS's `vcgencmd` (raspberrypi/utils) uses the mailbox tag
+  `0x00030080` through `/dev/vcio_gencmd` or `/dev/vcio`, not VCHIQ
+  `GCMD`. At probe, vc-sm-cma opens `SMEM` and sends only
+  `CLIENT_VERSION` (2); the MMAL users are bcm2835-codec (five
+  components: `ril.video_decode`, `ril.video_encode`, `ril.isp`,
+  `ril.image_fx`, `ril.image_encode`; each COMPONENT_CREATE, port info,
+  SUPPORTED_ENCODINGS of input[0] and output[0], then finalise),
+  bcm2835-isp and bcm2835-camera. Their sources at cff533a are cached
+  in `~/.cache/siliconmirror-linux/src/{vc-sm-cma,vchiq-mmal,mmal-users}`.
