@@ -13,6 +13,7 @@
  */
 
 #include "machine/raspi3b.h"
+#include "machine/net_cable.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -392,6 +393,26 @@ static void destroy_audio(void *ctx)
 	audio_destroy(ctx);
 }
 
+static void destroy_net(void *ctx)
+{
+	net_destroy(ctx);
+}
+
+static void destroy_eth_cable(void *ctx)
+{
+	net_cable_destroy(ctx);
+}
+
+static bool eth_receive(void *ctx, const uint8_t *frame, size_t len)
+{
+	return lan95xx_receive(ctx, frame, len);
+}
+
+static unsigned eth_speed(void *ctx)
+{
+	return lan95xx_link_speed(ctx);
+}
+
 /*
  * The SD card. A reset of the board does not cut its power, but the boot
  * ROM's CMD0 puts it back in the idle state.
@@ -565,23 +586,32 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		char_stream_destroy(options->serial);
 		block_destroy(options->sd);
 		audio_destroy(options->audio);
+		net_destroy(options->net);
 		goto out_of_memory;
 	}
 	if (!machine_add_device(m, options->serial, NULL, destroy_serial)) {
 		char_stream_destroy(options->serial);
 		block_destroy(options->sd);
 		audio_destroy(options->audio);
+		net_destroy(options->net);
 		goto out_of_memory;
 	}
 	if (options->sd != NULL &&
 	    !machine_add_device(m, options->sd, NULL, destroy_card)) {
 		block_destroy(options->sd);
 		audio_destroy(options->audio);
+		net_destroy(options->net);
 		goto out_of_memory;
 	}
 	if (options->audio != NULL &&
 	    !machine_add_device(m, options->audio, NULL, destroy_audio)) {
 		audio_destroy(options->audio);
+		net_destroy(options->net);
+		goto out_of_memory;
+	}
+	if (options->net != NULL &&
+	    !machine_add_device(m, options->net, NULL, destroy_net)) {
+		net_destroy(options->net);
 		goto out_of_memory;
 	}
 
@@ -921,6 +951,19 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		goto out_of_memory;
 	}
 	usb_hub_attach(hub, 1, lan95xx_device(eth)); /* port 1, on the chip */
+	if (options->net != NULL) {
+		NetCablePort port = {eth_receive, eth_speed, eth};
+		NetCable *eth_cable =
+			net_cable_create(m, options->net, &port, error, error_size);
+
+		if (eth_cable == NULL)
+			goto fail;
+		if (!machine_add_device(m, eth_cable, NULL, destroy_eth_cable)) {
+			net_cable_destroy(eth_cable);
+			goto out_of_memory;
+		}
+		lan95xx_plug(eth, net_cable_send, eth_cable);
+	}
 
 	/* After the devices it sets up, so that it resets after them. */
 	fw = calloc(1, sizeof(*fw));

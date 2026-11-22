@@ -21,6 +21,8 @@
 #include "backend/char/file.h"
 #include "backend/char/stdio.h"
 #include "backend/clock/host.h"
+#include "backend/net/pcap.h"
+#include "backend/net/tap.h"
 #include "core/machine.h"
 #include "machine/board.h"
 
@@ -39,6 +41,7 @@ typedef struct Options {
 	const char *sd;      /* -sd */
 	const char *clock;   /* -clock */
 	const char *audio;   /* -audio */
+	const char *net;     /* -net */
 } Options;
 
 static void print_usage(FILE *out)
@@ -60,6 +63,11 @@ static void print_usage(FILE *out)
 	      "default),\n"
 	      "                     wav:PATH, alsa (the host's sound card) or "
 	      "alsa:DEVICE\n"
+	      "  -net DEV           The other end of the Ethernet cable: none "
+	      "(the default,\n"
+	      "                     no cable), tap:IFNAME (the host's TAP "
+	      "device) or\n"
+	      "                     pcap:PATH (a capture of the frames sent)\n"
 	      "  -clock CLOCK       virtual (the default): time counts the "
 	      "instructions,\n"
 	      "                     the same on every run; host: time follows "
@@ -124,6 +132,8 @@ static const char **option_value(Options *options, const char *name)
 		return &options->clock;
 	if (strcmp(name, "audio") == 0)
 		return &options->audio;
+	if (strcmp(name, "net") == 0)
+		return &options->net;
 	return NULL;
 }
 
@@ -195,6 +205,32 @@ static bool open_audio(const char *spec, AudioOut **out)
 	return true;
 }
 
+/*
+ * Open the back end that -net names: "none" is no cable, a NULL link.
+ * Returns false after printing a message.
+ */
+static bool open_net(const char *spec, NetLink **out)
+{
+	char error[256];
+
+	*out = NULL;
+	if (strcmp(spec, "none") == 0)
+		return true;
+	if (strncmp(spec, "tap:", 4) == 0) {
+		*out = net_tap_open(spec + 4, error, sizeof(error));
+	} else if (strncmp(spec, "pcap:", 5) == 0) {
+		*out = net_pcap_open(spec + 5, error, sizeof(error));
+	} else {
+		fprintf(stderr, "smirror: unknown -net device '%s'\n", spec);
+		return false;
+	}
+	if (*out == NULL) {
+		fprintf(stderr, "smirror: -net: %s\n", error);
+		return false;
+	}
+	return true;
+}
+
 /* What the board does not do, or ignores, but goes on without. */
 static void warn(void *ctx, const char *message)
 {
@@ -220,7 +256,7 @@ static int run(Machine *m)
 
 int main(int argc, char **argv)
 {
-	Options options = {.serial = "stdio", .audio = "none"};
+	Options options = {.serial = "stdio", .audio = "none", .net = "none"};
 	bool serial_given = false;
 
 	for (int i = 1; i < argc; i++) {
@@ -307,6 +343,12 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 	if (!open_audio(options.audio, &board_options.audio)) {
+		char_stream_destroy(board_options.serial);
+		block_destroy(board_options.sd);
+		return EXIT_FAILURE;
+	}
+	if (!open_net(options.net, &board_options.net)) {
+		audio_destroy(board_options.audio);
 		char_stream_destroy(board_options.serial);
 		block_destroy(board_options.sd);
 		return EXIT_FAILURE;

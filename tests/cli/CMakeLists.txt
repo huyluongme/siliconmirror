@@ -119,6 +119,52 @@ add_expect_test(cli.audio-none
 	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
 	COMMAND ${smirror} -M raspi3b -audio none)
 
+# -net: the other end of the board's Ethernet cable.
+add_expect_test(cli.net-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -net device 'user'\n$"
+	COMMAND ${smirror} -M raspi3b -net user)
+
+add_expect_test(cli.net-pcap-not-writable
+	STATUS 1
+	STDERR "^smirror: -net: cannot create no/such/dir/out.pcap: [^\n]*\n$"
+	COMMAND ${smirror} -M raspi3b -net pcap:no/such/dir/out.pcap)
+
+add_expect_test(cli.net-tap-bad-name
+	STATUS 1
+	STDERR "^smirror: -net: '' is not an interface name\n$"
+	COMMAND ${smirror} -M raspi3b -net tap:)
+
+add_expect_test(cli.net-tap-long-name
+	STATUS 1
+	STDERR "^smirror: -net: '0123456789abcdef' is not an interface name\n$"
+	COMMAND ${smirror} -M raspi3b -net tap:0123456789abcdef)
+
+add_expect_test(cli.net-pcap-no-colon
+	STATUS 1
+	STDERR "^smirror: unknown -net device 'pcap/no/such/x.pcap'\n$"
+	COMMAND ${smirror} -M raspi3b -net pcap/no/such/x.pcap)
+
+# The card, the serial console and the audio output are closed when -net
+# fails.
+add_expect_test(cli.sd-audio-then-net-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -net device 'tap'\n$"
+	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
+		-serial file:${CMAKE_CURRENT_BINARY_DIR}/serial.txt
+		-audio wav:${CMAKE_CURRENT_BINARY_DIR}/out.wav -net tap)
+
+# The board owns the link, and closes it when it cannot boot.
+add_expect_test(cli.net-pcap-nothing-to-boot
+	STATUS 1
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
+	COMMAND ${smirror} -M raspi3b -net pcap:${CMAKE_CURRENT_BINARY_DIR}/out.pcap)
+
+add_expect_test(cli.net-none
+	STATUS 1
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
+	COMMAND ${smirror} -M raspi3b -net none)
+
 # ALSA's own message comes first; smirror's says which device.
 find_package(ALSA QUIET)
 if(ALSA_FOUND)

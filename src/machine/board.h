@@ -15,6 +15,7 @@
 #include "core/block.h"
 #include "core/char_stream.h"
 #include "core/machine.h"
+#include "core/net.h"
 
 /* What the command line asks of a board. */
 typedef struct BoardOptions {
@@ -38,6 +39,13 @@ typedef struct BoardOptions {
 	 * create() fails.
 	 */
 	AudioOut *audio;
+
+	/*
+	 * -net: the host's side of the board's Ethernet cable, or NULL for no
+	 * cable. The board owns it from the call to create() on, even if
+	 * create() fails.
+	 */
+	NetLink *net;
 
 	/* Messages that do not stop the board, such as what it ignores. */
 	void (*warn)(void *ctx, const char *message);
