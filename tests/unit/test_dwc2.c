@@ -741,10 +741,10 @@ static void test_root_port(void)
 	wr(&s, HPRT0, 1u << 12);
 	CHECK_EQ(dev.address, 0);
 	CHECK_EQ(rd(&s, HPRT0), 1u << 12 | 0xd);
-	/* ENCHNG alone raises PRTINT; writing it 1 clears it. */
-	CHECK_EQ(rd(&s, GINTSTS), 1u << 24 | 1);
+	/* ENCHNG raises PRTINT; writing it 1 clears it. SOF: frames run. */
+	CHECK_EQ(rd(&s, GINTSTS), 1u << 24 | 1u << 3 | 1);
 	wr(&s, HPRT0, 1u << 12 | 8);
-	CHECK_EQ(rd(&s, GINTSTS), 1);
+	CHECK_EQ(rd(&s, GINTSTS), 1u << 3 | 1);
 	/* A reset that ends without power does not enable the port. */
 	wr(&s, HPRT0, 1u << 12 | 1u << 8);
 	CHECK_EQ(rd(&s, PCGCCTL), 0); /* HPRT0's writes reach no other */
@@ -752,6 +752,88 @@ static void test_root_port(void)
 	CHECK_EQ(rd(&s, HPRT0) & 4, 0);
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
+}
+
+/*
+ * SOF: set as each microframe starts while the port is enabled, cleared
+ * by a 1; its interrupt at the next one, and no event while masked.
+ */
+static void test_sof(void)
+{
+	Setup s;
+	UsbDevice dev;
+	uint64_t start;
+
+	setup(&s);
+	usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+	dwc2_attach(s.d, &dev);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 0); /* no frames yet */
+	port_up(&s);
+	start = s.m->events.now;
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 8); /* the first SOF, at once */
+	wr(&s, GINTSTS, 8);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 0);
+	wr(&s, GINTSTS, 0); /* a 0 changes nothing */
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 0);
+
+	/* Masked: nothing to wake for. */
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	event_queue_run_until(&s.m->events, start + 125000 - 1);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 0);
+	event_queue_run_until(&s.m->events, start + 125000);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 8);
+	wr(&s, GINTSTS, 8);
+
+	/* Unmasked: the line rises at the next microframe's start. */
+	wr(&s, GAHBCFG, 1);
+	wr(&s, GINTMSK, 8);
+	CHECK(!irq_level(&s.irq));
+	CHECK_EQ(event_queue_next(&s.m->events), start + 2 * 125000);
+	event_queue_run_until(&s.m->events, start + 2 * 125000 - 1);
+	CHECK(!irq_level(&s.irq));
+	event_queue_run_until(&s.m->events, start + 2 * 125000);
+	CHECK(irq_level(&s.irq));
+	/* Set until cleared, over several microframes; no event meanwhile. */
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	event_queue_run_until(&s.m->events, start + 5 * 125000 + 7);
+	CHECK(irq_level(&s.irq));
+	wr(&s, GINTSTS, 8);
+	CHECK(!irq_level(&s.irq));
+	CHECK_EQ(event_queue_next(&s.m->events), start + 6 * 125000);
+	/* Masking it again drops the event; unmasking brings it back. */
+	wr(&s, GINTMSK, 0);
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	wr(&s, GINTMSK, 8);
+	CHECK_EQ(event_queue_next(&s.m->events), start + 6 * 125000);
+
+	/* A write of 0, or of other bits, leaves SOF set. */
+	event_queue_run_until(&s.m->events, start + 6 * 125000);
+	CHECK(irq_level(&s.irq));
+	wr(&s, GINTSTS, 0);
+	wr(&s, GINTSTS, ~8u);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 8);
+
+	/* A disabled port sends no frames. */
+	wr(&s, HPRT0, 1u << 12 | 4);
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	event_queue_run_until(&s.m->events, start + 7 * 125000);
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 0);
+	CHECK(!irq_level(&s.irq));
+
+	/* Enabled again, long after: its first SOF at once, the next 125 us on. */
+	event_queue_run_until(&s.m->events, start + 1000 * 125000);
+	port_up(&s);
+	start = s.m->events.now;
+	CHECK_EQ(rd(&s, GINTSTS) & 8, 8);
+	CHECK(irq_level(&s.irq));
+	wr(&s, GINTSTS, 8);
+	CHECK_EQ(event_queue_next(&s.m->events), start + 125000);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+
+	/* Destroyed with the SOF event pending: it goes too. */
+	dwc2_destroy(s.d);
+	CHECK_EQ(event_queue_next(&s.m->events), EVENT_NEVER);
+	machine_destroy(s.m);
 }
 
 int main(void)
@@ -766,5 +848,6 @@ int main(void)
 	RUN_TEST(test_bulk);
 	RUN_TEST(test_halts);
 	RUN_TEST(test_root_port);
+	RUN_TEST(test_sof);
 	return test_summary();
 }

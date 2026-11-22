@@ -66,6 +66,7 @@ enum { HCCHAR, HCSPLT = 4, HCINT = 8, HCINTMSK = 12, HCTSIZ = 16, HCDMA = 20 };
 #define GRSTCTL_AHBIDLE (1u << 31)
 
 #define GINTSTS_CURMODE_HOST (1u << 0)
+#define GINTSTS_SOF (1u << 3)
 #define GINTSTS_PRTINT (1u << 24)
 #define GINTSTS_HCHINT (1u << 25)
 
@@ -117,6 +118,8 @@ struct Dwc2 {
 	UsbDevice *port_dev; /* on the root port, or NULL */
 	bool port_enabled;
 	uint64_t frames_from; /* when the port started sending frames */
+	uint64_t sof_next;    /* the microframe whose SOF sets GINTSTS.SOF */
+	Event sof;            /* that SOF, while its interrupt is unmasked */
 	struct Channel {
 		Dwc2 *dwc2;
 		uint32_t hcchar, hcsplt, hcint, hcintmsk, hctsiz, hcdma;
@@ -145,9 +148,24 @@ static uint32_t haint(const Dwc2 *d)
 	return bits;
 }
 
+/* The microframes the port has started since it was enabled. */
+static uint64_t microframe(const Dwc2 *d)
+{
+	return (machine_now(d->machine) - d->frames_from) / MICROFRAME_NS;
+}
+
 /*
- * The core's own events, such as SOF, are not raised; the port's and
- * the channels' come from their registers.
+ * SOF: set as the port sends each microframe's start of frame, at high
+ * speed every 125 us, until software writes 1 to it.
+ */
+static bool sof_set(const Dwc2 *d)
+{
+	return d->port_enabled && microframe(d) >= d->sof_next;
+}
+
+/*
+ * The core's other events are not raised; the port's and the channels'
+ * come from their registers.
  */
 static uint32_t gintsts(const Dwc2 *d)
 {
@@ -155,6 +173,8 @@ static uint32_t gintsts(const Dwc2 *d)
 
 	if (!(d->gusbcfg & GUSBCFG_FORCEDEVMODE))
 		v |= GINTSTS_CURMODE_HOST;
+	if (sof_set(d))
+		v |= GINTSTS_SOF;
 	if (d->hprt0 & HPRT0_CHANGES)
 		v |= GINTSTS_PRTINT;
 	if (haint(d) & d->haintmsk)
@@ -162,10 +182,24 @@ static uint32_t gintsts(const Dwc2 *d)
 	return v;
 }
 
+/*
+ * Raise the interrupt line as GINTSTS and GINTMSK say; and, while SOF's
+ * interrupt is unmasked and SOF clear, have an event at the next SOF,
+ * so that only then does SOF cost events.
+ */
 static void update_irq(Dwc2 *d)
 {
+	event_cancel(&d->machine->events, &d->sof);
+	if ((d->gintmsk & GINTSTS_SOF) && d->port_enabled && !sof_set(d))
+		event_schedule(&d->machine->events, &d->sof,
+		               d->frames_from + d->sof_next * MICROFRAME_NS);
 	irq_set(d->irq, (d->gahbcfg & GAHBCFG_GLBLINTRMSK) &&
 	                    (gintsts(d) & d->gintmsk) != 0);
+}
+
+static void sof_event(void *ctx)
+{
+	update_irq(ctx);
 }
 
 /* The root port: connected while powered with a device; high speed. */
@@ -199,6 +233,7 @@ static void write_hprt0(Dwc2 *d, uint32_t v)
 		usb_device_reset(d->port_dev);
 		d->port_enabled = true;
 		d->frames_from = machine_now(d->machine);
+		d->sof_next = 0; /* the first SOF goes at once */
 		d->hprt0 |= HPRT0_ENCHNG;
 	}
 }
@@ -562,7 +597,10 @@ static void dwc2_write(void *ctx, uint64_t offset, uint64_t value,
 		d->grstctl = v & GRSTCTL_TXFNUM;
 		break;
 	case GINTSTS:
-		break; /* no event of its own to clear */
+		/* The other events clear in their own registers. */
+		if ((v & GINTSTS_SOF) && sof_set(d))
+			d->sof_next = microframe(d) + 1;
+		break;
 	case GINTMSK:
 		d->gintmsk = v;
 		break;
@@ -641,6 +679,7 @@ Dwc2 *dwc2_create(Machine *m, const Dwc2Config *config, IrqLine *irq)
 		d->hc[n].dwc2 = d;
 		event_init(&d->hc[n].done, channel_done, &d->hc[n]);
 	}
+	event_init(&d->sof, sof_event, d);
 	reset_registers(d);
 	return d;
 }
@@ -648,6 +687,7 @@ Dwc2 *dwc2_create(Machine *m, const Dwc2Config *config, IrqLine *irq)
 void dwc2_destroy(Dwc2 *d)
 {
 	halt_channels(d);
+	event_cancel(&d->machine->events, &d->sof);
 	free(d);
 }
 
