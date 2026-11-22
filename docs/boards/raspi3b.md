@@ -663,25 +663,106 @@ recycled enough of them, then signals the Arm's `trigger`.
   `vchiq_connect` waits for it). That it answers rather than connects
   first is smirror's choice; Linux takes either.
 - `OPEN` names a service by its fourcc (`AUDS` the audio, `mmal` the
-  camera and codecs, `SMEM` the shared memory, `GCMD` `vcgencmd`...).
-  None of the VideoCore's services is emulated yet: the VideoCore
-  refuses each with a `CLOSE` from port 0 to the Arm's port, which is
-  what `parse_open` sends for a service it does not have. The Arm's
-  open then fails with `-EINVAL`, its service waiting in `CLOSEWAIT`,
-  and the driver reports it; a real board has these services, so this
-  is a difference. A warning names each service, once (the first 16).
-- A `CLOSE` from the Arm finds no service on the VideoCore's side, and
-  is dropped, as `parse_message` drops a message to a port without
-  one.
+  camera and codecs, `SMEM` the shared memory, `GCMD` `vcgencmd`...),
+  and the Arm's versions, `version` and `version_min`. For a service
+  the VideoCore has whose versions meet the Arm's (its `version` at
+  least the Arm's `version_min`, and the other way round), it answers
+  `OPENACK`, with its service's version (2 bytes), from a port of its
+  own to the Arm's (`parse_open`); the service is open. Each `OPEN`
+  takes the lowest free port from 1, 32 of them, and a service may be
+  open many times: the firmware's ports and instances are not known,
+  so this is smirror's choice. Any other `OPEN` it refuses with a
+  `CLOSE` from port 0 to the Arm's port, which is what `parse_open`
+  sends for a service it does not have; the Arm's open then fails with
+  `-EINVAL`, its service waiting in `CLOSEWAIT`, and the driver
+  reports it. A warning names each service it does not have, once (the
+  first 16), and each `OPEN` whose versions do not meet. The services:
+  `SMEM` (below). `mmal`, `AUDS` and `GCMD` are refused; a real board
+  has them, so this is a difference. Raspberry Pi OS's `vcgencmd` does
+  not use `GCMD` but a tag (below), and opens nothing at boot.
+- `DATA` goes to the service open on its port, from the Arm's port
+  that opened it; to any other port it is dropped, as `parse_message`
+  drops a message to a port without a service.
+- `CLOSE`: the service open on its port, or, a `CLOSE` to port 0, the
+  one the Arm's port opened (a `CLOSE` that left before the Arm had the
+  `OPENACK`; `get_connected_service`), closes, and answers with a
+  `CLOSE` from its port, as `vchiq_close_service_internal` does for an
+  open service that receives one; it listens again. Any other is
+  dropped.
 
-What else the Arm sends stops the machine: `DATA`, the bulk transfers,
-`PAUSE` and `RESUME`, the `REMOTE_USE` family (Linux sends
-`REMOTE_USE_ACTIVE` only to answer the VideoCore's `REMOTE_USE`), a
-second `CONNECT`, an `OPEN` before `CONNECT`, synchronous messages, a
-message past the end of its slot, a slot queue that names a slot
-outside its side, the doorbell before `VCHIQ_INIT`, and the VideoCore
-running out of slots to send in. Its own messages are all 8-byte
-headers, which a slot holds 512 of: they never need padding.
+A service sends `DATA` from its port to the Arm's. A message that the
+rest of a slot does not fit goes in the next, the rest a `PADDING`
+message (`reserve_space`); the largest is a slot less its header, 4088
+bytes. With no slot to send in, the VideoCore's messages wait for the
+Arm to recycle one, and it reads no more of the Arm's messages until
+they have gone, as its `queue_message` waits and `parse_rx_slots`
+stops when a reply finds no space. A reset of the firmware closes what
+is open and drops what waits.
+
+What else the Arm sends stops the machine: `OPENACK` (the Arm opens no
+service the VideoCore could ask for), the bulk transfers, `PAUSE` and
+`RESUME`, the `REMOTE_USE` family (Linux sends `REMOTE_USE_ACTIVE` only
+to answer the VideoCore's `REMOTE_USE`), a second `CONNECT`, an `OPEN`
+before `CONNECT`, synchronous messages, a message past the end of its
+slot, a slot queue that names a slot outside its side, the doorbell
+before `VCHIQ_INIT`, more than 32 services open, and more than 64 KB
+of the VideoCore's messages waiting for slots.
+
+### SMEM, the shared memory service
+
+Linux's `vc-sm-cma` opens `SMEM`, version 1 from 0 (the VideoCore's
+are the same), to share the Arm's memory with the VideoCore, for the
+codecs and the camera. Its messages are those of `vc_sm_defs.h`: the
+Arm's start with a type and a transaction id; a reply starts with the
+transaction id, and a message the VideoCore starts itself has its type,
+with bit 31 set, in that place.
+
+- `CLIENT_VERSION` (9): the Arm's protocol version, 2. The VideoCore
+  acknowledges it with `CLIENT_VERSION` | bit 31, which `vc-sm-cma`
+  takes for a firmware that knows the command: it then expects
+  `RELEASED`. The acknowledgement is 8 bytes, the type and a 0
+  (`vc_sm_result_t`'s shape; Linux reads only the first word): smirror's
+  choice.
+- `IMPORT` (8): the Arm's memory, a bus address and a size, which the
+  VideoCore wraps in a handle, its answer. Handles count from 1, the
+  lowest free, 256 of them: smirror's choice.
+- `FREE` (4): the Arm is done with a handle. Nothing on the VideoCore
+  holds the memory, so it is released at once; to a client of version 2
+  and up, the VideoCore says so with `RELEASED` (11): the address, the
+  size, the Arm's `kernel_id` and the handle.
+
+The other messages stop the machine (`ALLOC`, `LOCK`, `UNLOCK`,
+`RESIZE`, `WALK_ALLOC`, `ACTION_CLEAN`, `VC_MEM_REQUEST_REPLY`, which
+`vc-sm-cma` does not send), as do a message too short for its type,
+memory outside the RAM, a `FREE` of a handle not given, and more than
+256 handles.
+
+### vcgencmd
+
+Raspberry Pi OS's `vcgencmd` (raspberrypi/utils) opens `/dev/vcio` and
+sends the tag `GET_GENCMD_RESULT` (`0x00030080`): a word for the
+answer's code, then the command, the words given on its command line.
+The firmware answers 0 and the text, ended by a NUL; `vcgencmd`
+prints the text and exits with the code. Raspberry Pi's documentation
+names the commands and their arguments but not what they print; the
+answers have the shape `vcgencmd` prints on a real board, and come from
+the state the tags answer from:
+
+| Command | Answer |
+|---|---|
+| `version` | `Nov  2 2026 13:42:00 `, `Copyright (c) 2012 Broadcom`, `version 13c4219f... (clean) (release) (start)`, on three lines: start.elf's `VC_BUILD_ID_*` |
+| `measure_temp` | `temp=45.1'C`: the sensor's one temperature |
+| `get_throttled` | `throttled=0x0` |
+| `get_mem arm`, `get_mem gpu` | `arm=948M`, `gpu=76M`: the memory split |
+| `measure_clock arm`, `core`, `v3d`, `h264`, `isp`, `uart`, `emmc` | `frequency(N)=` the clock's rate; N, the firmware's number for the clock, is 48, 1, 46, 28, 45, 22 and 47 |
+| `measure_volts`, `measure_volts core` | `volt=1.2000V` |
+| `get_config total_mem`, `gpu_mem`, `arm_freq`, `core_freq` | `total_mem=1024`, in MB or MHz |
+
+These shapes and the clocks' numbers are smirror's choice, from what
+boards print in posts on the web; a real Pi 3B would settle them. A
+real board measures a clock and is a little off the rate it set; here
+it gives the rate. Any other command or argument, and a command with
+no NUL in its value, stops the machine.
 
 ## The SD card
 
@@ -1336,9 +1417,10 @@ hardware timeout of 1min"), misses it and the board resets in the
 middle of the first boot, as a real board would, which leaves the card
 half set up.
 
-What a real board does that this one does not: its drivers of the
-VideoCore's services (`vc-sm-cma`, `bcm2835-mmal-vchiq`) fail, as the
-VideoCore refuses them (VCHIQ, above); the WiFi controller finds no
+What a real board does that this one does not: its MMAL drivers
+(`bcm2835-mmal-vchiq`, for the codecs, the ISP and the camera) fail, as
+the VideoCore refuses `mmal` (VCHIQ, above; `vc-sm-cma` opens `SMEM`);
+the WiFi controller finds no
 card ("mmc1: Failed to initialize a non-removable card"); and there is
 no display, sound or network to the host.
 
@@ -1431,9 +1513,13 @@ to quit.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
-- The VideoCore's VCHIQ services (audio, MMAL, the shared memory,
-  `vcgencmd`...) are not emulated: it refuses each, so the drivers that
-  use them fail where a real board's would work.
+- Of the VideoCore's VCHIQ services, only the shared memory (`SMEM`)
+  is emulated; it refuses the others (`mmal`, `AUDS` the audio, `GCMD`),
+  so the drivers that use them fail where a real board's would work.
+- `vcgencmd` answers seven commands (vcgencmd, above), in shapes taken
+  from what real boards print; any other command stops the machine,
+  where a real board answers it or reports an error. Its clocks give
+  the rate set, where a real board measures it.
 - The settings of `config.txt` that smirror does not list above are
   not applied; a warning names each. Of the overlays, the firmware
   itself acts on some (it changes its own console or display for
@@ -1509,8 +1595,20 @@ to quit.
   `reserve_space`, `queue_message`, `parse_rx_slots`, `parse_message`,
   `parse_open`, `release_slot`, `process_free_queue`,
   `vchiq_open_service_internal`, `vchiq_close_service_internal`,
-  `vchiq_connect_internal`) and `vchiq_arm.c` (the doorbell's handler,
-  the keepalive service, `vchiq_use_internal`).
+  `vchiq_connect_internal`, `get_listening_service`,
+  `get_connected_service`) and `vchiq_arm.c` (the doorbell's handler,
+  the keepalive service, `vchiq_use_internal`, the child devices).
+- SMEM: Raspberry Pi's Linux at cff533a,
+  [vc-sm-cma](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/vc-sm-cma)
+  (`vc_sm_defs.h`: the messages; `vc_sm_cma_vchi.c`: the header, the
+  transaction ids, bit 31; `vc_sm.c`: `vc_sm_vpu_event`, the import).
+- vcgencmd: raspberrypi/utils,
+  [vcgencmd.c](https://github.com/raspberrypi/utils/blob/master/vcgencmd/vcgencmd.c)
+  (`GET_GENCMD_RESULT`, `/dev/vcio`), the binary of Raspberry Pi OS
+  2026-10-06 (it opens `/dev/vcio_gencmd`, then `/dev/vcio`); Raspberry
+  Pi's documentation,
+  [vcgencmd](https://www.raspberrypi.com/documentation/computers/os.html)
+  (the commands and their arguments).
 - The BSC: the BCM2835 ARM Peripherals, chapter 3, and the BCM2711 ARM
   Peripherals, its BSC chapter (the fractions of TXW and RXR); the
   board's device tree (the three masters' registers and their shared
