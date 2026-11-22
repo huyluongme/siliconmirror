@@ -1830,6 +1830,13 @@ static void test_gpio_expander(void)
 		CHECK_EQ(exp_get(&s, 128 + i), state[i]);
 	}
 
+	/* vc4 says that it takes the display: nothing else changes. */
+	exp_tag(&s, 0x00030066, 0, output, 0, NULL, 0);
+	for (uint32_t i = 0; i < 8; i++) {
+		exp_config(&s, 128 + i, config);
+		CHECK_EQ(config[1], output[i]);
+	}
+
 	/* A reset of the board: as they started. */
 	for (uint32_t i = 0; i < 8; i++)
 		exp_set_config(&s, 128 + i, 1, 1);
@@ -1890,6 +1897,7 @@ static void test_known_tags(void)
 		0x00030043,
 		0x00038043,
 		0x00030048,
+		0x00030066,
 		0x00010002,
 		0x00010003,
 		0x00010004,

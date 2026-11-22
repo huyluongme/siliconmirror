@@ -501,6 +501,7 @@ unanswered, and a buffer without an end tag gets the code `0x80000001`.
 | `0x00030043` | The GPIO expander: a line's direction; `0x00038043` sets it        |
 | `0x00030041` | The GPIO expander: a line's state; `0x00038041` sets an output's   |
 | `0x00030048` | Linux reboots: the GPIO expander goes back as it started           |
+| `0x00030066` | vc4 takes the display (KMS): nothing to stop, no picture is shown  |
 
 The GPIO expander has 8 lines that only the firmware drives, 128 to 135
 in its tags: BT_ON, WL_ON, STATUS_LED, LAN_RUN, HDMI_HPD_N, CAM_GPIO0,
@@ -1450,7 +1451,10 @@ to quit.
   forums ([topic 2308905](https://forums.raspberrypi.com/viewtopic.php?p=2312525),
   [topic 2308642](https://forums.raspberrypi.com/viewtopic.php?p=2328867))
   and Raspberry Pi's Linux
-  [issue 5732](https://github.com/raspberrypi/linux/issues/5732).
+  [issue 5732](https://github.com/raspberrypi/linux/issues/5732);
+  [vc4_drv.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/gpu/drm/vc4/vc4_drv.c) and
+  [raspberrypi-firmware.h](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/include/soc/bcm2835/raspberrypi-firmware.h)
+  (`NOTIFY_DISPLAY_DONE`).
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

@@ -541,6 +541,21 @@ static bool notify_reboot(Raspi3bProperty *p, Value *v)
 	return true;
 }
 
+/*
+ * NOTIFY_DISPLAY_DONE, of no value: Linux's vc4 driver, taking the
+ * display with KMS, tells the firmware to stop its own display driver
+ * (vc4_drv.c, vc4_drm_bind, which warns "Couldn't stop firmware display
+ * driver" when the firmware does not answer). smirror's firmware shows
+ * no picture, and with KMS it set up no frame buffer (see the command
+ * line): there is nothing to stop.
+ */
+static bool notify_display_done(Raspi3bProperty *p, Value *v)
+{
+	(void)p;
+	(void)v;
+	return true;
+}
+
 /* The expander's line of the request, or NULL when it stopped. */
 static ExpLine *exp_line(Raspi3bProperty *p, const Value *v, uint32_t len)
 {
@@ -1506,6 +1521,7 @@ static const Handler handlers[] = {
 	{0x00030043, get_gpio_config},
 	{0x00038043, set_gpio_config},
 	{0x00030048, notify_reboot},
+	{0x00030066, notify_display_done},
 	{0x00010002, get_board_revision},
 	{0x00010003, get_mac_address},
 	{0x00010004, get_board_serial},
