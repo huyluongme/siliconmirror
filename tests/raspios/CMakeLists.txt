@@ -10,12 +10,23 @@ set(SMIRROR_RASPIOS_CARD "$ENV{HOME}/.cache/siliconmirror-raspios/card.img"
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
 	set(card ${CMAKE_CURRENT_BINARY_DIR}/card.img)
+	set(wav ${CMAKE_CURRENT_BINARY_DIR}/raspios.wav)
 	add_test(NAME raspios.session
 		COMMAND drive ${SMIRROR_RASPIOS_CARD} ${card}
 			${CMAKE_CURRENT_SOURCE_DIR}/session.txt
-			$<TARGET_FILE:smirror> -M raspi3b -sd ${card})
+			$<TARGET_FILE:smirror> -M raspi3b -sd ${card} -audio wav:${wav})
 	set_tests_properties(raspios.session PROPERTIES
 		SKIP_RETURN_CODE 77
 		TIMEOUT 5400
+		LABELS raspios)
+
+	# What aplay played in the session, as -audio wav: kept it.
+	add_executable(audio_check audio_check.c)
+	add_test(NAME raspios.audio
+		COMMAND audio_check ${SMIRROR_RASPIOS_CARD} ${wav}
+			${CMAKE_CURRENT_BINARY_DIR}/raspios-1.wav)
+	set_tests_properties(raspios.audio PROPERTIES
+		DEPENDS raspios.session
+		SKIP_RETURN_CODE 77
 		LABELS raspios)
 endif()

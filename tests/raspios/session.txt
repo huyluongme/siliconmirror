@@ -73,6 +73,23 @@ expect fmt 31 10 12 YU12 YV12 NV12 NV21 RGBP RGB3 BGR3 BGR4 YUYV YVYU UYVY VYUY
 expect fmt 31 9 1 JPEG
 expect pi@raspberrypi:~$
 
+# The sound: snd-bcm2835's card on the headphones, through VCHIQ's
+# 'AUDS'. aplay plays two files that python3 makes, 250 ms each: 48000
+# Hz, two channels of 16 bits, at 0 dB; then 8000 Hz, one channel of 8
+# bits, at -20 dB. audio_check (raspios.audio) reads what smirror's
+# -audio wav: kept of them.
+type aplay -l | grep --color=never Headphones\r
+expect Headphones [bcm2835 Headphones], device 0: bcm2835 Headphones [bcm2835 Headphones]
+expect pi@raspberrypi:~$
+type python3 -c "import wave,struct;w=wave.open('a.wav','wb');w.setnchannels(2);w.setsampwidth(2);w.setframerate(48000);w.writeframes(b''.join(struct.pack('<HH',i*37&65535,(i*101+5)&65535) for i in range(12000)));w.close();w=wave.open('b.wav','wb');w.setnchannels(1);w.setsampwidth(1);w.setframerate(8000);w.writeframes(bytes(i*13&255 for i in range(2000)));w.close()"\r
+expect pi@raspberrypi:~$
+type amixer -q -c Headphones cset name='PCM Playback Switch' on; amixer -q -c Headphones cset name='PCM Playback Volume' 0; aplay -q -D hw:Headphones a.wav; echo aplay $?\r
+expect aplay 0
+expect pi@raspberrypi:~$
+type amixer -q -c Headphones cset name='PCM Playback Volume' -- -2000; aplay -q -D hw:Headphones b.wav; echo aplay $?\r
+expect aplay 0
+expect pi@raspberrypi:~$
+
 # The board powers off: RSTS asks the firmware not to boot, smirror
 # ends. Linux waits for the mini UART for two bytes' time only, so the
 # end of its last line is lost, as on the board.
