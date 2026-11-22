@@ -22,6 +22,7 @@
 #include "hw/char/pl011.h"
 #include "hw/dma/bcm2835_dma.h"
 #include "hw/gpio/bcm2835_gpio.h"
+#include "hw/i2c/bcm2835_bsc.h"
 #include "hw/intc/bcm2835_ic.h"
 #include "hw/intc/bcm2836_local.h"
 #include "hw/misc/bcm2835_cprman.h"
@@ -228,6 +229,80 @@ static void destroy_rng(void *ctx)
 static void destroy_thermal(void *ctx)
 {
 	bcm2835_thermal_destroy(ctx);
+}
+
+static void reset_bsc(void *ctx)
+{
+	bcm2835_bsc_reset(ctx);
+}
+
+static void destroy_bsc(void *ctx)
+{
+	bcm2835_bsc_destroy(ctx);
+}
+
+/*
+ * The three BSCs share GPU interrupt 53, i2c_int (BCM2835 ARM
+ * Peripherals, 7.5; the device tree gives all three the same one): it
+ * is raised while any of them raises its own.
+ */
+#define NUM_BSC 3
+
+typedef struct SharedIrq {
+	IrqLine in[NUM_BSC];
+	IrqLine *out;
+	unsigned levels; /* bit n: in[n] is raised */
+} SharedIrq;
+
+static void shared_irq_set(void *ctx, unsigned n, bool level)
+{
+	SharedIrq *shared = ctx;
+
+	if (level)
+		shared->levels |= 1u << n;
+	else
+		shared->levels &= ~(1u << n);
+	irq_set(shared->out, shared->levels != 0);
+}
+
+/* BSC0, BSC1 and BSC2, nothing on their buses. */
+static bool add_bsc(Machine *m, Bcm2835Ic *ic, char *error, size_t error_size)
+{
+	static const struct {
+		const char *name;
+		uint64_t base;
+	} bsc[NUM_BSC] = {
+		{"bsc0", RASPI3B_BSC0_BASE},
+		{"bsc1", RASPI3B_BSC1_BASE},
+		{"bsc2", RASPI3B_BSC2_BASE},
+	};
+	SharedIrq *shared = calloc(1, sizeof(*shared));
+
+	if (shared == NULL || !machine_add_device(m, shared, NULL, free)) {
+		free(shared);
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	shared->out = bcm2835_ic_gpu_input(ic, BCM2835_IC_I2C);
+	for (unsigned i = 0; i < NUM_BSC; i++) {
+		Bcm2835Bsc *b;
+		BusStatus status;
+
+		irq_init(&shared->in[i], shared_irq_set, shared, i);
+		b = bcm2835_bsc_create(m, bsc[i].name, CORE_CLOCK_HZ, &shared->in[i]);
+		if (b == NULL || !machine_add_device(m, b, reset_bsc, destroy_bsc)) {
+			bcm2835_bsc_destroy(b);
+			snprintf(error, error_size, "out of memory");
+			return false;
+		}
+		status = bcm2835_bsc_map(b, m->bus, bsc[i].name, bsc[i].base);
+		if (status != BUS_OK) {
+			snprintf(error, error_size, "cannot map %s: %s", bsc[i].name,
+			         bus_status_str(status));
+			return false;
+		}
+	}
+	return true;
 }
 
 static void reset_dma(void *ctx)
@@ -643,6 +718,8 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+	if (!add_bsc(m, ic, error, error_size))
+		goto fail;
 
 	for (unsigned i = 0; i < BCM2835_GPIO_NUM_IRQS; i++)
 		gpio_irqs[i] = bcm2835_ic_gpu_input(ic, BCM2835_IC_GPIO0 + i);

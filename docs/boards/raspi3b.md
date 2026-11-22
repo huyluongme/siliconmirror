@@ -137,9 +137,12 @@ Addresses as the Arm cores see them. The peripherals sit at bus address
 | `0x3f200000` | 4 KB    | GPIO, 54 pins                                            | Yes, up to `0x3f2000a0`    |
 | `0x3f201000` | 4 KB    | UART0, a PL011 with 16-entry FIFOs                       | Yes                        |
 | `0x3f202000` | 256 B   | SDHOST, the SD card's controller                         | Yes                        |
+| `0x3f205000` | 32 B    | BSC0, an I2C master                                      | Yes, nothing on its bus    |
 | `0x3f212000` | 8 B     | Temperature sensor                                       | Read only                  |
 | `0x3f215000` | 256 B   | Auxiliary peripherals: UART1, the mini UART; SPI 1 and 2 | The mini UART              |
 | `0x3f300000` | 256 B   | EMMC, the Arasan SD controller of the WiFi chip          | Yes, without the chip      |
+| `0x3f804000` | 32 B    | BSC1, an I2C master (the GPIO header's)                  | Yes, nothing on its bus    |
+| `0x3f805000` | 32 B    | BSC2, an I2C master (the HDMI's DDC)                     | Yes, no display            |
 | `0x3f980000` | 64 KB   | USB, a Synopsys DWC2 controller                          | As a host                  |
 | `0x3fe05000` | 256 B   | DMA channel 15                                           | Yes, but 2D and ignore     |
 | `0x40000000` | 256 B   | ARM local peripherals: core timer, interrupts, mailboxes | Yes, but `0x04` and `0x28` |
@@ -964,6 +967,35 @@ off, addresses where nothing is modelled or the VideoCore's part of the
 RAM (`0x3f000000` and up in each alias), and accesses that are not
 32-bit.
 
+## The I2C masters (BSC)
+
+The three BSC masters, BSC0 at `0x3f205000`, BSC1 at `0x3f804000` and
+BSC2, the HDMI's DDC, at `0x3f805000`, follow chapter 3 of the BCM2835
+ARM Peripherals; the fractions that its text lost come from the
+BCM2711's, whose BSC is the same (TXW below a quarter of the 16-byte
+FIFO, RXR from three quarters). They share GPU interrupt 53, `i2c_int`,
+as the device tree says.
+
+Nothing is attached to the buses: no device on the GPIO header, no
+camera or display on BSC0, no HDMI display (so no EDID) on BSC2. A
+transfer is then a START and an address byte that no slave
+acknowledges: after nine SCL clocks (the address, R/W and the ACK
+clock) and a STOP, ten in all, at the core clock (250 MHz) over `CDIV`
+rounded down to even (32768 for 0), it ends with `ERR` and `DONE` set
+and `TA` clear; no byte moves, so the FIFO and `DLEN` stay as they
+were. Linux's `i2c-bcm2835` then reports `-EREMOTEIO`, as on a board
+with nothing plugged in. Raspberry Pi OS's `vc4-kms-v3d` enables BSC2;
+its driver sets the clock, the delays and the timeout at boot.
+
+smirror's choices, where the datasheet is silent: `DIV` reads back as
+written; `DLEN` reads, with `TA` or `DONE`, the bytes left, all of
+them; `ST` without `I2CEN` does nothing. What is not modelled stops the
+machine: accesses that are not 32-bit, a 1 in a reserved bit, `ST` or
+`CLEAR` during a transfer (`CLEAR` would abort it), `DLEN` or `A`
+written during one, a read of an empty FIFO ("invalid data"), and the
+addresses past the eight registers in the device tree's 0x200 or
+0x1000 bytes.
+
 ## The random number generator
 
 The random number generator at `0x3f104000` is not in the datasheet;
@@ -1275,6 +1307,8 @@ to quit.
   low-speed devices, which need the hub's transaction translators,
   cannot be attached yet.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
+- No display, camera or other device is attached: the I2C masters find
+  no slave, and HDMI no monitor.
 - The settings of `config.txt` that smirror does not list above are
   not applied; a warning names each. Of the overlays, the firmware
   itself acts on some (it changes its own console or display for
@@ -1286,8 +1320,8 @@ to quit.
 - Time is virtual, as described under The Generic Timer: the counter
   follows the instructions that smirror runs, not the host's clock.
 - Of the interrupt controller's sources, only the mini UART, the GPIO,
-  UART0, the mailboxes, SDHOST, the EMMC controller and USB are
-  modelled yet.
+  UART0, the mailboxes, the doorbells, the I2C masters, SDHOST, the EMMC
+  controller, DMA, the MPHI and USB are modelled yet.
 - The performance monitors do not count yet, so their interrupt never
   comes.
 - A core sees an interrupt from another core, such as a mailbox, at its
@@ -1346,6 +1380,11 @@ to quit.
   sizes) and [vchiq_arm.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/interface/vchiq_arm/vchiq_arm.c) (the slots' memory,
   `VCHIQ_INIT`, the doorbells); the board's device tree (the vchiq
   node's registers and interrupt).
+- The BSC: the BCM2835 ARM Peripherals, chapter 3, and the BCM2711 ARM
+  Peripherals, its BSC chapter (the fractions of TXW and RXR); the
+  board's device tree (the three masters' registers and their shared
+  interrupt); Raspberry Pi's Linux,
+  [i2c-bcm2835.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/i2c/busses/i2c-bcm2835.c).
 
 - The MPHI and `dwc_otg`: Raspberry Pi's Linux,
   [dwc_otg_hcd_linux.c](https://github.com/raspberrypi/linux/blob/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/usb/host/dwc_otg/dwc_otg_hcd_linux.c)

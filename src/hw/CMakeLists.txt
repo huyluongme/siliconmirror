@@ -7,6 +7,7 @@ add_library(hw STATIC
 	char/pl011.c
 	dma/bcm2835_dma.c
 	gpio/bcm2835_gpio.c
+	i2c/bcm2835_bsc.c
 	intc/bcm2835_ic.c
 	intc/bcm2836_local.c
 	misc/bcm2835_mbox.c

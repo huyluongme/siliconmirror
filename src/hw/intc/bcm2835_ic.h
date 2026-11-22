@@ -35,6 +35,7 @@
 #define BCM2835_IC_AUX 29    /* the mini UART and the SPI masters */
 #define BCM2835_IC_MPHI 32   /* the MPHI: dwc_otg's "soft" interrupt */
 #define BCM2835_IC_GPIO0 49  /* GPIO bank 0; 50 and 51 for 1 and 2, 52 all */
+#define BCM2835_IC_I2C 53    /* i2c_int: the three BSC masters */
 #define BCM2835_IC_SDHOST 56 /* the SD card controller */
 #define BCM2835_IC_UART 57   /* the PL011, UART0 */
 #define BCM2835_IC_EMMC 62   /* the Arasan SD controller (bcm2710.dtsi) */

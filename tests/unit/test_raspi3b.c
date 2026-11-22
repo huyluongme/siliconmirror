@@ -840,6 +840,50 @@ static void test_rng_thermal(void)
 }
 
 /*
+ * BSC0, BSC1 and BSC2, nothing on their buses, share GPU interrupt 53:
+ * bit 21 of the second pending register, while any of them raises it.
+ */
+static void test_bsc(void)
+{
+	static const uint64_t base[] = {0x3f205000, 0x3f804000, 0x3f805000};
+	FILE *out;
+	Machine *m = boot(park, ARRAY_SIZE(park), &out);
+	uint64_t v = 0;
+
+	CHECK_EQ(bus_write(m->bus, RASPI3B_IC_BASE + 0x14, 4, 1u << 21), BUS_OK);
+	for (size_t i = 0; i < ARRAY_SIZE(base); i++) {
+		CHECK_EQ(bus_read(m->bus, base[i] + 0x14, 4, &v), BUS_OK); /* DIV */
+		CHECK_EQ(v, 0x5dc);
+		/* A transfer with INTD: the address takes 10 clocks of 6 us. */
+		CHECK_EQ(bus_write(m->bus, base[i] + 0x0, 4, 0x8180), BUS_OK);
+	}
+	event_queue_run_until(&m->events, m->events.now + 59999);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	event_queue_run_until(&m->events, m->events.now + 1);
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &v), BUS_OK);
+	CHECK_EQ(v, 1u << 21);
+	for (size_t i = 0; i < ARRAY_SIZE(base); i++) {
+		CHECK_EQ(bus_read(m->bus, base[i] + 0x4, 4, &v), BUS_OK);
+		CHECK_EQ(v, 0x152); /* ERR, TXE, TXD, DONE */
+		CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &v), BUS_OK);
+		CHECK_EQ(v, 1u << 21); /* still: another raises it */
+		CHECK_EQ(bus_write(m->bus, base[i] + 0x4, 4, 0x2), BUS_OK);
+	}
+	CHECK_EQ(bus_read(m->bus, RASPI3B_IC_BASE + 0x08, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0);
+	/* A reset puts them back. */
+	CHECK_EQ(bus_write(m->bus, base[1] + 0x14, 4, 0x10), BUS_OK);
+	machine_reset(m);
+	CHECK_EQ(bus_read(m->bus, base[1] + 0x14, 4, &v), BUS_OK);
+	CHECK_EQ(v, 0x5dc);
+	CHECK_EQ(m->stop, MACHINE_STOP_NONE);
+	machine_destroy(m);
+	fclose(out);
+	remove(KERNEL);
+}
+
+/*
  * The AXI bridges at 0x3f00a000, the power manager's second region: 36
  * bytes, of which their ID is modelled.
  */
@@ -1139,6 +1183,7 @@ int main(void)
 	RUN_TEST(test_doorbells);
 	RUN_TEST(test_mphi);
 	RUN_TEST(test_rng_thermal);
+	RUN_TEST(test_bsc);
 	RUN_TEST(test_axi_bridges);
 	RUN_TEST(test_dma);
 	RUN_TEST(test_secondary_cores);
