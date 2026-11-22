@@ -42,7 +42,7 @@ Facts that were checked, and where the pinned software comes from.
   hardware watchdog resets the board mid first boot.
 - What the stock DT and drivers needed: BSC (I2C) with nothing on the
   bus, the HVS as vc4 sets it up with no display, VCHIQ CONNECT and
-  OPEN (SMEM open, mmal refused), `NOTIFY_DISPLAY_DONE`, and the
+  OPEN (SMEM and mmal open), `NOTIFY_DISPLAY_DONE`, and the
   firmware's KMS handling of config.txt (no `bcm2708_fb.*`).
 - Exploration of the Pi OS card: `sh .claude/tools/raspios_explore.sh
   OUT_PREFIX` (debug copy with enable_uart=1, console on serial only,
@@ -54,5 +54,19 @@ Facts that were checked, and where the pinned software comes from.
   components: `ril.video_decode`, `ril.video_encode`, `ril.isp`,
   `ril.image_fx`, `ril.image_encode`; each COMPONENT_CREATE, port info,
   SUPPORTED_ENCODINGS of input[0] and output[0], then finalise),
-  bcm2835-isp and bcm2835-camera. Their sources at cff533a are cached
-  in `~/.cache/siliconmirror-linux/src/{vc-sm-cma,vchiq-mmal,mmal-users}`.
+  bcm2835-isp (two instances, each keeps its `ril.isp`; SUPPORTED_ENCODINGS
+  of all four ports) and bcm2835-camera (`camera_info`, CAMERA_INFO;
+  0 cameras: -ENODEV, silent). Each opens its own `mmal`. Their sources
+  at cff533a are cached in
+  `~/.cache/siliconmirror-linux/src/{vc-sm-cma,vchiq-mmal,mmal-users}`
+  (with `bcm2835-isp-fmts.h`).
+- What touches MMAL after probe: open, QUERYCAP and ENUM_FMT do not
+  (udev's v4l_id is safe); bcm2835-codec creates its component at
+  `queue_setup` (streaming), then PORT_PARAMETER_SET, PORT_INFO_SET,
+  enable, buffers: all stop the machine today. V4L2 lists a port's
+  encodings in the firmware's order and its first is the default, so a
+  board's `v4l2-ctl --list-formats*` or a default in `--all` gives the
+  firmware's order (a Pi 3 of 2019 had MPG4 as decode's default).
+- To check MMAL lists on Pi OS without v4l-utils: python3 with
+  `fcntl.ioctl(f, 0xc0405602, ...)` (VIDIOC_ENUM_FMT; the codec's types
+  are 10 and 9, mplane; the ISP's 2, 1 and 13), as `tests/raspios/session.txt`.
