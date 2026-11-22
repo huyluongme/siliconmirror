@@ -8,8 +8,9 @@ booting unmodified bootloaders and kernels.
 
 > **Status:** early development. On the first board, the Raspberry Pi 3
 > Model B, U-Boot and Linux boot unmodified: Linux runs a shell on the
-> serial console and uses the SD card, USB and the Ethernet controller;
-> a network to the host is still to come.
+> serial console and uses the SD card, USB and the Ethernet controller,
+> whose cable reaches the host through a TAP device or a capture file;
+> a user-mode network, which needs no root, is still to come.
 
 ## Goals
 
@@ -71,6 +72,8 @@ console. smirror boots it to that shell. A test uses it as a user
 would: commands in the shell, the SD card, Ethernet, a reboot and a
 power off; like the U-Boot test, it takes minutes, only the `release`
 and `ci-release` builds run it, and without the card it is skipped.
+Another boots the same card with `-net pcap:`, brings the link up,
+pings, and checks the frames Linux sent in the capture.
 
 `scripts/uboot-linux-card.sh` puts both together, as a card that boots
 with U-Boot would: the firmware starts U-Boot, whose `boot.scr` loads
@@ -147,6 +150,7 @@ contains `compile_commands.json` for editors and language servers.
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
 | `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
 | `-audio DEV`   | Where the board's sound goes: nothing plugged in (`none`, the default), `wav:PATH` (WAV files, each stream in its own format) or `alsa`, `alsa:DEVICE` (the host's sound card) |
+| `-net DEV`     | The other end of the board's Ethernet cable: no cable (`none`, the default), `tap:IFNAME` (the host's TAP device IFNAME) or `pcap:PATH` (a capture of the frames the guest sends, nothing comes back) |
 | `-clock CLOCK` | `virtual` (the default): time counts instructions, the same on every run; `host`: time follows the host's clock, as on the board, and U-Boot boots far faster |
 
 The SD card image is used as it is, as a real card would be: what the
@@ -176,6 +180,18 @@ card) goes to it. `-audio wav:PATH` writes it to PATH, a new file
 the host. To hear it at the guest's pace, add `-clock host`: with the
 virtual clock, a machine that runs ahead of the host waits for the
 sound card, and one that falls behind leaves gaps.
+
+On the `raspi3b`, `-net` is what the RJ45 jack's cable is plugged
+into; with it, the link comes up at 100 Mb/s. `-net tap:tap0` joins the
+board to the host's TAP interface `tap0`, which root makes once and
+gives to the user, so that smirror runs without root:
+
+    sudo ip tuntap add dev tap0 mode tap user $USER
+    sudo ip link set tap0 up
+
+The host then routes, bridges or serves DHCP on `tap0` as on any
+interface. `-net pcap:PATH` writes what the guest sends to PATH, for
+Wireshark or tcpdump, each frame at its virtual time.
 
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does

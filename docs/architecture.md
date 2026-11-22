@@ -23,8 +23,9 @@ src/
                       flattened device trees
   core/               Board-independent core: memory bus, interrupt
                       lines, virtual time and timed events, the system
-                      counter, the CPU, character stream, block device
-                      and audio output interfaces, the machine main loop
+                      counter, the CPU, character stream, block device,
+                      audio output and network link interfaces, the
+                      machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -42,10 +43,12 @@ src/
     char/             Character streams: stdio, file, socket
     block/            Block storage: raw image files
     audio/            Audio outputs: WAV files, the host's sound card
+    net/              Network links: the host's TAP devices, pcap files
   boot/               Boot methods: direct kernel load; MBR, FAT and
                       config.txt reading for the Raspberry Pi firmware
   machine/            Board definitions (raspi3b): CPUs, memory map,
-                      devices, boot method; the list of boards for -M
+                      devices, boot method; the list of boards for -M;
+                      the Ethernet cable between a port and a link
   debug/              GDB stub, instruction tracing
   frontend/           Command line, machine configuration files, main()
 tests/
@@ -115,6 +118,15 @@ defined in `core`: a UART writes to and reads from a `CharStream`
 (`core/char_stream.h`), and each back end in `backend/char/` implements
 one: `file.c` for output to a file, `stdio.c` for the terminal or
 whatever standard input and output are.
+
+An Ethernet port meets the host the same way, through a `NetLink`
+(`core/net.h`), with frames as the host's network stack carries them,
+without their FCS. The cable between them, `machine/net_cable.c`, is
+the partner's MAC: it drops the port's runts and frames with a wrong
+FCS, pads the host's frames and adds their FCS, and gives them to the
+port one at a time, each when its last bit would have crossed the
+cable at the link's speed. It is in `machine` because it knows both
+sides; any board with an Ethernet port can use it.
 
 Devices are grouped by kind, not by board. A PL011 exists on many ARM
 boards, so a future board can reuse it directly.

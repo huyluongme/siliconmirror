@@ -1035,7 +1035,8 @@ measured on the BCM2711's controller, the same core: `GSNPSID`
 It works as a host, as on the Pi 3, whose port is wired to the LAN9514
 hub. smirror models the core's resets and FIFO flushes, the FIFO sizes,
 the root port (connected once powered, enabled at high speed when
-software ends its reset), the frame number, and the host channels with
+software ends its reset), the frame number, the start of frame
+interrupt, and the host channels with
 buffer DMA, whose addresses are bus addresses: a transfer goes to the
 device packet by packet and ends, after the time its packets take at
 480 Mb/s (a packet's token, handshake and gaps count as 16 bytes, our
@@ -1043,6 +1044,16 @@ choice), with the transfer done, a NAK, a STALL, a babble, or a
 transaction error when no device answers, as the drivers expect. Device
 mode, the data FIFOs, split transactions and isochronous endpoints stop
 the machine.
+
+`GINTSTS` bit 3, `SOF`, is set as the port sends each microframe's
+start of frame, every 125 µs at high speed, while it is enabled, until
+software writes 1 to it; with `GINTMSK` bit 3, it raises the interrupt.
+Linux's `dwc2` needs it: an interrupt endpoint that answers with a NAK
+waits for its next frame, and only `dwc2_sof_intr()` puts it back to
+work. Linux unmasks it while a periodic transfer is queued, which the
+LAN9514's interrupt endpoint has from the time its interface opens, and
+the hub's from its probe. The other events of the core itself are not
+raised.
 
 The Raspberry Pi's own `dwc_otg` driver, which Raspberry Pi OS uses,
 reads a few registers of the dedicated FIFOs and of device mode in host
@@ -1101,10 +1112,18 @@ smirror follows it, without the LAN9500A's additions:
   says (4.13.1), the same PHY (model `0x0c`, which Linux drives as
   "SMSC LAN8700"); writes to them do nothing (our reading). Linux reads
   the PHY's EEE abilities through 13 and 14 and takes `0xFFFF` for none.
-- The resets: a USB reset or a lite reset puts every register back, and
-  the PHY powers down after a USB reset; the PHY's reset through
+- The resets: a USB reset puts every register back, the PHY's too, and
+  the PHY powers down; a lite reset puts back every register but the
+  PHY's, and the link stays as it was; the PHY's reset through
   `PMT_CTL` takes 2 ms, while every transfer gets a NAK, and its soft
-  reset 256 µs.
+  reset 256 µs. Section 5.13.3 has the lite reset reset "the entire
+  chip" but its USB parts, yet `HW_CFG`'s description of `LRST` does not
+  name the PHY, where that of `SRST` does, and unlike the other chip
+  resets it puts no PHY into power down. Linux 6.18's `smsc95xx` sets
+  the PHY's interrupt mask once, when it binds, and makes a lite reset
+  each time the interface opens; on the board, the link's interrupt
+  still comes after that. So the PHY keeps its registers through a lite
+  reset (our reading); were it reset, Linux would never see the link.
 - No EEPROM, as on the board: the MAC address registers hold
   `FF:FF:FF:FF:FF:FF` and the firmware's MAC address comes through the
   device tree or U-Boot's `usbethaddr`. The EEPROM's data pin has a
@@ -1130,12 +1149,35 @@ smirror follows it, without the LAN9500A's additions:
   which the datasheet's note 6 forbids, and that works on the real
   board, so smirror allows it.
 
-No cable is plugged in, as nothing on the host carries the frames yet:
-the link stays down, and U-Boot's `dhcp` says `Waiting for Ethernet
-connection... unable to connect.` as a board without a cable does. The
-model has a cable for its tests: a partner that negotiates 10 or 100
-Mb/s, half or full duplex, with the link up 2 s after a reset (our
-choice), and frames that cross it at once. Not modelled, and the machine
+Without `-net`, no cable is plugged in: the link stays down, and
+U-Boot's `dhcp` says `Waiting for Ethernet connection... unable to
+connect.` as a board without a cable does. With `-net`, the cable goes
+to a partner that negotiates 10 or 100 Mb/s, half or full duplex, with
+the link up 2 s after a reset (our choice): Linux says `Link is Up -
+100Mbps/Full - flow control off`. The partner's MAC is on the host's
+side (`machine/net_cable.c`, see docs/architecture.md): what the
+LAN9514 sends shorter than 64 bytes or with a wrong FCS is dropped, as
+a MAC drops it (IEEE 802.3 clause 4); the rest goes to the host without
+its FCS. The host's frames are padded to 60 bytes, get their FCS, and
+reach the LAN9514 one at a time, each when its last bit has crossed
+the cable at the link's speed: its 8 bytes of preamble and delimiter,
+the frame, and the 12-byte gap after it, at 80 ns a byte at 100 Mb/s.
+The others wait on the host, as at a switch's port, so a burst from the
+host does not overflow the RX FIFO in no time as it could not on the
+board. With no link, the host's frames are lost. The host's frames are
+taken at the main loop's polls of its input, every millisecond of
+virtual time, and when one has crossed the cable.
+
+- `-net tap:IFNAME`: the host's TAP device IFNAME, after the kernel's
+  `tuntap.txt`, without packet information (`IFF_NO_PI`): one frame a
+  read or a write. A frame the host has no room for, or refuses (its
+  interface down, `EIO`), is lost, as on a busy link.
+- `-net pcap:PATH`: a capture in the pcap format of
+  draft-ietf-opsawg-pcap-04, nanoseconds, `LINKTYPE_ETHERNET` without
+  the FCS; a frame's time is its virtual time from power on, counted
+  from 1970-01-01. Nothing comes back. The session `linux.net` brings
+  the link up, pings 10.0.2.2, and `net_check` finds Linux's three ARP
+  requests in the file. Not modelled, and the machine
 stops when software uses them: the soft reset `SRST` (a USB disconnect),
 the data port, the debug registers, wake-up frames and wake-up
 detection, the receive checksum engine's mode 1 (VLAN tags and SNAP
@@ -1658,7 +1700,11 @@ to quit.
 - The WiFi chip behind the EMMC controller is not modelled. Full- and
   low-speed devices, which need the hub's transaction translators,
   cannot be attached yet.
-- The Ethernet has no cable: nothing on the host carries its frames yet.
+- The Ethernet's cable (`-net`) carries whole frames, not bits: no
+  collisions, so half duplex behaves as full; the host's frames cross
+  it at the link's speed, but what the LAN9514 sends reaches the host at
+  once. Without `-net` there is no cable. There is no user-mode network
+  yet: the host's side is a TAP device or a capture.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
 - Of the VideoCore's VCHIQ services, the shared memory (`SMEM`), the
@@ -1929,6 +1975,26 @@ to quit.
   Microchip DS00002306A: the hub's configuration without an EEPROM
   (Tables 3-3 to 3-5), the Ethernet controller's defaults (Table
   3-11), the EEPROM pins (Table 2-1) and timing (Table 4-8).
+- The cable and `-net`: the LAN950x datasheet's resets (5.13, `HW_CFG`
+  7.3.5); Raspberry Pi's Linux 6.18,
+  [smsc95xx.c](https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/net/usb/smsc95xx.c)
+  (`smsc95xx_reset()` and its lite reset, the PHY's interrupt through
+  `INT_EP_CTL`),
+  [smsc.c](https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/net/phy/smsc.c)
+  and [phy.c](https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/net/phy/phy.c)
+  (the interrupt mask `0xD0`, written only when the interrupt is
+  requested); Linux's dwc2,
+  [hcd_intr.c](https://github.com/torvalds/linux/blob/master/drivers/usb/dwc2/hcd_intr.c)
+  and [hcd_queue.c](https://github.com/torvalds/linux/blob/master/drivers/usb/dwc2/hcd_queue.c)
+  (`dwc2_sof_intr()`, `SOF` unmasked with the first periodic queue head,
+  an interrupt endpoint's NAK); the kernel's
+  [TUN/TAP document](https://docs.kernel.org/networking/tuntap.html);
+  [draft-ietf-opsawg-pcap-04](https://www.ietf.org/archive/id/draft-ietf-opsawg-pcap-04.txt)
+  (sections 4 and 5) and tcpdump's
+  [link-layer types](https://www.tcpdump.org/linktypes.html)
+  (`LINKTYPE_ETHERNET`, 1); IEEE 802.3 clauses 3 and 4 (the frame's
+  minimum length, its FCS, the preamble and the interpacket gap), from
+  general knowledge.
 - The power manager's watchdog: Linux's
   [bcm2835_wdt.c](https://github.com/torvalds/linux/blob/master/drivers/watchdog/bcm2835_wdt.c)
   (registers, password, ticks, the partition in `RSTS` and 63 for a

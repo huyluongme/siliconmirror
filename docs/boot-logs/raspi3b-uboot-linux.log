@@ -235,40 +235,40 @@ Starting kernel ...
 [    2.536857] hub 1-0:1.0: USB hub found
 [    2.540609] hub 1-0:1.0: 1 port detected
 [    2.545355] usbcore: registered new interface driver uas
-[    2.550698] usbcore: registered new interface driver usb-storage
-[    2.556879] mousedev: PS/2 mouse device common for all mice
-[    2.563466] sdhci: Secure Digital Host Controller Interface driver
-[    2.569641] sdhci: Copyright(c) Pierre Ossman
-[    2.574071] sdhci-pltfm: SDHCI platform and OF driver helper
-[    2.579969] hid: raw HID events driver (C) Jiri Kosina
-[    2.585161] usbcore: registered new interface driver usbhid
-[    2.590734] usbhid: USB HID core driver
-[    2.596271] hw perfevents: enabled with armv8_cortex_a53 PMU driver, 7 (0,8000003f) counters available
-[    2.606091] NET: Registered PF_PACKET protocol family
-[    2.611211] Key type dns_resolver registered
-[    2.634573] registered taskstats version 1
-[    2.638741] Loading compiled-in X.509 certificates
-[    2.651607] Demotion targets for Node 0: null
-[    2.656027] Key type .fscrypt registered
-[    2.661172] Key type fscrypt-provisioning registered
-[    2.669252] uart-pl011 3f201000.serial: cts_event_workaround enabled
-[    2.675782] 3f201000.serial: ttyAMA1 at MMIO 0x3f201000 (irq = 99, base_baud = 0) is a PL011 rev2
-[    2.684770] serial serial0: tty port ttyAMA1 registered
-[    2.690469] bcm2835-aux-uart 3f215040.serial: there is not valid maps for state default
-[    2.698604] printk: legacy console [ttyS0] disabled
-[    2.703733] 3f215040.serial: ttyS0 at MMIO 0x3f215040 (irq = 71, base_baud = 31250000) is a 16550
-[    2.712612] printk: legacy console [ttyS0] enabled
-[    2.712612] printk: legacy console [ttyS0] enabled
-[    2.722213] printk: legacy bootconsole [bcm2835aux0] disabled
-[    2.722213] printk: legacy bootconsole [bcm2835aux0] disabled
+[    2.550699] usbcore: registered new interface driver usb-storage
+[    2.556881] mousedev: PS/2 mouse device common for all mice
+[    2.563468] sdhci: Secure Digital Host Controller Interface driver
+[    2.569644] sdhci: Copyright(c) Pierre Ossman
+[    2.574075] sdhci-pltfm: SDHCI platform and OF driver helper
+[    2.579974] hid: raw HID events driver (C) Jiri Kosina
+[    2.585167] usbcore: registered new interface driver usbhid
+[    2.590741] usbhid: USB HID core driver
+[    2.596283] hw perfevents: enabled with armv8_cortex_a53 PMU driver, 7 (0,8000003f) counters available
+[    2.606105] NET: Registered PF_PACKET protocol family
+[    2.611226] Key type dns_resolver registered
+[    2.634624] registered taskstats version 1
+[    2.638801] Loading compiled-in X.509 certificates
+[    2.652411] Demotion targets for Node 0: null
+[    2.656841] Key type .fscrypt registered
+[    2.661269] Key type fscrypt-provisioning registered
+[    2.669362] uart-pl011 3f201000.serial: cts_event_workaround enabled
+[    2.675892] 3f201000.serial: ttyAMA1 at MMIO 0x3f201000 (irq = 99, base_baud = 0) is a PL011 rev2
+[    2.684881] serial serial0: tty port ttyAMA1 registered
+[    2.690576] bcm2835-aux-uart 3f215040.serial: there is not valid maps for state default
+[    2.698704] printk: legacy console [ttyS0] disabled
+[    2.703834] 3f215040.serial: ttyS0 at MMIO 0x3f215040 (irq = 71, base_baud = 31250000) is a 16550
+[    2.712714] printk: legacy console [ttyS0] enabled
+[    2.712714] printk: legacy console [ttyS0] enabled
+[    2.722316] printk: legacy bootconsole [bcm2835aux0] disabled
+[    2.722316] printk: legacy bootconsole [bcm2835aux0] disabled
 [    2.735974] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
-[    2.742777] bcm2835-power bcm2835-power: Broadcom BCM2835 power domains driver
-[    2.749847] of_cfs_init
-[    2.751891] of_cfs_init: OK
-[    2.754697] clk: Disabling unused clocks
-[    2.758606] PM: genpd: Disabling unused power doma[    2.824660] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
-[    2.834873] Freeing unused kernel memory: 5632K
-[    2.838910] Run /init as init process
+[    2.742787] bcm2835-power bcm2835-power: Broadcom BCM2835 power domains driver
+[    2.749872] of_cfs_init
+[    2.751901] of_cfs_init: OK
+[    2.754708] clk: Disabling unused clocks
+[    2.758601] PM: genpd: Disabling unused power dom[    2.824664] sdhost-bcm2835 3f202000.mmc: loaded - DMA enabled (>1)
+[    2.834890] Freeing unused kernel memory: 5632K
+[    2.838928] Run /init as init process
 linux-card: the initramfs runs
 ~ # smirror: shutdown: the user pressed Ctrl-A x
 drive: 11 lines, ok
