@@ -90,6 +90,18 @@ add_executable(test_machine test_machine.c)
 target_link_libraries(test_machine PRIVATE core)
 add_test(NAME unit.machine COMMAND test_machine)
 
+add_executable(test_audio_wav test_audio_wav.c)
+target_link_libraries(test_audio_wav PRIVATE backend)
+add_test(NAME unit.audio_wav COMMAND test_audio_wav)
+
+# As src/backend finds it; the test needs no sound card.
+find_package(ALSA QUIET)
+if(ALSA_FOUND)
+	add_executable(test_audio_alsa test_audio_alsa.c)
+	target_link_libraries(test_audio_alsa PRIVATE backend)
+	add_test(NAME unit.audio_alsa COMMAND test_audio_alsa)
+endif()
+
 add_executable(test_char_file test_char_file.c)
 target_link_libraries(test_char_file PRIVATE backend)
 add_test(NAME unit.char_file COMMAND test_char_file)

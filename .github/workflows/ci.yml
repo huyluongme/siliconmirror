@@ -24,12 +24,13 @@ jobs:
       - uses: actions/checkout@v7
       # binutils-aarch64-linux-gnu builds the bare-metal test programs;
       # fdisk, dosfstools, mtools and device-tree-compiler make the SD
-      # card images and device trees that the boot tests use.
+      # card images and device trees that the boot tests use;
+      # libasound2-dev, ALSA's library, the host's sound card (-audio alsa).
       - name: Install build tools
         run: >
           sudo apt-get update &&
           sudo apt-get install -y ninja-build binutils-aarch64-linux-gnu
-          fdisk dosfstools mtools device-tree-compiler
+          fdisk dosfstools mtools device-tree-compiler libasound2-dev
       - name: Build and test
         run: make PRESET=${{ matrix.preset }} test
 
