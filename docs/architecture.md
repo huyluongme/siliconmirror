@@ -23,8 +23,8 @@ src/
                       flattened device trees
   core/               Board-independent core: memory bus, interrupt
                       lines, virtual time and timed events, the system
-                      counter, the CPU, character stream and block device
-                      interfaces, the machine main loop
+                      counter, the CPU, character stream, block device
+                      and audio output interfaces, the machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
   hw/                 Device models, grouped by kind
@@ -41,6 +41,7 @@ src/
   backend/            Host resources used by devices
     char/             Character streams: stdio, file, socket
     block/            Block storage: raw image files
+    audio/            Audio outputs: WAV files, the host's sound card
   boot/               Boot methods: direct kernel load; MBR, FAT and
                       config.txt reading for the Raspberry Pi firmware
   machine/            Board definitions (raspi3b): CPUs, memory map,

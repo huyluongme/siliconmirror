@@ -51,7 +51,9 @@ used after changing the AArch64 code of a board's boot stub. The tests
 that boot from an SD card image make the image and its device tree as
 real cards are made, with `sfdisk`, `mkfs.fat`, mtools and `dtc` (the
 `fdisk`, `dosfstools`, `mtools` and `device-tree-compiler` packages);
-without them, those tests are skipped too.
+without them, those tests are skipped too. `-audio alsa`, the host's
+sound card, needs ALSA's library (`libasound2-dev`); without it,
+smirror is built without that option.
 
 One more test boots U-Boot on the `raspi3b` and uses its console, as a
 user would: the SD card, USB, Ethernet, a reset. It needs a card that
@@ -144,6 +146,7 @@ contains `compile_commands.json` for editors and language servers.
 | `-sd FILE`     | SD card image; without `-kernel` the board boots from it, as the real one   |
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
 | `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
+| `-audio DEV`   | Where the board's sound goes: nothing plugged in (`none`, the default), `wav:PATH` (WAV files, each stream in its own format) or `alsa`, `alsa:DEVICE` (the host's sound card) |
 | `-clock CLOCK` | `virtual` (the default): time counts instructions, the same on every run; `host`: time follows the host's clock, as on the board, and U-Boot boots far faster |
 
 The SD card image is used as it is, as a real card would be: what the
@@ -165,6 +168,14 @@ goes to the guest too; press **Ctrl-A x** to quit smirror, and Ctrl-A
 Ctrl-A to send a Ctrl-A. When standard input is a file or a pipe, its
 bytes go to the guest as they are, until its end. `file:PATH` and `null`
 give the guest no input.
+
+On the `raspi3b`, `-audio` is what is plugged into the headphone jack:
+what the guest plays there (on Raspberry Pi OS, ALSA's `Headphones`
+card) goes to it. `-audio wav:PATH` writes it to PATH, a new file
+(`PATH-1.wav`...) for each change of format; `-audio alsa` plays it on
+the host. To hear it at the guest's pace, add `-clock host`: with the
+virtual clock, a machine that runs ahead of the host waits for the
+sound card, and one that falls behind leaves gaps.
 
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does

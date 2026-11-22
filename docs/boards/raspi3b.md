@@ -677,8 +677,8 @@ recycled enough of them, then signals the Arm's `trigger`.
   `-EINVAL`, its service waiting in `CLOSEWAIT`, and the driver
   reports it. A warning names each service it does not have, once (the
   first 16), and each `OPEN` whose versions do not meet. The services:
-  `SMEM` and `mmal` (below). `AUDS` and `GCMD` are refused; a real
-  board has them, so this is a difference. Raspberry Pi OS's `vcgencmd` does
+  `SMEM`, `mmal` and `AUDS` (below). `GCMD` is refused; a real board
+  has it, so this is a difference. Raspberry Pi OS's `vcgencmd` does
   not use `GCMD` but a tag (below), and opens nothing at boot.
 - `DATA` goes to the service open on its port, from the Arm's port
   that opened it; to any other port it is dropped, as `parse_message`
@@ -813,6 +813,77 @@ components (`ril.camera`, the renderers...), a message without MMAL's
 magic or too short for its type, a handle or port that is not the
 client's, a `PORT_PARAMETER_GET` room larger than a reply holds, and
 more than 16 components.
+
+### AUDS, the audio service
+
+Linux's `snd-bcm2835` (`bcm2835-audio`, under the vchiq bus) makes an
+ALSA card for each output its module parameters and the device tree
+allow: on Pi OS, `Headphones` (the 3.5 mm jack; the KMS overlay hands
+HDMI's sound to `vc4`). Nothing goes to the VideoCore at probe: each
+stream a program opens (`aplay`, `speaker-test`) opens `AUDS`, version
+2 from 1 (the VideoCore's are the same). Its messages, from
+`vc_vchi_audioserv_defs.h`, are a type and a union, 20 bytes:
+
+- `OPEN` (4), once, after the service opens.
+- `CONTROL` (3): the volume, in 1/256 dB of attenuation (`alsa2chip`
+  of ALSA's -102.39 to +4 dB; `CHIP_MIN_VOLUME`, 26214, when the
+  switch is off), and the destination (0 auto, 1 the headphones, 2 and
+  3 HDMI). Linux sends it before each stream and when a control
+  changes, and waits for `RESULT` (0), success 0.
+- `CONFIG` (2): the channels (1 to 8), the rate (8000 to 192000 Hz) and
+  the bits of a sample (8 unsigned, 16 signed), at ALSA's prepare; a
+  `RESULT` too.
+- `WRITE` (8): the bytes of samples that follow, and two cookies
+  (`BCMA`, `DATA`). With the VideoCore's version 2, Linux sends them in
+  `DATA` of at most 4000 bytes (`max_packet`); a `max_packet` of 0
+  means a bulk transfer.
+- `START` (6), `STOP` (7; `draining` set: at the end of what was
+  written) and `CLOSE` (5, a `RESULT`).
+
+The VideoCore answers with `COMPLETE` (1): the bytes played since the
+last, with the cookies, which Linux adds to its stream's position (and
+calls a period elapsed). Bit 30 set says it has played all it was
+given ("stream has finished", a Raspberry Pi engineer in
+raspberrypi/firmware issue 696): Linux then stops the stream as an
+underrun. smirror's VideoCore keeps what is written, up to 512 KB a
+stream (Linux's `buffer_bytes_max`), and from `START` plays it in
+virtual time at the stream's rate, 10 ms at a time ("position update
+is in 10ms order", Linux's comment on its period constraint): a block
+takes the frames whose time has come, as many as it has, and sends
+their `COMPLETE`; a block that finds nothing sends `COMPLETE` with bit
+30 and ends the stream. `STOP` without draining ends it at once and
+drops what was not played, as a new `CONFIG` does. The volume is
+applied to the samples (times 10^(-dB/20), rounded to the nearest,
+clamped).
+
+Where the sound goes: auto (with no display attached, the jack, as the
+firmware's auto chooses HDMI only with a display) and the headphones
+go to the audio output, `-audio`; HDMI, with no display, nowhere, at
+the same pace. `-audio wav:PATH` keeps each stream in its own format
+(src/backend/audio/wav.h), `-audio alsa` plays it on the host's sound
+card (src/backend/audio/alsa.h; under `-clock virtual` a machine that
+runs ahead of the host waits for the card, without its virtual time
+changing). Without `-audio`, nothing is plugged in.
+
+smirror's choices, where Linux shows nothing of the firmware:
+`COMPLETE` counts bytes, as Linux reads it (the issue says samples);
+a block reports its last samples, and the end a block later, since
+Linux drops the count of a message with bit 30; `RESULT` and
+`COMPLETE` are 20 bytes, like the Arm's; `OPEN`, `START`, `STOP` and
+`WRITE`, which Linux does not wait for, get no answer; `WRITE`'s
+`silence` is not used. Session: `tests/raspios/session.txt` plays two
+files with `aplay` and `raspios.audio` checks what `-audio wav:` kept,
+sample for sample.
+
+What is not modelled stops the machine: a message before `OPEN`, a
+second `OPEN`, the VideoCore's own types or others, a message shorter
+than 20 bytes, a `CONFIG` outside what is listed above (channels 0
+asks for IEC958 pass-through), a `CONFIG` or `START` while the stream
+plays, a `START` or `WRITE` before `CONFIG`, a volume or destination
+outside Linux's, a bulk transfer (`force_bulk=1`), `DATA` larger than
+`max_packet` or than the rest of its `WRITE`, more than 512 KB of
+samples waiting, and two streams playing to the output at once (the
+VideoCore would mix them).
 
 ### vcgencmd
 
@@ -1590,10 +1661,12 @@ to quit.
 - The Ethernet has no cable: nothing on the host carries its frames yet.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
-- Of the VideoCore's VCHIQ services, the shared memory (`SMEM`) and
-  the multimedia (`mmal`) are emulated; it refuses the others (`AUDS`
-  the audio, `GCMD`), so the drivers that use them fail where a real
-  board's would work. `mmal` does what its drivers ask at probe; the
+- Of the VideoCore's VCHIQ services, the shared memory (`SMEM`), the
+  multimedia (`mmal`) and the audio (`AUDS`) are emulated; it refuses
+  the others (`GCMD`), so the drivers that use them fail where a real
+  board's would work. `AUDS` plays one stream at a time to the output
+  (no mixing), without the jack's PWM: what `-audio` gets is the
+  samples, at the volume, not the analogue sound. `mmal` does what its drivers ask at probe; the
   first message of streaming (decode, encode, the ISP) stops the
   machine, and some of its encodings are smirror's choice (mmal,
   above).
@@ -1707,6 +1780,19 @@ to quit.
   [rpicam-apps 591](https://github.com/raspberrypi/rpicam-apps/issues/591));
   no camera, no device
   ([firmware 1141](https://github.com/raspberrypi/firmware/issues/1141)).
+- AUDS: Raspberry Pi's Linux at cff533a,
+  [bcm2835-audio](https://github.com/raspberrypi/linux/tree/cff533aec2fa601846766b32ff57204e0a61bed7/drivers/staging/vc04_services/bcm2835-audio)
+  (`vc_vchi_audioserv_defs.h`: the messages and versions;
+  `bcm2835-vchiq.c`: what it sends and waits for; `bcm2835-pcm.c`:
+  the position from `COMPLETE`, bit 30 as an underrun, the 10 ms
+  period constraint; `bcm2835-ctl.c` and `bcm2835.h`: the volume's
+  range and `alsa2chip`; `bcm2835.c`: the cards). Bit 30, "stream has
+  finished": [raspberrypi/firmware issue 696](https://github.com/raspberrypi/firmware/issues/696).
+  Auto's choice of HDMI with a display: Raspberry Pi's white paper
+  [Choosing an audio option](https://pip-assets.raspberrypi.com/categories/1259-audio-camera-and-display/documents/RP-008124-WP-1-Choosing%20an%20Audio%20option.pdf).
+  The WAV files: the [McGill WAVE page](https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html)
+  (RIFF chunks, `WAVE_FORMAT_EXTENSIBLE` above two channels); the
+  host's sound card: alsa-lib's PCM interface (`alsa/pcm.h`).
 - vcgencmd: raspberrypi/utils,
   [vcgencmd.c](https://github.com/raspberrypi/utils/blob/master/vcgencmd/vcgencmd.c)
   (`GET_GENCMD_RESULT`, `/dev/vcio`), the binary of Raspberry Pi OS
