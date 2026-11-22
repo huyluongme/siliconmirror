@@ -16,12 +16,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "backend/audio/wav.h"
 #include "backend/block/file.h"
 #include "backend/char/file.h"
 #include "backend/char/stdio.h"
 #include "backend/clock/host.h"
 #include "core/machine.h"
 #include "machine/board.h"
+
+#ifdef SMIRROR_HAVE_ALSA
+#include "backend/audio/alsa.h"
+#endif
 
 #ifndef SMIRROR_VERSION
 #error "SMIRROR_VERSION must be defined by the build system"
@@ -33,6 +38,7 @@ typedef struct Options {
 	const char *serial;  /* -serial */
 	const char *sd;      /* -sd */
 	const char *clock;   /* -clock */
+	const char *audio;   /* -audio */
 } Options;
 
 static void print_usage(FILE *out)
@@ -50,6 +56,10 @@ static void print_usage(FILE *out)
 	      "  -serial DEV        Where the serial console goes: stdio (the "
 	      "default),\n"
 	      "                     null or file:PATH\n"
+	      "  -audio DEV         Where the board's sound goes: none (the "
+	      "default),\n"
+	      "                     wav:PATH, alsa (the host's sound card) or "
+	      "alsa:DEVICE\n"
 	      "  -clock CLOCK       virtual (the default): time counts the "
 	      "instructions,\n"
 	      "                     the same on every run; host: time follows "
@@ -112,6 +122,8 @@ static const char **option_value(Options *options, const char *name)
 		return &options->sd;
 	if (strcmp(name, "clock") == 0)
 		return &options->clock;
+	if (strcmp(name, "audio") == 0)
+		return &options->audio;
 	return NULL;
 }
 
@@ -150,6 +162,39 @@ static bool open_serial(const char *spec, CharStream **stream)
 	return true;
 }
 
+/*
+ * Open the back end that -audio names: "none" is nothing plugged in, a
+ * NULL output. Returns false after printing a message.
+ */
+static bool open_audio(const char *spec, AudioOut **out)
+{
+	char error[256];
+
+	*out = NULL;
+	if (strcmp(spec, "none") == 0)
+		return true;
+	if (strncmp(spec, "wav:", 4) == 0) {
+		*out = audio_wav_open(spec + 4, error, sizeof(error));
+	} else if (strcmp(spec, "alsa") == 0 || strncmp(spec, "alsa:", 5) == 0) {
+#ifdef SMIRROR_HAVE_ALSA
+		*out = audio_alsa_open(spec[4] == ':' ? spec + 5 : "default", error,
+		                       sizeof(error));
+#else
+		fputs("smirror: -audio alsa: this smirror was built without ALSA\n",
+		      stderr);
+		return false;
+#endif
+	} else {
+		fprintf(stderr, "smirror: unknown -audio device '%s'\n", spec);
+		return false;
+	}
+	if (*out == NULL) {
+		fprintf(stderr, "smirror: %s\n", error);
+		return false;
+	}
+	return true;
+}
+
 /* What the board does not do, or ignores, but goes on without. */
 static void warn(void *ctx, const char *message)
 {
@@ -175,7 +220,7 @@ static int run(Machine *m)
 
 int main(int argc, char **argv)
 {
-	Options options = {.serial = "stdio"};
+	Options options = {.serial = "stdio", .audio = "none"};
 	bool serial_given = false;
 
 	for (int i = 1; i < argc; i++) {
@@ -258,6 +303,11 @@ int main(int argc, char **argv)
 		}
 	}
 	if (!open_serial(options.serial, &board_options.serial)) {
+		block_destroy(board_options.sd);
+		return EXIT_FAILURE;
+	}
+	if (!open_audio(options.audio, &board_options.audio)) {
+		char_stream_destroy(board_options.serial);
 		block_destroy(board_options.sd);
 		return EXIT_FAILURE;
 	}

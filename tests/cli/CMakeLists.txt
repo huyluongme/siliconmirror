@@ -84,3 +84,51 @@ add_expect_test(cli.serial-file-not-writable
 	STATUS 1
 	STDERR "^smirror: no/such/dir/out.txt: "
 	COMMAND ${smirror} -M raspi3b -serial file:no/such/dir/out.txt)
+
+# -audio: what is plugged into the board's jack.
+add_expect_test(cli.audio-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -audio device 'bogus'\n$"
+	COMMAND ${smirror} -M raspi3b -audio bogus)
+
+add_expect_test(cli.audio-wave
+	STATUS 1
+	STDERR "^smirror: unknown -audio device 'wave:x'\n$"
+	COMMAND ${smirror} -M raspi3b -audio wave:x)
+
+add_expect_test(cli.audio-wav-not-writable
+	STATUS 1
+	STDERR "^smirror: cannot create no/such/dir/out.wav: [^\n]*\n$"
+	COMMAND ${smirror} -M raspi3b -audio wav:no/such/dir/out.wav)
+
+# The card's image and the serial console are closed when -audio fails.
+add_expect_test(cli.sd-then-audio-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -audio device 'alsa-'\n$"
+	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
+		-serial file:${CMAKE_CURRENT_BINARY_DIR}/serial.txt -audio alsa-)
+
+# The board owns the output, and closes it when it cannot boot.
+add_expect_test(cli.audio-wav-nothing-to-boot
+	STATUS 1
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
+	COMMAND ${smirror} -M raspi3b -audio wav:${CMAKE_CURRENT_BINARY_DIR}/out.wav)
+
+add_expect_test(cli.audio-none
+	STATUS 1
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
+	COMMAND ${smirror} -M raspi3b -audio none)
+
+# ALSA's own message comes first; smirror's says which device.
+find_package(ALSA QUIET)
+if(ALSA_FOUND)
+	add_expect_test(cli.audio-alsa-unknown
+		STATUS 1
+		STDERR "smirror: cannot open ALSA device smirror_no_such_pcm: [^\n]*\n$"
+		COMMAND ${smirror} -M raspi3b -audio alsa:smirror_no_such_pcm)
+else()
+	add_expect_test(cli.audio-alsa-not-built
+		STATUS 1
+		STDERR "^smirror: -audio alsa: this smirror was built without ALSA\n$"
+		COMMAND ${smirror} -M raspi3b -audio alsa)
+endif()
