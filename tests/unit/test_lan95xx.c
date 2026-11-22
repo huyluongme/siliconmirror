@@ -598,8 +598,9 @@ static void test_resets(void)
 }
 
 /*
- * The lite reset: the FIFOs empty, the counters clear, the EEPROM and
- * the PHY reset (5.13.2); a USB reset ends the PHY's resets.
+ * The lite reset: the FIFOs empty, the counters clear, the EEPROM reset
+ * (5.13.3), the PHY as it was (see chip_reset()); a USB reset ends the
+ * PHY's resets.
  */
 static void test_lite_reset(void)
 {
@@ -624,6 +625,8 @@ static void test_lite_reset(void)
 	CHECK(rd(&s, TX_FIFO_INF) < 0x2000);
 	CHECK_EQ(rd(&s, RX_FIFO_INF), 208);
 	wr(&s, E2P_CMD, 0xb0000010u); /* a write, to time out in 30 ms */
+	mdio_write(&s, 30, 0x00d0);   /* Linux's interrupt mask */
+	CHECK(mdio_read(&s, 1) & 0x0004);
 
 	wr(&s, HW_CFG, 1u << 3);
 	CHECK_EQ(rd(&s, RX_FIFO_INF), 0);
@@ -637,9 +640,10 @@ static void test_lite_reset(void)
 	CHECK_EQ(rd(&s, E2P_CMD), 0);
 	run(&s, 30 * MS);
 	CHECK_EQ(rd(&s, E2P_CMD), 0);
-	/* The PHY starts again: the link, its latch clear. */
-	run(&s, 2000 * MS);
+	/* The PHY goes on: its link, its mask. */
 	CHECK(mdio_read(&s, 1) & 0x0004);
+	CHECK_EQ(mdio_read(&s, 30), 0x00d0);
+	CHECK_EQ(lan95xx_link_speed(s.e), 100);
 
 	/* A USB reset during PMT_CTL's PHY reset, or BMCR's. */
 	CHECK_EQ(try_write(&s, PMT_CTL, 1u << 4), USB_NAK);
@@ -891,11 +895,13 @@ static void test_phy_link(void)
 		mdio_write(&s, 4, modes[i].anar);
 		mdio_write(&s, 0, modes[i].bmcr);
 		CHECK_EQ(mdio_read(&s, 1) & 0x0004, 0);
+		CHECK_EQ(lan95xx_link_speed(s.e), 0); /* no link */
 		run(&s, 2000 * MS);
 		CHECK(mdio_read(&s, 1) & 0x0004);
 		if (i == 0)
 			CHECK(rd(&s, INT_STS) & 1u << 15); /* PHY_INT */
 		CHECK_EQ(mdio_read(&s, 31) >> 2 & 7, modes[i].speed);
+		CHECK_EQ(lan95xx_link_speed(s.e), modes[i].speed & 2 ? 100 : 10);
 	}
 	/* The same BMCR again, or ANRESTART without AN: no restart. */
 	mdio_write(&s, 0, 0x2000);

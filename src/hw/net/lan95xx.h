@@ -75,6 +75,9 @@ UsbDevice *lan95xx_device(Lan95xx *e);
 /* Plug in a cable to a partner that gets the frames; NULL unplugs it. */
 void lan95xx_plug(Lan95xx *e, Lan95xxSend *send, void *ctx);
 
+/* The link's speed in Mb/s, 10 or 100; 0 when there is no link. */
+unsigned lan95xx_link_speed(const Lan95xx *e);
+
 /* A frame from the cable, FCS included. False when the controller drops it. */
 bool lan95xx_receive(Lan95xx *e, const uint8_t *frame, size_t len);
 

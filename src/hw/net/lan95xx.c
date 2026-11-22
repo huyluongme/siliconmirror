@@ -1123,6 +1123,17 @@ static const struct {
 };
 
 /* All but the USB device controller; the PHY powers down after a USB reset. */
+/*
+ * A reset of the chip, but its USB device controller: a USB reset, or
+ * the lite reset, which leaves the PHY as it is.
+ *
+ * 5.13.3 has the lite reset reset "the entire chip" but the USB parts,
+ * yet HW_CFG's LRST does not name the PHY, where SRST does, and unlike
+ * the other chip resets it puts no PHY into power down. Linux 6.18's
+ * smsc95xx sets the PHY's interrupt mask once, at bind, and makes a lite
+ * reset at each open; on the board its link interrupts come after that,
+ * so the PHY keeps its registers through a lite reset.
+ */
 static void chip_reset(Lan95xx *e, bool usb_reset)
 {
 	cancel(e, &e->eeprom_done);
@@ -1134,7 +1145,8 @@ static void chip_reset(Lan95xx *e, bool usb_reset)
 	tx_flush(e);
 	memset(e->rx_stats, 0, sizeof(e->rx_stats));
 	memset(e->tx_stats, 0, sizeof(e->tx_stats));
-	phy_hard_reset(e, usb_reset);
+	if (usb_reset)
+		phy_hard_reset(e, true);
 }
 
 /* ---- Registers ---- */
@@ -1523,6 +1535,13 @@ void lan95xx_plug(Lan95xx *e, Lan95xxSend *send, void *ctx)
 		phy_link_down(e);
 		schedule(e, &e->energy_check, ENERGY_NS);
 	}
+}
+
+unsigned lan95xx_link_speed(const Lan95xx *e)
+{
+	if (!e->phy.link)
+		return 0;
+	return e->phy.speed100 ? 100 : 10;
 }
 
 bool lan95xx_receive(Lan95xx *e, const uint8_t *frame, size_t len)
