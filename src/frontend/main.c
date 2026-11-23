@@ -23,6 +23,7 @@
 #include "backend/clock/host.h"
 #include "backend/net/pcap.h"
 #include "backend/net/tap.h"
+#include "backend/net/user.h"
 #include "core/machine.h"
 #include "machine/board.h"
 
@@ -67,7 +68,11 @@ static void print_usage(FILE *out)
 	      "(the default,\n"
 	      "                     no cable), tap:IFNAME (the host's TAP "
 	      "device) or\n"
-	      "                     pcap:PATH (a capture of the frames sent)\n"
+	      "                     pcap:PATH (a capture of the frames sent) or "
+	      "user (a\n"
+	      "                     network inside smirror: DHCP, DNS, UDP out "
+	      "through the\n"
+	      "                     host, no root)\n"
 	      "  -clock CLOCK       virtual (the default): time counts the "
 	      "instructions,\n"
 	      "                     the same on every run; host: time follows "
@@ -220,6 +225,10 @@ static bool open_net(const char *spec, NetLink **out)
 		*out = net_tap_open(spec + 4, error, sizeof(error));
 	} else if (strncmp(spec, "pcap:", 5) == 0) {
 		*out = net_pcap_open(spec + 5, error, sizeof(error));
+	} else if (strcmp(spec, "user") == 0) {
+		*out = net_user_open("", error, sizeof(error));
+	} else if (strncmp(spec, "user,", 5) == 0) {
+		*out = net_user_open(spec + 5, error, sizeof(error));
 	} else {
 		fprintf(stderr, "smirror: unknown -net device '%s'\n", spec);
 		return false;

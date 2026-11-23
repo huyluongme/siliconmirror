@@ -122,8 +122,24 @@ add_expect_test(cli.audio-none
 # -net: the other end of the board's Ethernet cable.
 add_expect_test(cli.net-unknown
 	STATUS 1
-	STDERR "^smirror: unknown -net device 'user'\n$"
+	STDERR "^smirror: unknown -net device 'socket'\n$"
+	COMMAND ${smirror} -M raspi3b -net socket)
+
+# The user network opens without root; the board then wants its card.
+add_expect_test(cli.net-user
+	STATUS 1
+	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
 	COMMAND ${smirror} -M raspi3b -net user)
+
+add_expect_test(cli.net-user-option
+	STATUS 1
+	STDERR "^smirror: -net: user: unknown option 'restrict=on'\n$"
+	COMMAND ${smirror} -M raspi3b -net user,restrict=on)
+
+add_expect_test(cli.net-user-no-comma
+	STATUS 1
+	STDERR "^smirror: unknown -net device 'users'\n$"
+	COMMAND ${smirror} -M raspi3b -net users)
 
 add_expect_test(cli.net-pcap-not-writable
 	STATUS 1
