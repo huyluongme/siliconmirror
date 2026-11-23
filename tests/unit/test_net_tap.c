@@ -82,18 +82,18 @@ static void test_receive(void)
 	Pair p = open_pair();
 	size_t len = 99;
 
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 0);
 	memset(frame, 0x5a, 1000);
 	CHECK_EQ(write(p.host, frame, 42), 42);
 	CHECK_EQ(write(p.host, frame, 1000), 1000);
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 42);
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 1000);
 	CHECK(memcmp(got, frame, 1000) == 0);
 	len = 99;
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 0);
 
 	/* The longest frame the host passes, whole. */
@@ -101,7 +101,7 @@ static void test_receive(void)
 	CHECK(setsockopt(p.host, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0);
 	memset(frame, 0x33, sizeof(frame));
 	CHECK_EQ(write(p.host, frame, NET_MAX_FRAME), NET_MAX_FRAME);
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, NET_MAX_FRAME);
 	CHECK_EQ(got[NET_MAX_FRAME - 1], 0x33);
 	close_pair(&p);
@@ -147,7 +147,7 @@ static void test_not_failures(void)
 	close(p.host);
 	p.host = -1;
 	errno = EBADF;
-	CHECK(p.link->ops->receive(p.link, got, &len));
+	CHECK(p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 0);
 	net_destroy(p.link);
 	CHECK(closed(p.fd));
@@ -165,7 +165,7 @@ static void test_not_failures(void)
 	n = net_tap_open_fd(pipe_fds[0], error, sizeof(error));
 	CHECK(n != NULL);
 	len = 99;
-	CHECK(n->ops->receive(n, got, &len));
+	CHECK(n->ops->receive(n, 0, got, &len));
 	CHECK_EQ(len, 0);
 	net_destroy(n);
 	close(pipe_fds[1]);
@@ -191,7 +191,7 @@ static void test_errors(void)
 	CHECK(fd >= 0);
 	p.link = net_tap_open_fd(fd, error, sizeof(error));
 	CHECK(p.link != NULL);
-	CHECK(!p.link->ops->receive(p.link, got, &len));
+	CHECK(!p.link->ops->receive(p.link, 0, got, &len));
 	CHECK_EQ(len, 0);
 	CHECK(strstr(p.link->error, "cannot receive from the TAP device: ") !=
 	      NULL);
@@ -204,7 +204,7 @@ static void test_errors(void)
 	close(open(ptsname(fd), O_RDWR | O_NOCTTY));
 	p.link = net_tap_open_fd(fd, error, sizeof(error));
 	CHECK(p.link != NULL);
-	CHECK(!p.link->ops->receive(p.link, got, &len));
+	CHECK(!p.link->ops->receive(p.link, 0, got, &len));
 	CHECK(strcmp(p.link->error, "cannot receive from the TAP device: "
 	                            "Input/output error") == 0);
 	net_destroy(p.link);

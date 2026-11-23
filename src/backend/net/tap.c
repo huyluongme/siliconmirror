@@ -57,10 +57,12 @@ static bool tap_send(NetLink *n, uint64_t now, const uint8_t *frame, size_t len)
 	return fail(t, "cannot send on the TAP device");
 }
 
-static bool tap_receive(NetLink *n, uint8_t *frame, size_t *len)
+static bool tap_receive(NetLink *n, uint64_t now, uint8_t *frame, size_t *len)
 {
 	TapLink *t = (TapLink *)n;
 	ssize_t got = read(t->fd, frame, NET_MAX_FRAME);
+
+	(void)now;
 
 	*len = 0;
 	if (got >= 0) {

@@ -76,7 +76,7 @@ static void test_records(void)
 	CHECK(n->ops->send(n, 1500000000u, frame, 60));
 	CHECK_EQ(read_file(PCAP), 24 + 16 + 60); /* written at once */
 	CHECK(n->ops->send(n, 4294967296ull * 1000000000u + 7, frame, 100));
-	CHECK(n->ops->receive(n, got, &len));
+	CHECK(n->ops->receive(n, 0, got, &len));
 	CHECK_EQ(len, 0);
 	net_destroy(n);
 

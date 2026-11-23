@@ -53,7 +53,7 @@ static void take(NetCable *c)
 		size_t len;
 		unsigned speed;
 
-		if (!c->link->ops->receive(c->link, c->frame, &len)) {
+		if (!c->link->ops->receive(c->link, now(c), c->frame, &len)) {
 			link_failed(c);
 			return;
 		}

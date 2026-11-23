@@ -49,8 +49,10 @@ typedef struct NetLinkOps {
 	 * NET_MAX_FRAME bytes, and its length in len: 0 when there is none
 	 * yet. It never waits. The board takes one at a time, at the pace of
 	 * the cable; the others wait on the host, as at the partner's port.
+	 * now is the virtual time, as for send: a back end that keeps timers,
+	 * such as the user network's, counts them in it.
 	 */
-	bool (*receive)(NetLink *n, uint8_t *frame, size_t *len);
+	bool (*receive)(NetLink *n, uint64_t now, uint8_t *frame, size_t *len);
 
 	void (*destroy)(NetLink *n);
 } NetLinkOps;

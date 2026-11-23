@@ -26,7 +26,8 @@ typedef struct FakeLink {
 	size_t queue_len[QUEUE];
 	unsigned head, count;
 	bool fail_send, fail_receive;
-	bool big; /* the next frame is the longest */
+	bool big;             /* the next frame is the longest */
+	uint64_t received_at; /* the time of the last receive */
 	unsigned sent;
 	uint64_t sent_at;
 	size_t sent_len;
@@ -49,10 +50,11 @@ static bool fake_send(NetLink *n, uint64_t now, const uint8_t *frame,
 	return true;
 }
 
-static bool fake_receive(NetLink *n, uint8_t *frame, size_t *len)
+static bool fake_receive(NetLink *n, uint64_t now, uint8_t *frame, size_t *len)
 {
 	FakeLink *f = (FakeLink *)n;
 
+	f->received_at = now;
 	*len = 0;
 	if (f->fail_receive) {
 		*len = 100; /* what a failure leaves is no frame */
@@ -238,6 +240,8 @@ static void test_receive_paced(void)
 	run_until(&s, 1000 + 84 * 80 + 1024 * 80);
 	CHECK_EQ(s.port.got, 2);
 	CHECK_EQ(s.port.got_at[1], 1000 + 84 * 80 + 1024 * 80);
+	/* The link was asked for the next at the time the second came in. */
+	CHECK_EQ(s.link.received_at, 1000 + 84 * 80 + 1024 * 80);
 	CHECK_EQ(s.port.got_len[1], 1004);
 	CHECK_EQ(net_from_wire(s.port.got_frame[1], 1004), 1000);
 

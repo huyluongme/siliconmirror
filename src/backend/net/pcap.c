@@ -61,9 +61,10 @@ static bool pcap_send(NetLink *n, uint64_t now, const uint8_t *frame,
 	return write_all(p, record, sizeof(record)) && write_all(p, frame, len);
 }
 
-static bool pcap_receive(NetLink *n, uint8_t *frame, size_t *len)
+static bool pcap_receive(NetLink *n, uint64_t now, uint8_t *frame, size_t *len)
 {
 	(void)n;
+	(void)now;
 	(void)frame;
 	*len = 0;
 	return true;
