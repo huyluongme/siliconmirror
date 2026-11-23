@@ -102,6 +102,10 @@ add_executable(test_net_pcap test_net_pcap.c)
 target_link_libraries(test_net_pcap PRIVATE backend)
 add_test(NAME unit.net_pcap COMMAND test_net_pcap)
 
+add_executable(test_net_user test_net_user.c)
+target_link_libraries(test_net_user PRIVATE backend)
+add_test(NAME unit.net_user COMMAND test_net_user)
+
 add_executable(test_net_cable test_net_cable.c)
 target_link_libraries(test_net_cable PRIVATE machine)
 add_test(NAME unit.net_cable COMMAND test_net_cable)

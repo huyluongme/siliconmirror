@@ -9,7 +9,10 @@ add_library(backend STATIC
 	char/file.c
 	char/stdio.c
 	net/pcap.c
-	net/tap.c)
+	net/tap.c
+	net/user.c
+	net/user_dhcp.c
+	net/user_udp.c)
 
 target_link_libraries(backend PUBLIC core)
 
