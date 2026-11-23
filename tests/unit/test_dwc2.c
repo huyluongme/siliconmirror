@@ -549,12 +549,30 @@ static void test_transfers(void)
 static uint8_t fake_in_data[700], fake_out_data[2048];
 static size_t fake_in_pos, fake_out_len;
 
+/*
+ * The IN packets the device NAKs (one bit a packet, the lowest first),
+ * the time of each try, and the machine whose time it is. An OUT NAKs
+ * while fake_out_nak.
+ */
+static uint32_t fake_in_naks;
+static unsigned fake_in_tries;
+static uint64_t fake_in_at[16];
+static Machine *fake_machine;
+static bool fake_out_nak;
+
 static UsbResult fake_in(UsbDevice *d, unsigned ep, uint8_t *buf, size_t max,
                          size_t *len)
 {
 	size_t n = sizeof(fake_in_data) - fake_in_pos;
+	bool nak = fake_in_naks & 1;
 
 	(void)d;
+	if (fake_machine != NULL && fake_in_tries < 16)
+		fake_in_at[fake_in_tries] = fake_machine->events.now;
+	fake_in_tries++;
+	fake_in_naks >>= 1;
+	if (nak)
+		return USB_NAK;
 	if (ep != 1)
 		return USB_STALL;
 	n = n < max ? n : max;
@@ -568,6 +586,8 @@ static UsbResult fake_out(UsbDevice *d, unsigned ep, const uint8_t *buf,
                           size_t len)
 {
 	(void)d;
+	if (fake_out_nak)
+		return USB_NAK;
 	if (ep != 2 || fake_out_len + len > sizeof(fake_out_data))
 		return USB_STALL;
 	memcpy(fake_out_data + fake_out_len, buf, len);
@@ -672,6 +692,23 @@ static void test_bulk(void)
 	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
 	teardown(&s);
 
+	/*
+	 * No packets, with the size's top bit (18) set: the machine stops
+	 * with the register's 4-byte write, and nothing is transferred.
+	 */
+	setup(&s);
+	usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+	dwc2_attach(s.d, &dev);
+	port_up(&s);
+	wr(&s, HCTSIZ0, 1u << 18 | 8);
+	wr(&s, HCCHAR0, CHENA | hcchar(0, 1, true, 2, 512));
+	CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
+	CHECK(strstr(s.m->stop_message, "4-byte write to offset 0x500 ") != NULL);
+	CHECK_EQ(rd(&s, HCTSIZ0), 1u << 18 | 8);
+	event_queue_run_until(&s.m->events, s.m->events.now + 1000000);
+	CHECK_EQ(rd(&s, HCINT0), 0);
+	teardown(&s);
+
 	/* Packets of 0 or of 1025 bytes stop the machine. */
 	for (unsigned mps = 0; mps <= 1025; mps += 1025) {
 		setup(&s);
@@ -683,6 +720,139 @@ static void test_bulk(void)
 		CHECK_EQ(s.m->stop, MACHINE_STOP_ERROR);
 		teardown(&s);
 	}
+}
+
+/* Run the machine for ns nanoseconds. */
+static void run_for(Setup *s, uint64_t ns)
+{
+	event_queue_run_until(&s->m->events, s->m->events.now + ns);
+}
+
+/*
+ * A bulk IN that the device NAKs: the channel stays enabled, HCINT gets
+ * NAK, and the core tries again at each microframe's start until the
+ * data comes, from where the transfer had got to.
+ */
+static void test_bulk_in_nak(void)
+{
+	Setup s;
+	UsbDevice dev;
+	uint8_t in[700];
+
+	setup(&s);
+	fake_machine = s.m;
+	CHECK_EQ(bus_map_ram(s.m->bus, "ram", 0, 0x200000), BUS_OK);
+	usb_device_init(&dev, &fake_class, NULL, USB_SPEED_HIGH);
+	dwc2_attach(s.d, &dev);
+	port_up(&s);
+	dev.address = 5;
+	dev.config = 1;
+	for (size_t i = 0; i < sizeof(fake_in_data); i++)
+		fake_in_data[i] = (uint8_t)(i * 5 + 1);
+	wr(&s, GAHBCFG, 1);
+	wr(&s, GINTMSK, 1u << 25);
+	wr(&s, HAINTMSK, 1);
+
+	/* The first packet comes, the second is NAKed three times. */
+	fake_in_pos = 0;
+	fake_in_tries = 0;
+	fake_in_naks = 0xe; /* 0b1110 */
+	wr(&s, HCTSIZ0, 2u << 19 | 1024);
+	wr(&s, HCDMA0, RAM);
+	wr(&s, HCINT0, 0x3fff);
+	wr(&s, HCINTMSK0, NAKED);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 1, true, 2, 512));
+	CHECK_EQ(fake_in_tries, 2);
+	run_for(&s, 20000);
+	CHECK_EQ(rd(&s, HCINT0), NAKED);
+	CHECK(rd(&s, HCCHAR0) & CHENA);
+	CHECK(irq_level(&s.irq)); /* the driver asked for NAK's interrupt */
+	CHECK_EQ(rd(&s, HCTSIZ0), PID_DATA1 | 1u << 19 | 512);
+	CHECK_EQ(rd(&s, HCDMA0), RAM + 512);
+	wr(&s, HCINT0, NAKED);
+	CHECK(!irq_level(&s.irq));
+	for (int i = 0; i < 100 && (rd(&s, HCCHAR0) & CHENA); i++)
+		run_for(&s, 10000);
+	CHECK_EQ(rd(&s, HCINT0), XFERCOMPL | ACKED | NAKED | CHHLTD);
+	CHECK_EQ(fake_in_tries, 5);
+	/* Each try again at the start of the next microframe. */
+	CHECK(fake_in_at[2] > fake_in_at[1]);
+	CHECK(fake_in_at[2] - fake_in_at[1] <= 125000);
+	CHECK_EQ(fake_in_at[3] - fake_in_at[2], 125000);
+	CHECK_EQ(fake_in_at[4] - fake_in_at[3], 125000);
+	CHECK_EQ(rd(&s, HCTSIZ0), 324);
+	CHECK_EQ(rd(&s, HCDMA0), RAM + 700);
+	CHECK_EQ(bus_read_block(s.m->bus, RAM, in, 700), BUS_OK);
+	CHECK(memcmp(in, fake_in_data, 700) == 0);
+
+	/* The driver halts it while it waits: halted, no more tries. */
+	for (int when = 0; when < 2; when++) {
+		fake_in_tries = 0;
+		fake_in_naks = 0xffffffff;
+		wr(&s, HCTSIZ0, 1u << 19 | 512);
+		wr(&s, HCINT0, 0x3fff);
+		wr(&s, HCCHAR0, CHENA | hcchar(5, 1, true, 2, 512));
+		/* Before the NAK's bus time has passed, or after. */
+		if (when)
+			run_for(&s, 130000);
+		CHECK(rd(&s, HCCHAR0) & CHENA);
+		wr(&s, HCCHAR0, CHENA | CHDIS | hcchar(5, 1, true, 2, 512));
+		CHECK_EQ(rd(&s, HCCHAR0) & (CHENA | CHDIS), 0);
+		CHECK_EQ(rd(&s, HCINT0), NAKED | CHHLTD);
+		unsigned tries = fake_in_tries;
+		run_for(&s, 1000000);
+		CHECK_EQ(fake_in_tries, tries);
+		CHECK_EQ(rd(&s, HCINT0), NAKED | CHHLTD);
+	}
+
+	/*
+	 * A control IN is tried again too (on the fake's endpoint 1: the
+	 * core does not look at which endpoint a type is on).
+	 */
+	fake_in_pos = 0;
+	fake_in_tries = 0;
+	fake_in_naks = 1;
+	wr(&s, HCTSIZ0, PID_DATA1 | 1u << 19 | 18);
+	wr(&s, HCINT0, 0x3fff);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 1, true, 0, 64));
+	for (int i = 0; i < 100 && (rd(&s, HCCHAR0) & CHENA); i++)
+		run_for(&s, 10000);
+	CHECK_EQ(fake_in_tries, 2);
+	CHECK(rd(&s, HCINT0) & NAKED);
+
+	/* An interrupt IN and a bulk OUT halt at a NAK: the driver tries. */
+	fake_in_tries = 0;
+	fake_in_naks = 1;
+	wr(&s, HCTSIZ0, 1u << 19 | 8);
+	wr(&s, HCINT0, 0x3fff);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 1, true, 3, 8));
+	run_for(&s, 1000000);
+	CHECK_EQ(fake_in_tries, 1);
+	CHECK_EQ(rd(&s, HCINT0), NAKED | CHHLTD);
+	fake_out_nak = true;
+	wr(&s, HCTSIZ0, 1u << 19 | 8);
+	wr(&s, HCINT0, 0x3fff);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 2, false, 2, 512));
+	run_for(&s, 1000000);
+	CHECK_EQ(rd(&s, HCINT0), NAKED | CHHLTD);
+	CHECK_EQ(rd(&s, HCCHAR0) & CHENA, 0);
+	fake_out_nak = false;
+
+	/* A soft reset while it waits ends the tries. */
+	fake_in_tries = 0;
+	fake_in_naks = 0xffffffff;
+	wr(&s, HCTSIZ0, 1u << 19 | 512);
+	wr(&s, HCCHAR0, CHENA | hcchar(5, 1, true, 2, 512));
+	run_for(&s, 130000);
+	wr(&s, GRSTCTL, 1);
+	CHECK_EQ(rd(&s, HCCHAR0) & CHENA, 0);
+	unsigned tries = fake_in_tries;
+	run_for(&s, 1000000);
+	CHECK_EQ(fake_in_tries, tries);
+	CHECK_EQ(s.m->stop, MACHINE_STOP_NONE);
+	fake_in_naks = 0;
+	fake_machine = NULL;
+	teardown(&s);
 }
 
 /*
@@ -846,6 +1016,7 @@ int main(void)
 	RUN_TEST(test_stops);
 	RUN_TEST(test_transfers);
 	RUN_TEST(test_bulk);
+	RUN_TEST(test_bulk_in_nak);
 	RUN_TEST(test_halts);
 	RUN_TEST(test_root_port);
 	RUN_TEST(test_sof);

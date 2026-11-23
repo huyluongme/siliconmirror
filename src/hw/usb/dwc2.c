@@ -125,7 +125,9 @@ struct Dwc2 {
 		uint32_t hcchar, hcsplt, hcint, hcintmsk, hctsiz, hcdma;
 		bool busy;
 		uint32_t pending; /* HCINT bits at the end of the transfer */
+		bool retry;       /* a NAKed IN that the core tries again */
 		Event done;
+		Event again; /* that next try */
 	} hc[DWC2_NUM_CHANNELS_MAX];
 	uint8_t packet[1024]; /* the largest packet, high-speed bulk's 512 */
 };
@@ -250,10 +252,28 @@ static uint32_t hfnum(const Dwc2 *d)
 	       (uint32_t)(t / MICROFRAME_NS & 0x3fff);
 }
 
-static void channel_done(void *ctx)
+static void run_transfer(Dwc2 *d, struct Channel *c);
+
+/* The next try of a NAKed IN transfer, at the next microframe. */
+static void channel_again(void *ctx)
 {
 	struct Channel *c = ctx;
 
+	run_transfer(c->dwc2, c);
+}
+
+static void channel_done(void *ctx)
+{
+	struct Channel *c = ctx;
+	Dwc2 *d = c->dwc2;
+
+	if (c->retry) {
+		c->hcint |= c->pending;
+		update_irq(d);
+		event_schedule(&d->machine->events, &c->again,
+		               d->frames_from + (microframe(d) + 1) * MICROFRAME_NS);
+		return;
+	}
 	c->busy = false;
 	c->hcchar &= ~(HCCHAR_CHENA | HCCHAR_CHDIS);
 	c->hcint |= c->pending;
@@ -264,6 +284,7 @@ static void halt_channels(Dwc2 *d)
 {
 	for (unsigned n = 0; n < d->num_channels; n++) {
 		event_cancel(&d->machine->events, &d->hc[n].done);
+		event_cancel(&d->machine->events, &d->hc[n].again);
 		d->hc[n].busy = false;
 		d->hc[n].hcchar &= ~(HCCHAR_CHENA | HCCHAR_CHDIS);
 	}
@@ -279,8 +300,18 @@ static uint64_t bytes_ns(uint64_t bytes)
  * HCTSIZ's packets of HCCHAR's maximum size, each to the device, until
  * the last, a short IN packet, a NAK, a STALL or no answer. The device
  * acts at once; HCINT says so when the bus time has passed.
+ *
+ * A NAK halts the channel but for a bulk or control IN: there the core
+ * sets HCINT's NAK and tries again by itself, until the data comes or
+ * the driver halts the channel. The databook is not at hand; Linux's
+ * dwc2 says so (hcd_intr.c, dwc2_hc_nak_intr: "The core will continue
+ * transferring data"), and its usbnet drivers wait on a bulk IN that
+ * way for every frame received. The core tries again within the same
+ * microframe as bus time allows; smirror tries once a microframe, at
+ * its start (our choice: the device sees no difference but in when the
+ * data goes, at most 125 us later).
  */
-static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
+static void run_transfer(Dwc2 *d, struct Channel *c)
 {
 	uint32_t ch = c->hcchar, ts = c->hctsiz;
 	unsigned mps = ch & 0x7ff, ep = ch >> 11 & 0xf, in = ch >> 15 & 1;
@@ -289,16 +320,9 @@ static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
 	unsigned pid = ts >> 29 & 3;
 	uint64_t dma = c->hcdma & d->config.dma_mask, ns = 0;
 	uint32_t result = 0;
-	UsbDevice *dev;
+	UsbDevice *dev = usb_device_find(d->port_dev, address);
 
-	if (!d->port_enabled || (c->hcsplt & HCSPLT_SPLTENA) || type == 1 ||
-	    mps == 0 || mps > sizeof(d->packet) || packets == 0) {
-		stop(d, "write to", offset, 4,
-		     "is not emulated: a transfer with the port disabled, a "
-		     "split, an isochronous endpoint or no packets");
-		return;
-	}
-	dev = usb_device_find(d->port_dev, address);
+	c->retry = false;
 	while (result == 0) {
 		size_t len = 0;
 		UsbResult r;
@@ -325,7 +349,8 @@ static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
 		ns += bytes_ns(len + OVERHEAD_BYTES);
 		switch (r) {
 		case USB_NAK:
-			result = NAK | HCINT_CHHLTD;
+			c->retry = in && (type == 0 || type == 2);
+			result = c->retry ? NAK : NAK | HCINT_CHHLTD;
 			continue;
 		case USB_STALL:
 			result = STALL | HCINT_CHHLTD;
@@ -349,6 +374,21 @@ static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
 	c->pending = result;
 	c->busy = true;
 	event_schedule(&d->machine->events, &c->done, machine_now(d->machine) + ns);
+}
+
+static void start_transfer(Dwc2 *d, uint64_t offset, struct Channel *c)
+{
+	uint32_t ch = c->hcchar, ts = c->hctsiz;
+	unsigned mps = ch & 0x7ff, type = ch >> 18 & 3;
+
+	if (!d->port_enabled || (c->hcsplt & HCSPLT_SPLTENA) || type == 1 ||
+	    mps == 0 || mps > sizeof(d->packet) || (ts >> 19 & 0x3ff) == 0) {
+		stop(d, "write to", offset, 4,
+		     "is not emulated: a transfer with the port disabled, a "
+		     "split, an isochronous endpoint or no packets");
+		return;
+	}
+	run_transfer(d, c);
 }
 
 static uint64_t channel_read(Dwc2 *d, unsigned n, unsigned reg)
@@ -387,6 +427,10 @@ static void channel_write(Dwc2 *d, uint64_t offset, unsigned n, unsigned reg,
 			}
 			/* A halt: the transfer ends now, as far as it went. */
 			event_cancel(&d->machine->events, &c->done);
+			event_cancel(&d->machine->events, &c->again);
+			if (c->retry)
+				c->pending |= HCINT_CHHLTD;
+			c->retry = false;
 			channel_done(c);
 			return;
 		}
@@ -678,6 +722,7 @@ Dwc2 *dwc2_create(Machine *m, const Dwc2Config *config, IrqLine *irq)
 	for (unsigned n = 0; n < DWC2_NUM_CHANNELS_MAX; n++) {
 		d->hc[n].dwc2 = d;
 		event_init(&d->hc[n].done, channel_done, &d->hc[n]);
+		event_init(&d->hc[n].again, channel_again, &d->hc[n]);
 	}
 	event_init(&d->sof, sof_event, d);
 	reset_registers(d);
