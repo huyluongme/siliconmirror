@@ -128,6 +128,12 @@ port one at a time, each when its last bit would have crossed the
 cable at the link's speed. It is in `machine` because it knows both
 sides; any board with an Ethernet port can use it.
 
+The back ends in `backend/net/` are the cable's other end: `tap.c`
+(the host's TAP device), `pcap.c` (a capture) and `user*.c` (a router
+inside smirror that reaches the outside through the host's sockets).
+Each call gives the virtual time, so that a back end with timers, as
+the router's NAT mappings, counts them in it.
+
 Devices are grouped by kind, not by board. A PL011 exists on many ARM
 boards, so a future board can reuse it directly.
 

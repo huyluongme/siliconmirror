@@ -1041,7 +1041,15 @@ buffer DMA, whose addresses are bus addresses: a transfer goes to the
 device packet by packet and ends, after the time its packets take at
 480 Mb/s (a packet's token, handshake and gaps count as 16 bytes, our
 choice), with the transfer done, a NAK, a STALL, a babble, or a
-transaction error when no device answers, as the drivers expect. Device
+transaction error when no device answers, as the drivers expect. A NAK
+on a bulk or control IN does not end it: the core sets `HCINT`'s NAK
+and tries again by itself until the data comes or the driver halts the
+channel, as Linux's `dwc2` says of DMA mode (`dwc2_hc_nak_intr()`: "The
+core will continue transferring data"; the databook is not at hand).
+The LAN9514's frames reach Linux that way: its bulk IN NAKs while the
+RX FIFO is empty. The core tries again as bus time allows; smirror tries
+once a microframe, at its start (our choice). Before, the channel halted
+and no frame from the cable ever reached Linux. Device
 mode, the data FIFOs, split transactions and isochronous endpoints stop
 the machine.
 
@@ -1177,7 +1185,36 @@ virtual time, and when one has crossed the cable.
   the FCS; a frame's time is its virtual time from power on, counted
   from 1970-01-01. Nothing comes back. The session `linux.net` brings
   the link up, pings 10.0.2.2, and `net_check` finds Linux's three ARP
-  requests in the file. Not modelled, and the machine
+  requests in the file.
+- `-net user`: a router inside smirror (`backend/net/user*.c`), no
+  root. The idea and the addresses are QEMU's user networking (its
+  documentation, general knowledge; none of its code read): the network
+  10.0.2.0/24, the router 10.0.2.2, the name server 10.0.2.3, the board
+  10.0.2.15. The router has one Ethernet address for both of its own,
+  `02:53:4d:00:02:02` (locally administered, "SM", then 0.2.2: our
+  choice), and answers ARP (RFC 826) and ping (RFC 792) for them. Its
+  DHCP server (RFC 2131, RFC 2132) gives every client 10.0.2.15 for a
+  day, with the mask, the router and the name server: one that asks
+  for it after a restart, without having been offered it, gets it too
+  (a binding the server keeps for any client, our choice), one that asks
+  for another address gets a `DHCPNAK`; replies go where RFC 2131
+  section 4.1 says, padded to BOOTP's 300 bytes. UDP to 10.0.2.3 port 53
+  goes to the host's first name server in `/etc/resolv.conf`, to
+  10.0.2.2 to the host's 127.0.0.1 (QEMU's idea), elsewhere to the
+  address itself, each through a socket of the host connected to it (a
+  NAT mapping of RFC 4787 that lives 5 minutes without traffic either
+  way; 64 at once, the least recently used goes first). The router
+  fragments what the host sends larger than the MTU (RFC 791), answers
+  UDP to the outside with a time to live of 1 or less with an ICMP time
+  exceeded (traceroute's first hop), and drops, as a router that filters
+  them: TCP (the next part), IPv6, fragments from the guest, ICMP to the
+  outside, and other protocols. ICMP errors that the host gets for a
+  mapping (port unreachable) are not passed on: the guest times out.
+  Session `linux.user`: `udhcpc` gets the lease, ping reaches the
+  router, `nslookup localhost 10.0.2.3` gets 127.0.0.1 from the host's
+  resolver.
+
+Not modelled, and the machine
 stops when software uses them: the soft reset `SRST` (a USB disconnect),
 the data port, the debug registers, wake-up frames and wake-up
 detection, the receive checksum engine's mode 1 (VLAN tags and SNAP
@@ -1703,8 +1740,12 @@ to quit.
 - The Ethernet's cable (`-net`) carries whole frames, not bits: no
   collisions, so half duplex behaves as full; the host's frames cross
   it at the link's speed, but what the LAN9514 sends reaches the host at
-  once. Without `-net` there is no cable. There is no user-mode network
-  yet: the host's side is a TAP device or a capture.
+  once. Without `-net` there is no cable. The user network (`-net
+  user`) routes UDP only, not yet TCP; it drops IPv6, fragments from
+  the guest and ICMP to the outside, keeps ICMP errors from the host to
+  itself, and tells a traceroute only its own hop.
+- The DWC2 tries a NAKed bulk or control IN again once a microframe,
+  not as often as bus time allows.
 - No display, camera or other device is attached: the I2C masters find
   no slave, and HDMI no monitor.
 - Of the VideoCore's VCHIQ services, the shared memory (`SMEM`), the
@@ -1995,6 +2036,21 @@ to quit.
   (`LINKTYPE_ETHERNET`, 1); IEEE 802.3 clauses 3 and 4 (the frame's
   minimum length, its FCS, the preamble and the interpacket gap), from
   general knowledge.
+- The user network: [RFC 826](https://www.rfc-editor.org/rfc/rfc826)
+  (ARP), [RFC 791](https://www.rfc-editor.org/rfc/rfc791) (IPv4, section
+  3.1, fragments), [RFC 792](https://www.rfc-editor.org/rfc/rfc792)
+  (echo, time exceeded), [RFC 768](https://www.rfc-editor.org/rfc/rfc768)
+  (UDP), [RFC 2131](https://www.rfc-editor.org/rfc/rfc2131) (DHCP:
+  sections 4.1, 4.3.1 table 3, 4.3.2, 4.3.5) and
+  [RFC 2132](https://www.rfc-editor.org/rfc/rfc2132) (its options),
+  [RFC 4787](https://www.rfc-editor.org/rfc/rfc4787) (NAT for UDP,
+  REQ-5 and REQ-6); resolv.conf(5); the addresses and the loopback at
+  10.0.2.2 are QEMU's user networking, from its documentation (general
+  knowledge, no code read). Linux's dwc2,
+  [hcd_intr.c](https://github.com/torvalds/linux/blob/master/drivers/usb/dwc2/hcd_intr.c)
+  (`dwc2_hc_nak_intr()`: a bulk or control IN in DMA mode goes on after
+  a NAK). BusyBox 1.38.0's `udhcpc`, `ping` and `nslookup` in the
+  session `linux.user`.
 - The power manager's watchdog: Linux's
   [bcm2835_wdt.c](https://github.com/torvalds/linux/blob/master/drivers/watchdog/bcm2835_wdt.c)
   (registers, password, ticks, the partition in `RSTS` and 63 for a
