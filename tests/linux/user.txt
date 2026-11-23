@@ -1,0 +1,39 @@
+# A Linux session on the raspi3b with its cable in the user network
+# (-net user): BusyBox's udhcpc gets 10.0.2.15 from the router's DHCP
+# server, ping reaches the router, and nslookup asks the host's name
+# server through 10.0.2.3 for localhost, which a resolver answers
+# itself, without the Internet. drive.c runs it; see its comment for
+# the commands.
+
+timeout 900
+expect Booting Linux on physical CPU
+expect eth0: register 'smsc95xx'
+# The end of that line: typing while the kernel prints it hangs the
+# guest (seen 2026-11-23, with or without a cable; not looked into yet).
+expect b8:27:eb:ff:ee:03
+timeout 120
+
+type ifconfig eth0 up\r
+expect Link is Up - 100Mbps/Full - flow control off
+
+# udhcpc's script: the initramfs has none, so a small one that sets the
+# address and the route, and prints what the server gave.
+type printf '#!/bin/sh\\n[ "$1" = bound ] && ifconfig $interface $ip netmask $subnet && route add default gw $router && echo lease $1 $ip $subnet $router $dns $lease\\n' > /tmp/d\r
+type chmod +x /tmp/d\r
+type udhcpc -i eth0 -n -q -s /tmp/d\r
+expect lease of 10.0.2.15 obtained from 10.0.2.2, lease time 86400
+expect lease bound 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3 86400
+expect ~ #
+
+type ping -c 3 10.0.2.2\r
+expect 3 packets transmitted, 3 packets received
+expect ~ #
+
+type nslookup localhost 10.0.2.3\r
+expect Address: 127.0.0.1
+expect ~ #
+
+type poweroff -f\r
+expect reboot: Power
+expect the board halted
+end
