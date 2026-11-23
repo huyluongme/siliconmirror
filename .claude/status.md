@@ -4,51 +4,58 @@ Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
 - **Date:** 2026-11-23
-- **master:** ff40122 (task 1 closed, networking next), then this
-  task's commits.
+- **master:** d1f18d2 (networking part 1 closed), then this task's
+  commits.
 - **Board:** raspi3b. Roadmap items 1-5 done: from power on, the
   firmware HLE, U-Boot, Linux to the BusyBox shell
   (`docs/boot-logs/raspi3b-uboot-linux.log`), and an unmodified
   Raspberry Pi OS Lite to its login prompt
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
-- **Last task:** networking to the host, part 1 of 2: the network link
-  interface (core/net.h, frames without FCS; net_to_wire/net_from_wire),
-  the cable (machine/net_cable: the partner's MAC, frames paced at the
-  link's speed), `-net tap:IFNAME` and `-net pcap:PATH`
-  (backend/net). Two fixes that a cable brought out: the DWC2 now
-  raises `SOF` every microframe (Linux's dwc2 waits for it after an
-  interrupt endpoint's NAK, so the LAN9514's link interrupt never came),
-  and the LAN9514's lite reset leaves the PHY as it is (Linux 6.18 sets
-  the PHY's interrupt mask at bind, lite-resets at open; our reading,
-  docs/boards/raspi3b.md). Session `linux.net`: link up at 100 Mb/s
-  full, ping, `net_check` finds the three ARP requests in the capture.
-  SOF costs about 10% on the sessions (Pi OS session 21.6 -> 24.2 min,
-  the latter with other sessions running). TAP itself is checked over a
-  socket pair in unit tests; a real TAP needs root once
-  (`ip tuntap add ... user $USER`), not in CI. Mutation linux27: 398
-  mutants, 84 survivors at first; after the new tests 44, all
-  equivalent (sizes, OOM, the board's leaks in failure paths,
-  `EAGAIN == EWOULDBLOCK`, partial writes of regular files, non-Linux
-  code, what only root reaches with a real TAP; the board's
-  `lan95xx_plug` is checked by `linux.net`).
+- **Last task:** networking to the host, part 2a: `-net user`, a router
+  inside smirror (backend/net/user.c: Ethernet, ARP, IPv4, ICMP echo and
+  time exceeded, fragments out; user_dhcp.c: 10.0.2.15 for any client;
+  user_udp.c: NAT through connected host sockets, 10.0.2.3:53 to the
+  host's resolv.conf server, 10.0.2.2 to the host's 127.0.0.1, 5 min
+  idle, 64 mappings LRU). `receive()` of core/net.h now takes the
+  virtual time. A DWC2 fix it brought out: a NAKed bulk or control IN
+  no longer halts the channel, the core tries again each microframe
+  (Linux's dwc2_hc_nak_intr: "The core will continue transferring
+  data"); before, no frame from the cable ever reached Linux (part 1's
+  session only checked what Linux sent). Session `linux.user`: udhcpc
+  gets the lease, ping 10.0.2.2, nslookup localhost through 10.0.2.3.
+  Found, not fixed: typing on the console while the kernel prints a
+  line hangs the guest (with or without a cable); user.txt waits for
+  the line's end. Mutation linux28: 1348 mutants, 213
+  survivors at first; after new tests and simpler code, a fresh run of
+  1295: 86 survivors, all equivalent (parameter array sizes, buffer
+  sizes, fd 0 is stdin, copies overwritten after, ties in the LRU,
+  delays only: the queue's threshold, ECONNREFUSED's retry, poll's
+  timeout; fd leaks a test cannot see, OOM, the default port 53 that
+  `linux.user` checks, connect to 0.0.0.0 being the host on Linux, an
+  IP header under 20 bytes making the destination the data).
 
 ## Next tasks
 
-1. **Next: networking part 2, `-net user`**: a user-mode network in
-   smirror, no root (the idea of QEMU's `-netdev user`: credit the idea,
-   never read its code): ARP and a gateway at 10.0.2.2, DHCP giving
-   10.0.2.15, DNS forwarded to the host's resolver, ICMP echo to the
-   gateway, UDP and TCP NAT through host sockets, and `hostfwd=tcp:
-   HOSTPORT-:GUESTPORT` so that `ssh -p 2222 localhost` reaches Pi OS.
-   Its own back end in `src/backend/net/user*.c` behind core/net.h. A
-   Pi OS session that gets an address by DHCP and answers ssh would
-   check it end to end (CI can run it: no root).
-2. Performance phase 3, the JIT (`.claude/knowledge/performance.md`):
-   the Pi OS session takes about 24 minutes.
-3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
-4. I2C, SPI, PWM devices; Bluetooth; WiFi (SDIO chip).
-5. A second board: the add-board skill.
-6. Last, nice to have: MMAL streaming (VCHIQ bulk transfers, port
+1. **Next: the rest of networking, 2b and 2c together, as one task in
+   one session** (the owner's call, 2026-11-24: not step by step, to
+   reach the JIT sooner, as each step's tests take long at today's
+   speed; one finish-task run, one mutation run, one report):
+   - 2b, TCP NAT out in user_tcp.c: a small TCP state machine at the
+     router's side (handshake, window, retransmission in virtual time,
+     close) joined to a host TCP socket; unit tests against a TCP
+     server on the host's loopback. `/effort xhigh` for its design.
+   - 2c, `hostfwd=tcp:HOSTPORT-:GUESTPORT` (the option parser in
+     net_user_open) and a Pi OS session that gets its address by DHCP
+     and answers ssh.
+2. **Then at once: performance phase 3, the JIT**
+   (`.claude/knowledge/performance.md`): the Pi OS session takes about
+   25 minutes.
+3. The console hang: typing while the kernel prints a line (see
+   tests/linux/user.txt); find which side (PL011 or the guest) loops.
+4. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
+5. I2C, SPI, PWM devices; Bluetooth; WiFi (SDIO chip).
+6. A second board: the add-board skill.
+7. Last, nice to have: MMAL streaming (VCHIQ bulk transfers, port
    formats, enable, buffers; ISP and image_fx in C; video decode and
    encode would need a host codec library, the owner's call),
    `/effort xhigh`. Not needed by Pi OS Lite or by switch-like boards.

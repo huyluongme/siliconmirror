@@ -28,6 +28,9 @@ sót nào": every task gets a full mutation run on the lines it changed.
    why), or code that can go (remove it). Then run the survivors again
    with a new log: `mutate.py CONFIG NEW.log OLD.log`. After big code
    changes, a fresh full run is better (new lines are not in OLD.log).
+   A fresh run needs a new LOG name: renaming the old LOG leaves its
+   `LOG.results`, and the run under the old name resumes from it,
+   mixing both versions of the code (seen in linux28).
 5. Commit the config as its own commit, `scripts/mutation: <topic>`.
    Report only totals and the classes of survivors.
 
