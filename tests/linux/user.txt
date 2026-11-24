@@ -2,8 +2,8 @@
 # (-net user): BusyBox's udhcpc gets 10.0.2.15 from the router's DHCP
 # server, ping reaches the router, and nslookup asks the host's name
 # server through 10.0.2.3 for localhost, which a resolver answers
-# itself, without the Internet. drive.c runs it; see its comment for
-# the commands.
+# itself, without the Internet; nc speaks TCP through the router and
+# its forwards. drive.c runs it; see its comment for the commands.
 
 timeout 900
 expect Booting Linux on physical CPU
@@ -31,6 +31,19 @@ expect ~ #
 
 type nslookup localhost 10.0.2.3\r
 expect Address: 127.0.0.1
+expect ~ #
+
+# TCP: the guest connects to 10.0.2.2:10007, the host's loopback, where
+# the forward listens, which brings the connection back to the guest's
+# port 7: both ways of the router's TCP at once. Then 2 MB the same
+# way, more than the router's windows, counted at the other end.
+type nc -l -p 7 -e echo tcp-ok &\r
+type nc 10.0.2.2 10007 < /dev/null\r
+expect tcp-ok
+expect ~ #
+type nc -l -p 9 -e sh -c 'head -c 2097152 | wc -c' &\r
+type dd if=/dev/zero bs=1024 count=2048 2>/dev/null | nc 10.0.2.2 10009\r
+expect 2097152
 expect ~ #
 
 type poweroff -f\r

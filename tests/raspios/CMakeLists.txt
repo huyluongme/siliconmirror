@@ -14,7 +14,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 	add_test(NAME raspios.session
 		COMMAND drive ${SMIRROR_RASPIOS_CARD} ${card}
 			${CMAKE_CURRENT_SOURCE_DIR}/session.txt
-			$<TARGET_FILE:smirror> -M raspi3b -sd ${card} -audio wav:${wav})
+			$<TARGET_FILE:smirror> -M raspi3b -sd ${card} -audio wav:${wav}
+			-net user,hostfwd=tcp::10022-:22)
 	set_tests_properties(raspios.session PROPERTIES
 		SKIP_RETURN_CODE 77
 		TIMEOUT 5400

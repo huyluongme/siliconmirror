@@ -30,12 +30,14 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 		SKIP_RETURN_CODE 77
 		TIMEOUT 3600
 		LABELS linux)
-	# The user network (user.txt): DHCP, ping, a name through the host.
+	# The user network (user.txt): DHCP, ping, a name through the host,
+	# and TCP out through the host's loopback and back in by a forward.
 	set(user_card ${CMAKE_CURRENT_BINARY_DIR}/user-card.img)
 	add_test(NAME linux.user
 		COMMAND drive ${SMIRROR_LINUX_CARD} ${user_card}
 			${CMAKE_CURRENT_SOURCE_DIR}/user.txt
-			$<TARGET_FILE:smirror> -M raspi3b -sd ${user_card} -net user)
+			$<TARGET_FILE:smirror> -M raspi3b -sd ${user_card}
+			-net user,hostfwd=tcp::10007-:7,hostfwd=tcp::10009-:9)
 	set_tests_properties(linux.user PROPERTIES
 		SKIP_RETURN_CODE 77
 		TIMEOUT 3600

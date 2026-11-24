@@ -93,6 +93,24 @@ expect pi@raspberrypi:~$
 # The board powers off: RSTS asks the firmware not to boot, smirror
 # ends. Linux waits for the mini UART for two bytes' time only, so the
 # end of its last line is lost, as on the board.
+# The cable is in the user network (-net user): NetworkManager got
+# 10.0.2.15 by DHCP at boot. sshd, started, answers ssh from the guest
+# itself through the host: 10.0.2.2:10022 is the host's loopback, where
+# the forward listens, and comes back to port 22 from 10.0.2.2, the
+# router's first port for forwards. sudo -k keeps no credentials, so
+# that poweroff asks again.
+type ip -color=never -4 -br addr show eth0\r
+expect 10.0.2.15/24
+expect pi@raspberrypi:~$
+type sudo -k systemctl start ssh\r
+expect password for pi:
+type raspberry\r
+expect pi@raspberrypi:~$
+type ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 10022 pi@10.0.2.2 'echo ssh-ok $SSH_CONNECTION'\r
+expect password:
+type raspberry\r
+expect ssh-ok 10.0.2.2 49152 10.0.2.15 22
+expect pi@raspberrypi:~$
 type sudo poweroff\r
 expect password for pi:
 type raspberry\r
