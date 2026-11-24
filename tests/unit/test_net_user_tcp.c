@@ -12,6 +12,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/sockios.h> /* SIOCOUTQ (glibc 2.39 has no include of it) */
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
