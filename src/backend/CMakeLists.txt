@@ -12,6 +12,7 @@ add_library(backend STATIC
 	net/tap.c
 	net/user.c
 	net/user_dhcp.c
+	net/user_tcp.c
 	net/user_udp.c)
 
 target_link_libraries(backend PUBLIC core)

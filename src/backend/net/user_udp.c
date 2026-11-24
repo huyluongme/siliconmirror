@@ -23,7 +23,6 @@
 #include <unistd.h>
 
 #define DHCP_SERVER_PORT 67
-#define DNS_PORT 53
 
 /*
  * How long a mapping lives without a datagram, in virtual time: RFC 4787
@@ -153,7 +152,7 @@ static void nat_output(UserNet *u, uint32_t src, uint16_t sport, uint32_t dst,
 	UserFlow *f;
 
 	if (dst == USER_DNS) {
-		if (dport != DNS_PORT)
+		if (dport != USER_DNS_PORT)
 			return;
 		to = (const struct sockaddr *)&u->dns;
 		to_len = u->dns_len;

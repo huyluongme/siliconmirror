@@ -4,7 +4,8 @@
 /*
  * The parts of the user network (user.h): user.c has the link, Ethernet,
  * ARP, IPv4 and ICMP; user_dhcp.c the DHCP server; user_udp.c UDP and
- * its NAT through the host's sockets.
+ * its NAT through the host's sockets; user_tcp.c TCP, its NAT and the
+ * forwards.
  */
 
 #ifndef BACKEND_NET_USER_INT_H
@@ -25,6 +26,7 @@
 #define USER_GUEST 0x0a00020fu   /* 10.0.2.15 */
 #define USER_BROADCAST 0xffffffffu
 #define USER_LOOPBACK 0x7f000001u /* 127.0.0.1, the host's own */
+#define USER_DNS_PORT 53
 
 #define ETH_HEADER 14
 #define IP_HEADER 20 /* without options, as the router sends them */
@@ -60,6 +62,65 @@ typedef struct UserFlow {
 	uint64_t last; /* virtual time of the last datagram */
 } UserFlow;
 
+/* The TCP connections at once, and each one's buffer each way. */
+#define USER_TCP_CONNS 64
+#define USER_TCP_BUF 65535 /* the largest window without scaling */
+
+/*
+ * The states of RFC 9293 section 3.3.2, of the router's end of a guest's
+ * connection; CONNECTING is ours: the guest's SYN came, and the host's
+ * connect() to the destination goes on, before the router answers.
+ */
+typedef enum {
+	TCP_CLOSED, /* the slot is free once the host's socket is closed too */
+	TCP_CONNECTING,
+	TCP_SYN_SENT, /* a forward's connection: the router's SYN is out */
+	TCP_SYN_RECEIVED,
+	TCP_ESTABLISHED,
+	TCP_FIN_WAIT_1,
+	TCP_FIN_WAIT_2,
+	TCP_CLOSING,
+	TCP_TIME_WAIT,
+	TCP_CLOSE_WAIT,
+	TCP_LAST_ACK,
+} UserTcpState;
+
+/*
+ * A TCP connection of the guest's, to the router's end, joined to a
+ * socket of the host: the bytes from the guest go out on the socket,
+ * what comes in on it goes to the guest. The names of the sequence
+ * variables are RFC 9293's (section 3.3.1); snd_max is the highest
+ * SND.NXT so far, as SND.NXT goes back on a retransmission.
+ */
+typedef struct UserTcp {
+	UserTcpState state;
+	int fd;                    /* the host's socket; -1 once closed */
+	uint32_t guest_ip, ip;     /* the guest's end, and the other, as the */
+	uint16_t guest_port, port; /* guest sees it */
+
+	uint32_t iss, snd_una, snd_nxt, snd_max, snd_wl1;
+	uint32_t snd_wnd;
+	uint16_t mss; /* the most data in a segment to the guest */
+	uint32_t rcv_nxt;
+	uint32_t rcv_edge; /* RCV.NXT + RCV.WND as last sent */
+
+	bool guest_fin; /* the guest's FIN came */
+	bool host_eof;  /* the host's socket has no more: a FIN to send */
+	bool host_shut; /* the guest's FIN went on: shutdown(SHUT_WR) */
+
+	uint64_t timer;   /* when to send again, or TIME-WAIT ends; 0 off */
+	unsigned backoff; /* the times the timeout was doubled */
+	unsigned silent;  /* the timeouts since the guest last answered */
+
+	/* The guest's SYN, its IP header and 8 bytes, for an ICMP error. */
+	uint8_t syn[60 + 8];
+	uint8_t syn_header;
+
+	size_t out_len, in_len;
+	uint8_t out[USER_TCP_BUF]; /* from the host, from SND.UNA on */
+	uint8_t in[USER_TCP_BUF];  /* from the guest, not yet sent on */
+} UserTcp;
+
 typedef struct UserNet {
 	NetLink link; /* first, so that a NetLink * is a UserNet * */
 	uint8_t guest_mac[6];
@@ -76,6 +137,14 @@ typedef struct UserNet {
 	socklen_t dns_len;
 
 	UserFlow udp[USER_UDP_FLOWS];
+
+	/* The forwards, with the host's listening sockets. */
+	unsigned forwards;
+	NetUserForward forward[NET_USER_FORWARDS];
+	int listen_fd[NET_USER_FORWARDS];
+	uint16_t next_port; /* the router's port for the next forward */
+
+	UserTcp tcp[USER_TCP_CONNS];
 
 	uint8_t datagram[65536]; /* a datagram from the host */
 } UserNet;
@@ -121,6 +190,36 @@ void user_udp_poll(UserNet *u);
 /* No mappings yet, and the host's name server from config. */
 void user_udp_init(UserNet *u, const NetUserConfig *config);
 void user_udp_close(UserNet *u);
+
+/*
+ * An ICMP error from the router about a datagram of the guest's, ip,
+ * its header of header bytes and len bytes in all: RFC 792's type and
+ * code, then the header and 8 bytes of the data.
+ */
+void user_icmp_error(UserNet *u, const uint8_t eth_dst[6], uint8_t type,
+                     uint8_t code, const uint8_t *ip, size_t header,
+                     size_t len);
+
+/* Ask on the link who has the address ip (RFC 826). */
+void user_arp_request(UserNet *u, uint32_t ip);
+
+/*
+ * A TCP segment from the guest, in the datagram ip of len bytes, of
+ * which header are the IP header's (user_tcp.c).
+ */
+void user_tcp_input(UserNet *u, const uint8_t eth_src[6], const uint8_t *ip,
+                    size_t header, size_t len);
+
+/* The host's sockets and the timers: what is due for the guest. */
+void user_tcp_poll(UserNet *u);
+
+/*
+ * No connections yet, and the forwards' sockets listening; false, with
+ * a message in error, when the host refuses one.
+ */
+bool user_tcp_init(UserNet *u, const NetUserConfig *config, char *error,
+                   size_t error_size);
+void user_tcp_close(UserNet *u);
 
 /* A DHCP message from the guest, the data of its UDP datagram. */
 void user_dhcp_input(UserNet *u, const uint8_t eth_src[6], const uint8_t *msg,

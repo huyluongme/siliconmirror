@@ -11,6 +11,7 @@
 
 #include "backend/net/user_int.h"
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -152,23 +153,36 @@ static void icmp_input(UserNet *u, const uint8_t eth_src[6], uint32_t src,
 	user_send_ip(u, eth_src, IP_ICMP, dst, src, reply, len);
 }
 
-/*
- * RFC 792 "Time Exceeded Message": a datagram the router would pass on
- * with a time to live of 1 or less is dropped, and the sender told, with
- * its header and the first 8 bytes of its data (what traceroute's first
- * hop needs).
- */
-static void time_exceeded(UserNet *u, const uint8_t eth_src[6],
-                          const uint8_t *ip, size_t header, size_t len)
+void user_icmp_error(UserNet *u, const uint8_t eth_dst[6], uint8_t type,
+                     uint8_t code, const uint8_t *ip, size_t header, size_t len)
 {
-	/* Type 11, time exceeded; code 0, in transit; 4 unused bytes. */
-	uint8_t msg[8 + 60 + 8] = {11, 0};
+	/* The type, the code, the checksum, then 4 unused bytes. */
+	uint8_t msg[8 + 60 + 8] = {type, code};
 	size_t quoted = header + (len - header < 8 ? len - header : 8);
 
 	memcpy(msg + 8, ip, quoted);
 	user_put16(msg + 2, user_checksum(0, msg, 8 + quoted));
-	user_send_ip(u, eth_src, IP_ICMP, USER_GATEWAY, user_get32(ip + 12), msg,
+	user_send_ip(u, eth_dst, IP_ICMP, USER_GATEWAY, user_get32(ip + 12), msg,
 	             8 + quoted);
+}
+
+void user_arp_request(UserNet *u, uint32_t ip)
+{
+	uint8_t *request;
+
+	if (user_queue_free(u) == 0)
+		return;
+	request = queue_push(u, ETH_HEADER + 28);
+	put_eth(request, broadcast_mac, ETHERTYPE_ARP);
+	user_put16(request + ETH_HEADER, 1); /* Ethernet */
+	user_put16(request + ETH_HEADER + 2, ETHERTYPE_IP);
+	request[ETH_HEADER + 4] = 6;
+	request[ETH_HEADER + 5] = 4;
+	user_put16(request + ETH_HEADER + 6, 1); /* request */
+	memcpy(request + ETH_HEADER + 8, user_mac, 6);
+	user_put32(request + ETH_HEADER + 14, USER_GATEWAY);
+	memset(request + ETH_HEADER + 18, 0, 6);
+	user_put32(request + ETH_HEADER + 24, ip);
 }
 
 /*
@@ -215,12 +229,20 @@ static void ip_input(UserNet *u, const uint8_t eth_src[6], const uint8_t *ip,
 	src = user_get32(ip + 12);
 	dst = user_get32(ip + 16);
 	to = route(dst);
-	if (to == TO_OUTSIDE && ip[9] == IP_UDP && ip[8] <= 1)
-		time_exceeded(u, eth_src, ip, header, total);
+	/*
+	 * RFC 792 "Time Exceeded Message": a datagram the router would pass
+	 * on with a time to live of 1 or less is dropped, and the sender told
+	 * (what traceroute's first hop needs, with UDP or TCP).
+	 */
+	if (to == TO_OUTSIDE && (ip[9] == IP_UDP || ip[9] == IP_TCP) && ip[8] <= 1)
+		user_icmp_error(u, eth_src, 11, 0, ip, header, total);
 	else if (to == TO_ROUTER && ip[9] == IP_ICMP)
 		icmp_input(u, eth_src, src, dst, ip + header, total - header);
 	else if (to != TO_NOBODY && ip[9] == IP_UDP)
 		user_udp_input(u, eth_src, src, dst, ip + header, total - header);
+	/* TCP is unicast only (RFC 1122 section 4.2.3.10). */
+	else if ((to == TO_ROUTER || to == TO_OUTSIDE) && ip[9] == IP_TCP)
+		user_tcp_input(u, eth_src, ip, header, total);
 }
 
 static bool user_send(NetLink *n, uint64_t now, const uint8_t *frame,
@@ -251,6 +273,7 @@ static bool user_receive(NetLink *n, uint64_t now, uint8_t *frame, size_t *len)
 
 	u->now = now;
 	user_udp_poll(u);
+	user_tcp_poll(u);
 	*len = 0;
 	if (u->count == 0)
 		return true;
@@ -266,6 +289,7 @@ static void user_destroy(NetLink *n)
 	UserNet *u = (UserNet *)n;
 
 	user_udp_close(u);
+	user_tcp_close(u);
 	free(u);
 }
 
@@ -286,16 +310,126 @@ NetLink *net_user_open_config(const NetUserConfig *config, char *error,
 	}
 	u->link.ops = &user_ops;
 	user_udp_init(u, config);
+	if (!user_tcp_init(u, config, error, error_size)) {
+		user_destroy(&u->link);
+		return NULL;
+	}
 	return &u->link;
+}
+
+/* A port, 1 to 65535, in decimal, from s to end (none is 0: refused). */
+static bool parse_port(const char *s, const char *end, uint16_t *port)
+{
+	unsigned long v = 0;
+
+	for (; s < end; s++) {
+		if (*s < '0' || *s > '9')
+			return false;
+		v = v * 10 + (unsigned long)(*s - '0');
+		if (v > 65535)
+			return false;
+	}
+	*port = (uint16_t)v;
+	return v != 0;
+}
+
+/* An IPv4 address from s to end, or def when there is none. */
+static bool parse_addr(const char *s, const char *end, uint32_t def,
+                       uint32_t *ip)
+{
+	char text[INET_ADDRSTRLEN];
+	struct in_addr a;
+
+	if (s == end) {
+		*ip = def;
+		return true;
+	}
+	if (snprintf(text, sizeof(text), "%.*s", (int)(end - s), s) >=
+	        (int)sizeof(text) ||
+	    inet_pton(AF_INET, text, &a) != 1)
+		return false;
+	*ip = ntohl(a.s_addr);
+	return true;
+}
+
+/*
+ * [addr]:port from s to end, the address def when left out: the port is
+ * after the last colon.
+ */
+static bool parse_end(const char *s, const char *end, uint32_t def,
+                      uint32_t *ip, uint16_t *port)
+{
+	const char *colon = end;
+
+	while (colon > s && colon[-1] != ':')
+		colon--;
+	return colon > s && parse_addr(s, colon - 1, def, ip) &&
+	       parse_port(colon, end, port);
+}
+
+/*
+ * A forward, rule of len bytes: [tcp]:[hostaddr]:hostport-[guestaddr]:
+ * guestport. The guest's address must be one the guest can have.
+ */
+static bool parse_forward(const char *rule, size_t len, NetUserForward *f,
+                          char *error, size_t error_size)
+{
+	const char *end = rule + len;
+	const char *colon = memchr(rule, ':', len);
+	const char *dash =
+		colon == NULL ? NULL : memchr(colon, '-', (size_t)(end - colon));
+
+	if (colon != NULL && colon - rule == 3 && memcmp(rule, "udp", 3) == 0) {
+		snprintf(error, error_size, "user: hostfwd of udp is not supported");
+		return false;
+	}
+	if (dash == NULL ||
+	    (colon != rule && (colon - rule != 3 || memcmp(rule, "tcp", 3) != 0)) ||
+	    !parse_end(colon + 1, dash, USER_LOOPBACK, &f->host_ip,
+	               &f->host_port) ||
+	    !parse_end(dash + 1, end, USER_GUEST, &f->guest_ip, &f->guest_port)) {
+		snprintf(error, error_size,
+		         "user: bad hostfwd '%.*s', expected "
+		         "[tcp]:[hostaddr]:hostport-[guestaddr]:guestport",
+		         (int)len, rule);
+		return false;
+	}
+	if ((f->guest_ip & USER_MASK) != USER_NET || f->guest_ip == USER_NET ||
+	    f->guest_ip == USER_GATEWAY || f->guest_ip == USER_DNS ||
+	    f->guest_ip == (USER_NET | ~USER_MASK)) {
+		snprintf(error, error_size,
+		         "user: hostfwd to %.*s: not an address of the guest's",
+		         (int)(end - dash - 1), dash + 1);
+		return false;
+	}
+	return true;
 }
 
 NetLink *net_user_open(const char *options, char *error, size_t error_size)
 {
-	static const NetUserConfig config = {"/etc/resolv.conf", 53};
+	static const char hostfwd[] = "hostfwd=";
+	const size_t key = sizeof(hostfwd) - 1;
+	NetUserConfig config = {.resolv_conf = "/etc/resolv.conf", .dns_port = 53};
+	size_t len;
 
-	if (options[0] != '\0') {
-		snprintf(error, error_size, "user: unknown option '%s'", options);
-		return NULL;
+	for (const char *s = options; *options != '\0'; s += len + 1) {
+		len = strcspn(s, ",");
+		if (len < key || memcmp(s, hostfwd, key) != 0) {
+			snprintf(error, error_size, "user: unknown option '%.*s'", (int)len,
+			         s);
+			return NULL;
+		}
+		if (config.forwards == NET_USER_FORWARDS) {
+			snprintf(error, error_size, "user: more than %d hostfwd",
+			         NET_USER_FORWARDS);
+			return NULL;
+		}
+		if (!parse_forward(s + key, len - key,
+		                   &config.forward[config.forwards++], error,
+		                   error_size))
+			return NULL;
+		if (s[len] == '\0')
+			break;
 	}
 	return net_user_open_config(&config, error, error_size);
 }
