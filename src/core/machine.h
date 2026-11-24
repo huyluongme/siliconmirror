@@ -37,7 +37,8 @@ typedef enum MachineStop {
 	MACHINE_STOP_ERROR,    /* emulation error; see stop_message */
 } MachineStop;
 
-#define MACHINE_MAX_DEVICES 32
+/* The raspi3b with every option (-audio, -net) has 33. */
+#define MACHINE_MAX_DEVICES 64
 
 /*
  * Something else the machine owns: a device model, or a back end that a

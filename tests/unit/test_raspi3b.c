@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "backend/audio/wav.h"
 #include "backend/char/file.h"
+#include "backend/net/pcap.h"
 #include "block_mem.h"
 #include "core/event.h"
 #include "cpu/arm64/cpu.h"
@@ -158,6 +160,37 @@ static void test_nothing_to_boot(void)
 	options = (BoardOptions){.kernel = "no/such/kernel"};
 	CHECK(raspi3b_board.create(&options, error, sizeof(error)) == NULL);
 	CHECK(strncmp(error, "no/such/kernel: ", 16) == 0);
+}
+
+/* Every option at once: the board has room for all its parts. */
+static void test_every_option(void)
+{
+	static const uint32_t words[] = {0xd503207f}; /* wfi */
+	char error[256] = "";
+	FILE *out = tmpfile();
+	BoardOptions options;
+	BlockMem card;
+	Machine *m;
+
+	write_kernel(words, 1);
+	block_mem_init(&card, 1024 * 1024);
+	options = (BoardOptions){
+		.kernel = KERNEL,
+		.sd = &card.dev,
+		.serial = char_file_create(out, false),
+		.audio = audio_wav_open("test_raspi3b.wav", error, sizeof(error)),
+		.net = net_pcap_open("test_raspi3b.pcap", error, sizeof(error)),
+	};
+	CHECK(options.audio != NULL && options.net != NULL);
+	m = raspi3b_board.create(&options, error, sizeof(error));
+	if (m == NULL)
+		fprintf(stderr, "raspi3b: %s\n", error);
+	CHECK(m != NULL);
+	machine_destroy(m);
+	block_mem_free(&card);
+	fclose(out);
+	remove("test_raspi3b.wav");
+	remove("test_raspi3b.pcap");
 }
 
 /*
@@ -1242,6 +1275,7 @@ int main(void)
 {
 	RUN_TEST(test_board_list);
 	RUN_TEST(test_nothing_to_boot);
+	RUN_TEST(test_every_option);
 	RUN_TEST(test_state_before_the_stub);
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
