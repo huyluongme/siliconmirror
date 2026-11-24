@@ -83,10 +83,24 @@ LAN9514's lite reset cleared the PHY's interrupt mask that Linux sets
 only at bind. Lesson: a path the guest never took is untested even when
 its unit tests pass; bring real software to it (here, `linux.net`).
 
+## Networking to the host, part 2 (2026-11-23 to 11-24)
+
+`-net user[,hostfwd=tcp::HOSTPORT-:GUESTPORT]`: a router inside smirror
+(Ethernet, ARP, IPv4, ICMP, DHCP, UDP NAT and DNS, then TCP ended at the
+router and joined to host sockets, and forwards from the host). Real
+software found what unit tests had not: a NAKed bulk IN halted the
+DWC2 channel, so no frame from the cable ever reached Linux; the Pi OS
+session with `-audio` and `-net` both overflowed the machine's 32
+device slots. The Pi OS session ends with the guest's own ssh login
+through the forward. Mutation testing of the TCP needed tests that
+fill the router's host socket themselves (waiting out the host's
+delayed ACK) to reach the paths of a full socket, and a start time at
+the wrap of the ISN clock to see the sequence numbers' arithmetic.
+
 ## What is next (owner decides)
 
-Networking to the host (chosen next), the JIT, display and USB
-keyboard, I2C/SPI/PWM devices, Bluetooth, WiFi. A second board uses the
+The JIT (chosen next), the console hang when typing while the kernel
+prints, display and USB keyboard, I2C/SPI/PWM devices, Bluetooth, WiFi. A second board uses the
 add-board skill. The VideoCore's VCHIQ services were closed as a task
 on 2026-11-23 (SMEM, mmal at probe and AUDS done); MMAL streaming is
 last on the list.

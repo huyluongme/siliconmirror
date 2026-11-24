@@ -72,7 +72,11 @@ fd leaks (`fcntl(fd, F_GETFD)` after destroy). Error paths of malformed
 input (broken overrides, fixups); boundaries
 (offset 0 vs non-zero, single-character names, the first word of a
 list); messages of warnings never checked; a dtparam dropped after a
-failed overlay. Mutation testing does not prove a model right: a
+failed overlay. TCP (linux29): a full host socket, which the test makes
+itself by sending into the router's socket until nothing moves for
+longer than the host's delayed ACK (40 ms); a virtual clock started at
+the wrap of the ISN clock; every field of a RST; idle periods before a
+timeout is measured (a stale timer doubles it). Mutation testing does not prove a model right: a
 misread datasheet passes it. Real software (U-Boot, Linux) is the
 strongest check.
 
