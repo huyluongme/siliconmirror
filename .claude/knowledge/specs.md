@@ -22,6 +22,7 @@ missing, into that folder. Never commit them.
 | lan9514 | LAN9514 hub + Ethernet, DS00002306A | microchip.com |
 | lan950x_ds.txt | LAN950x DS00001875D: the register map (ch. 7) | microchip.com (403 to scripts: the owner downloads it) |
 | lan8700 | LAN8700 PHY, DS00002260A | microchip.com |
+| rfc/ | RFC 768, 791, 792, 826, 1122, 2131, 2132, 4787, 5382, 5961, 6298, 9293 (the user network: IP, UDP, DHCP, TCP and NAT) | rfc-editor.org/rfc/rfcN.txt |
 
 Encodings: check instruction encodings with GNU as and objdump
 (`.claude/tools/enc.py`, `a64dis.py`), not from memory. The Arm ARM text

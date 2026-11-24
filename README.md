@@ -74,8 +74,10 @@ power off; like the U-Boot test, it takes minutes, only the `release`
 and `ci-release` builds run it, and without the card it is skipped.
 Another boots the same card with `-net pcap:`, brings the link up,
 pings, and checks the frames Linux sent in the capture; a third, with
-`-net user`, gets an address by DHCP, pings the router and looks up a
-name through the host.
+`-net user`, gets an address by DHCP, pings the router, looks up a
+name through the host, and connects with `nc` to its own forwarded
+port through the host's loopback. The Raspberry Pi OS session has
+`-net user` too: it gets its address by DHCP and answers `ssh`.
 
 `scripts/uboot-linux-card.sh` puts both together, as a card that boots
 with U-Boot would: the firmware starts U-Boot, whose `boot.scr` loads
@@ -152,7 +154,7 @@ contains `compile_commands.json` for editors and language servers.
 | `-kernel FILE` | Image to boot, loaded as the board's firmware would                         |
 | `-serial DEV`  | Where the serial console goes: `stdio` (the default), `null` or `file:PATH` |
 | `-audio DEV`   | Where the board's sound goes: nothing plugged in (`none`, the default), `wav:PATH` (WAV files, each stream in its own format) or `alsa`, `alsa:DEVICE` (the host's sound card) |
-| `-net DEV`     | The other end of the board's Ethernet cable: no cable (`none`, the default), `tap:IFNAME` (the host's TAP device IFNAME), `pcap:PATH` (a capture of the frames the guest sends, nothing comes back) or `user` (a network inside smirror, out through the host's sockets, no root) |
+| `-net DEV`     | The other end of the board's Ethernet cable: no cable (`none`, the default), `tap:IFNAME` (the host's TAP device IFNAME), `pcap:PATH` (a capture of the frames the guest sends, nothing comes back) or `user[,hostfwd=[tcp]:[hostaddr]:hostport-[guestaddr]:guestport]...` (a network inside smirror, out through the host's sockets, no root; each `hostfwd` brings the host's TCP connections to hostport into the board) |
 | `-clock CLOCK` | `virtual` (the default): time counts instructions, the same on every run; `host`: time follows the host's clock, as on the board, and U-Boot boots far faster |
 
 The SD card image is used as it is, as a real card would be: what the
@@ -201,8 +203,13 @@ addresses. Its DHCP server gives the board 10.0.2.15, with the router
 10.0.2.2 and the name server 10.0.2.3; the router answers ping, and
 UDP leaves through the host's own sockets: to 10.0.2.3 port 53 it
 reaches the host's name server (`/etc/resolv.conf`), to 10.0.2.2 the
-host's loopback, 127.0.0.1, elsewhere the address itself. TCP comes
-next; until then the router drops it, as it drops IPv6.
+host's loopback, 127.0.0.1, elsewhere the address itself. TCP goes the
+same ways: the router ends the board's connections and the host's
+sockets carry the bytes on. `hostfwd=tcp::2222-:22` is the other way,
+as in QEMU: a connection to the host's port 2222 comes to the board's
+port 22, so `ssh -p 2222 pi@localhost` reaches a Raspberry Pi OS
+board. Without hostaddr only the host itself can connect (127.0.0.1);
+`0.0.0.0` lets the network in. The router drops IPv6.
 
 smirror stops when every CPU waits and nothing can wake them, for
 example when the program ends in a `WFI` loop, and when the guest does

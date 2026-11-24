@@ -1205,14 +1205,58 @@ virtual time, and when one has crossed the cable.
   NAT mapping of RFC 4787 that lives 5 minutes without traffic either
   way; 64 at once, the least recently used goes first). The router
   fragments what the host sends larger than the MTU (RFC 791), answers
-  UDP to the outside with a time to live of 1 or less with an ICMP time
-  exceeded (traceroute's first hop), and drops, as a router that filters
-  them: TCP (the next part), IPv6, fragments from the guest, ICMP to the
+  UDP or TCP to the outside with a time to live of 1 or less with an
+  ICMP time exceeded (traceroute's first hop), and drops, as a router
+  that filters them: IPv6, fragments from the guest, ICMP to the
   outside, and other protocols. ICMP errors that the host gets for a
   mapping (port unreachable) are not passed on: the guest times out.
+  TCP (`user_tcp.c`, RFC 9293) goes the same three ways, to the same
+  places, as a NAT that ends the guest's connections itself (RFC 5382
+  allows it): the router is the guest's peer, and a socket of the host
+  carries the bytes on. A SYN makes the host `connect()` first; the
+  router answers SYN-ACK once the host's connection is up, RST when it
+  was refused, an ICMP host unreachable when it failed otherwise, so
+  that the guest sees what the destination did; 10.0.2.3's other ports
+  answer RST. A segment of no connection gets the RST of section
+  3.10.7.1. Every RST of the router's has no data and a window of 0,
+  as Linux sends them (general knowledge; RFC 9293 sets no window for
+  it). The router's TCP is small, as its link is one cable that
+  loses a frame only when the guest drops it: MSS 1460 (the guest's
+  from its SYN, 536 without, kept within 64 and 1460), no window
+  scaling, SACK or timestamps (its SYN offers none), so windows of
+  65535 bytes, the receive window's edge moved on by a segment at least
+  (silly window avoidance, section 3.8.6.2.2), and a window update when
+  the host takes what filled it; the guest's data in order only, with a
+  RST or a SYN in the window answered by a challenge ACK (RFC 5961);
+  a retransmission timeout of 1 s, RFC 6298's least, doubled up to
+  60 s, started again at each ACK of new data (its (5.3)), from SND.UNA
+  (go back N), with a probe of one byte into a shut window, for as long
+  as the guest answers the probes; the end, with a RST, after 8 timeouts with no word from the
+  guest (243 s, more than RFC 1122's R2 of 100 s and 3 minutes);
+  TIME-WAIT of 60 s (Linux's, our choice); no congestion control (the
+  router never fills its queue to the guest, and leaves 16 frames of
+  it free); urgent data is data. ISNs follow the 4 µs clock of section
+  3.4.1 in virtual time. 64 connections at once; when all are taken, a
+  SYN is lost, as at a full NAT, unless a TIME-WAIT one can go (the one
+  that ends first).
+  Forwards, `-net user,hostfwd=[tcp]:[hostaddr]:hostport-[guestaddr]:
+  guestport` (QEMU's syntax, from its documentation; up to 16): the host
+  listens on hostaddr:hostport (127.0.0.1 when left out, so only the
+  host itself connects: QEMU's documentation does not say, our choice,
+  as a Raspberry Pi OS card has a known password), and each connection
+  it takes makes the router send a SYN to guestaddr:guestport
+  (10.0.2.15 when left out), from 10.0.2.2 and a port from 49152 on
+  (RFC 6335's dynamic ones, our choice); before the guest has sent a
+  frame, the router asks for it by ARP first. A guest that refuses
+  (RST) resets the host's client. UDP forwards are not done.
   Session `linux.user`: `udhcpc` gets the lease, ping reaches the
   router, `nslookup localhost 10.0.2.3` gets 127.0.0.1 from the host's
-  resolver.
+  resolver, and `nc` connects to 10.0.2.2:10007, the host's loopback,
+  whose forward brings it back to the guest's `nc -l -p 7`; 2 MB go the
+  same way. Session `raspios.session` (Pi OS with `-net user,hostfwd=
+  tcp::10022-:22`): NetworkManager gets 10.0.2.15 by DHCP, and `ssh -p
+  10022 pi@10.0.2.2` from the guest logs in to its own sshd through the
+  host, from 10.0.2.2 port 49152.
 
 Not modelled, and the machine
 stops when software uses them: the soft reset `SRST` (a USB disconnect),
@@ -1741,9 +1785,10 @@ to quit.
   collisions, so half duplex behaves as full; the host's frames cross
   it at the link's speed, but what the LAN9514 sends reaches the host at
   once. Without `-net` there is no cable. The user network (`-net
-  user`) routes UDP only, not yet TCP; it drops IPv6, fragments from
-  the guest and ICMP to the outside, keeps ICMP errors from the host to
-  itself, and tells a traceroute only its own hop.
+  user`) drops IPv6, fragments from the guest and ICMP to the outside,
+  keeps ICMP errors from the host to itself, and tells a traceroute
+  only its own hop; its TCP has windows of 64 KB at most, takes the
+  guest's data in order only, and forwards TCP only, not UDP.
 - The DWC2 tries a NAKed bulk or control IN again once a microframe,
   not as often as bus time allows.
 - No display, camera or other device is attached: the I2C masters find
@@ -2044,9 +2089,19 @@ to quit.
   sections 4.1, 4.3.1 table 3, 4.3.2, 4.3.5) and
   [RFC 2132](https://www.rfc-editor.org/rfc/rfc2132) (its options),
   [RFC 4787](https://www.rfc-editor.org/rfc/rfc4787) (NAT for UDP,
-  REQ-5 and REQ-6); resolv.conf(5); the addresses and the loopback at
-  10.0.2.2 are QEMU's user networking, from its documentation (general
-  knowledge, no code read). Linux's dwc2,
+  REQ-5 and REQ-6); [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293)
+  (TCP: sections 3.1, 3.3.1, 3.4.1, 3.7.1, 3.8.6.1, 3.8.6.2.2, 3.10.7
+  with table 6), [RFC 5961](https://www.rfc-editor.org/rfc/rfc5961)
+  (sections 3.2 and 4, challenge ACKs),
+  [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298) ((2.4), (2.5),
+  (5.1) to (5.6)), [RFC 1122](https://www.rfc-editor.org/rfc/rfc1122)
+  (4.2.3.5, R2), [RFC 5382](https://www.rfc-editor.org/rfc/rfc5382)
+  (NAT for TCP), RFC 6335 (dynamic ports, general knowledge); Linux's
+  60 s TIME-WAIT and its least MSS of 48 are general knowledge;
+  resolv.conf(5); the addresses, the loopback at 10.0.2.2 and the
+  syntax of `hostfwd` are QEMU's user networking, from its
+  documentation ([invocation](https://www.qemu.org/docs/master/system/invocation.html),
+  `-netdev user`; no code read). Linux's dwc2,
   [hcd_intr.c](https://github.com/torvalds/linux/blob/master/drivers/usb/dwc2/hcd_intr.c)
   (`dwc2_hc_nak_intr()`: a bulk or control IN in DMA mode goes on after
   a NAK). BusyBox 1.38.0's `udhcpc`, `ping` and `nslookup` in the

@@ -43,7 +43,8 @@ src/
     char/             Character streams: stdio, file, socket
     block/            Block storage: raw image files
     audio/            Audio outputs: WAV files, the host's sound card
-    net/              Network links: the host's TAP devices, pcap files
+    net/              Network links: the host's TAP devices, pcap files,
+                      the user network (a router with NAT, DHCP, TCP)
   boot/               Boot methods: direct kernel load; MBR, FAT and
                       config.txt reading for the Raspberry Pi firmware
   machine/            Board definitions (raspi3b): CPUs, memory map,
@@ -132,7 +133,7 @@ The back ends in `backend/net/` are the cable's other end: `tap.c`
 (the host's TAP device), `pcap.c` (a capture) and `user*.c` (a router
 inside smirror that reaches the outside through the host's sockets).
 Each call gives the virtual time, so that a back end with timers, as
-the router's NAT mappings, counts them in it.
+the router's NAT mappings and TCP retransmissions, counts them in it.
 
 Devices are grouped by kind, not by board. A PL011 exists on many ARM
 boards, so a future board can reuse it directly.
