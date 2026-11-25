@@ -25,6 +25,41 @@ interrupts the guest every 125 us of virtual time while Linux keeps a
 periodic transfer queued (always, with the hub's and the LAN9514's
 interrupt endpoints), as on the board.
 
+## Phase 3.0: the profile (2026-11-25, at e0ac2bb)
+
+Host side: gprof (`build/prof`, `-pg`; perf is blocked by
+`perf_event_paranoid` 4; give each process its own file with
+`GMON_OUT_PREFIX`, or drive's gmon.out overwrites smirror's). Guest
+side: a throwaway patch in `step()` that samples (EL, PC, word) every
+1024 instructions (bound the hash probe: Pi OS has over 1 M distinct
+sampled PCs), U-Boot's PCs mapped through its System.map (relocation
+found by matching words), the kernel's read by disassembly.
+
+- Host time in `cpu/arm64`: 88 % (U-Boot + Linux), 92 % (Pi OS); the
+  device models 3 % and 0.5 %. The JIT is the right next step.
+- U-Boot + Linux session: about 9.1 G guest instructions. 67 % in U-Boot
+  at EL2, nearly all waiting: `get_ticks` + `__udelay` 43 % (the 2 s
+  autoboot countdown, delays), `bcm2835_send_cmd` 14 % (SD polling).
+  Kernel: the 8250 mini UART's `wait_for_xmitr` (LSR & 0x60) 14 %, a
+  byte loop testing `\`, `"`, digits and identifiers 13 % (likely the
+  trace events' print_fmt update at boot; an inference). 580 M counter
+  reads, each through about ten functions (`exec_sysreg` ->
+  `access_sysreg` -> `arm64_timer_trap` ... `machine_now`).
+- Pi OS session: about 58 G guest instructions, 67 % at EL0, 33 % at
+  EL1; about 45 M instructions/s. Flat: the top 1000 PCs hold 15 % of
+  EL0 and 20 % of EL1. Mix at both ELs: branches 20 %, loads 19 %,
+  stores 9 %, moves and adds 19 %, compares 6-7 %, SIMD/FP under 2 %.
+  The same kernel string loop 5 %.
+- What it means for the JIT: integer, load/store and branch translation
+  (3b, 3c) covers nearly all of it; SIMD can stay with the interpreter.
+  The code is large and flat, so translation must be cheap and the
+  cache large, and invalidation when pages are reused (exec, exit) must
+  be right and fast; maybe translate a block only after it runs N
+  times. `ret`/`br` lookups matter (branches 20 %). The busy waits are
+  the board's own behaviour and stay: virtual time must pass; a JIT
+  makes them cheaper, and a fast path for `MRS CNTPCT/CNTVCT` (also in
+  the interpreter) shortens U-Boot's waits.
+
 ## Phase 3: JIT (weeks; the owner decides when)
 
 Own design, x86-64 hosts first; the interpreter stays as the reference

@@ -3,9 +3,13 @@
 Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
-- **Date:** 2026-11-24
-- **master:** 332ec07 (networking part 2a closed), then this task's
-  commits.
+- **Date:** 2026-11-25
+- **master:** e0ac2bb (networking parts 2b and 2c closed), then the
+  profile's notes.
+- **Phase 3.0 done:** the profile before the JIT, in
+  `.claude/knowledge/performance.md` ("Phase 3.0"): 92 % of Pi OS's host
+  time is the interpreter; the guest code is flat integer, load/store
+  and branch code; U-Boot's waits are most of the Linux session.
 - **Board:** raspi3b. Roadmap items 1-5 done: from power on, the
   firmware HLE, U-Boot, Linux to the BusyBox shell
   (`docs/boot-logs/raspi3b-uboot-linux.log`), and an unmodified
@@ -44,9 +48,9 @@ work (or the next one), so a new session starts from here.
 
 ## Next tasks
 
-1. **Next: performance phase 3, the JIT**
-   (`.claude/knowledge/performance.md`): the Pi OS session takes about
-   25 minutes. `/effort xhigh` for its design.
+1. **Next: performance phase 3a, the JIT's infrastructure**
+   (`.claude/knowledge/performance.md`, read "Phase 3.0" first): the
+   Pi OS session takes about 25 minutes. `/effort xhigh` for its design.
 2. The console hang: typing while the kernel prints a line (see
    tests/linux/user.txt); find which side (PL011 or the guest) loops.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.
