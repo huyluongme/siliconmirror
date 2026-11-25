@@ -328,18 +328,10 @@ int arm64_timer_trap(const Arm64Cpu *c, uint16_t encoding, bool read)
 			return (int)arm64_el1_target(c);
 		return 0;
 	}
-	if (encoding == ARM64_CNTPCT_EL0) {
-		if (c->el == 0 && !(kctl & KCTL_EL0PCTEN))
-			return (int)arm64_el1_target(c);
-		if (el2_traps && !(hctl & HCTL_EL1PCTEN))
-			return 2;
-		return 0;
-	}
-	if (encoding == ARM64_CNTVCT_EL0) {
-		if (c->el == 0 && !(kctl & KCTL_EL0VCTEN))
-			return (int)arm64_el1_target(c);
-		return 0;
-	}
+	/*
+	 * arm64_timer_read_count() executes MRS of CNTPCT_EL0 and CNTVCT_EL0,
+	 * and an MSR of either is UNDEFINED before this: they never come here.
+	 */
 	switch (timer_index(encoding)) {
 	case ARM64_TIMER_PHYS:
 		if (c->el == 0 && !(kctl & KCTL_EL0PTEN))
@@ -365,6 +357,36 @@ int arm64_timer_trap(const Arm64Cpu *c, uint16_t encoding, bool read)
 	default: /* CNTKCTL_EL1, the EL2 registers: min_el decides */
 		return 0;
 	}
+}
+
+/*
+ * MRS Xt, CNTPCT_EL0 (D24.10.17) or MRS Xt, CNTVCT_EL0 (D24.10.26), with
+ * their traps. The busy waits of U-Boot and Linux read the count about
+ * once every nine instructions, so arm64_exec_sysreg() comes here before
+ * its table search and its other checks, none of which applies: TIDCP
+ * traps CRn 11 and 15, not 14; neither register is the PMU's or the
+ * debug block's; their table entries have a lowest level of EL0 and no
+ * FP trap.
+ */
+Arm64Exec arm64_timer_read_count(Arm64Cpu *c, uint32_t insn)
+{
+	uint16_t encoding = (uint16_t)field32(insn, 20, 5);
+	uint64_t kctl = c->timer.cntkctl_el1, count;
+
+	if (encoding == ARM64_CNTPCT_EL0) {
+		if (c->el == 0 && !(kctl & KCTL_EL0PCTEN))
+			return arm64_sys_trap(c, arm64_el1_target(c), insn);
+		if (c->el <= 1 && arm64_el2_enabled(c) &&
+		    !(c->timer.cnthctl_el2 & HCTL_EL1PCTEN))
+			return arm64_sys_trap(c, 2, insn);
+	} else if (c->el == 0 && !(kctl & KCTL_EL0VCTEN)) {
+		return arm64_sys_trap(c, arm64_el1_target(c), insn);
+	}
+	count = physical_count(c);
+	if (encoding == ARM64_CNTVCT_EL0)
+		count -= virtual_offset(c);
+	set_x(c, field32(insn, 4, 0), count);
+	return ARM64_EXEC_OK;
 }
 
 bool arm64_timer_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value)

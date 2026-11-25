@@ -432,13 +432,16 @@ void arm64_set_event_register(Arm64Cpu *c);
  * counter has too many listeners. arm64_timer_trap() returns where an
  * MRS or MSR of a Generic Timer register traps to, 0 if it does not, or
  * -1 if it is UNDEFINED; the caller has checked the lowest Exception
- * level and whether the register is read-only. arm64_timer_read() and
- * arm64_timer_write() access a register without checks; they return
- * false for an encoding that is not a Generic Timer register.
+ * level and whether the register is read-only. arm64_timer_read_count()
+ * executes MRS of CNTPCT_EL0 or CNTVCT_EL0, which arm64_timer_trap()
+ * leaves to it. arm64_timer_read() and arm64_timer_write() access a
+ * register without checks; they return false for an encoding that is not
+ * a Generic Timer register.
  */
 bool arm64_timer_init(Arm64Cpu *c);
 void arm64_timer_reset(Arm64Cpu *c);
 int arm64_timer_trap(const Arm64Cpu *c, uint16_t encoding, bool read);
+Arm64Exec arm64_timer_read_count(Arm64Cpu *c, uint32_t insn);
 bool arm64_timer_read(Arm64Cpu *c, uint16_t encoding, uint64_t *value);
 bool arm64_timer_write(Arm64Cpu *c, uint16_t encoding, uint64_t value);
 

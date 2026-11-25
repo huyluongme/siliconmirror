@@ -594,9 +594,15 @@ static const char *missing_name(const Arm64Cpu *c, uint16_t encoding)
 Arm64Exec arm64_exec_sysreg(Arm64Cpu *c, uint32_t insn)
 {
 	uint16_t encoding = (uint16_t)field32(insn, 20, 5);
-	const SysReg *r = find_sysreg(encoding);
+	const SysReg *r;
 	const char *missing;
 	int index;
+
+	/* MRS of the counts first: see arm64_timer_read_count(). */
+	if (bit32(insn, 21) &&
+	    (encoding == ARM64_CNTPCT_EL0 || encoding == ARM64_CNTVCT_EL0))
+		return arm64_timer_read_count(c, insn);
+	r = find_sysreg(encoding);
 
 	/* Priority 19 of D1.4.5.6: ahead of UNDEFINED and the other traps. */
 	if (arm64_tidcp_traps(c, insn))

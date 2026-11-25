@@ -189,6 +189,19 @@ static void test_counts(void)
 	enter(c, 2, false);
 	CHECK_EQ(read_reg(c, ARM64_CNTVCT_EL0), (uint64_t)-1000);
 
+	/* MRS XZR reads and drops the count. */
+	c->x[30] = 0x5555;
+	CHECK_EQ(arm64_execute(c, mrs(ARM64_CNTPCT_EL0, 31)), ARM64_EXEC_OK);
+	CHECK_EQ(c->x[30], 0x5555);
+
+	/* A debugger reads both, as MRS does. */
+	uint64_t value;
+
+	CHECK(arm64_cpu_read_sysreg(c, ARM64_CNTPCT_EL0, &value));
+	CHECK_EQ(value, 1000);
+	CHECK(arm64_cpu_read_sysreg(c, ARM64_CNTVCT_EL0, &value));
+	CHECK_EQ(value, (uint64_t)-1000);
+
 	/* Neither count can be written. */
 	expect_undefined(c, msr(ARM64_CNTPCT_EL0, 0));
 	expect_undefined(c, msr(ARM64_CNTVCT_EL0, 0));
@@ -196,8 +209,6 @@ static void test_counts(void)
 	CHECK(!arm64_cpu_write_sysreg(c, ARM64_CNTVCT_EL0, 0));
 
 	/* Other encodings are not Generic Timer registers. */
-	uint64_t value;
-
 	CHECK(!arm64_timer_read(c, ARM64_SCTLR_EL1, &value));
 	CHECK(!arm64_timer_write(c, ARM64_SCTLR_EL1, 0));
 	machine_destroy(m);
@@ -315,6 +326,14 @@ static void test_count_traps(void)
 	expect_trap(c, mrs(ARM64_CNTPCT_EL0, 0), 1);
 	enter(c, 1, false);
 	read_reg(c, ARM64_CNTVCT_EL0);
+
+	/* With HCR_EL2.TGE, the EL0 traps go to EL2. */
+	enter(c, 0, false);
+	set_reg(c, ARM64_CNTKCTL_EL1, 0);
+	set_reg(c, ARM64_CNTHCTL_EL2, 1);
+	c->sys.hcr_el2 = ARM64_HCR_TGE | ARM64_HCR_RW;
+	expect_trap(c, mrs(ARM64_CNTPCT_EL0, 0), 2);
+	expect_trap(c, mrs(ARM64_CNTVCT_EL0, 0), 2);
 	machine_destroy(m);
 }
 
