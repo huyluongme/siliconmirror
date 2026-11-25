@@ -4,8 +4,8 @@ Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
 - **Date:** 2026-11-25
-- **master:** e0ac2bb (networking parts 2b and 2c closed), then the
-  profile's notes.
+- **master:** d77d2e4 (the profile before the JIT), then the counter's
+  fast path.
 - **Phase 3.0 done:** the profile before the JIT, in
   `.claude/knowledge/performance.md` ("Phase 3.0"): 92 % of Pi OS's host
   time is the interpreter; the guest code is flat integer, load/store
@@ -17,40 +17,24 @@ work (or the next one), so a new session starts from here.
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
   Networking to the host is done: `-net tap`, `-net pcap`, `-net user`
   with TCP and `hostfwd`.
-- **Last task:** networking to the host, parts 2b and 2c: TCP in the
-  user network (backend/net/user_tcp.c): the router ends the guest's
-  TCP itself (RFC 9293) and joins each connection to a nonblocking host
-  socket; the guest's SYN waits for the host's connect() (then SYN-ACK,
-  RST when refused, ICMP host unreachable otherwise); MSS 1460, no
-  window scaling, SACK or timestamps; silly window avoidance; RFC 5961
-  challenge ACKs; RTO 1 s doubled to 60 s, started again at each new
-  ACK, go back N, zero-window probes; the end after 8 silent timeouts;
-  TIME-WAIT 60 s; 64 connections, a full table evicts the TIME-WAIT
-  that ends first; every RST with no data and a window of 0.
-  `hostfwd=tcp:[hostaddr]:hostport-[guestaddr]:guestport` (QEMU's
-  documented syntax; an empty hostaddr is 127.0.0.1, our choice):
-  connections from 10.0.2.2, ports from 49152, an ARP request first
-  when the guest has not spoken. A board fix it brought out:
-  `MACHINE_MAX_DEVICES` 32 was one short for `-audio` with `-net`
-  (now 64, test_every_option). Sessions: `linux.user` adds nc both
-  ways through two forwards (2 MB from the guest); `raspios.session`
-  gets 10.0.2.15 by DHCP and logs in to its own sshd through
-  `hostfwd=tcp::10022-:22`. Mutation linux29: 1344 mutants that build,
-  205 survivors at first; after new tests and simpler code, a fresh run of
-  1304: 67 survivors; 61 after more tests, all equivalent (parameter
-  array sizes, fd -2 for -1, `>=` where equality gives the same, loops
-  one slot past the array into the zeroed datagram buffer, Linux's
-  nonblocking connect() never returning 0, delays only (poll's
-  timeout), initial values written again, the 53 that `linux.user`
-  checks, a SYN's length in a synchronized state (both ways an ACK),
-  option bytes read past the list that the length check stops, the
-  ARP request's target address already zero).
+- **Last task:** the counter's fast path, before the JIT: MRS of
+  CNTPCT_EL0 and CNTVCT_EL0 goes straight to `arm64_timer_read_count()`
+  (timer.c) with their traps, ahead of the System register table search;
+  `arm64_timer_trap()` no longer handles them, so the tests see a wrong
+  fast path. U-Boot to the prompt 37.8 s -> 33.9 s. Mutation perf3: 53,
+  one survivor, equivalent (the `uint16_t` cast drops insn bit 21). And
+  a flaky test fixed: three CLI tests shared one card image, which
+  smirror locks, so in a parallel ctest one sometimes saw it "in use";
+  each has its own files now.
 
 ## Next tasks
 
-1. **Next: performance phase 3a, the JIT's infrastructure**
-   (`.claude/knowledge/performance.md`, read "Phase 3.0" first): the
-   Pi OS session takes about 25 minutes. `/effort xhigh` for its design.
+1. **Next: performance phase 3a.1**, the x86-64 emitter and executable
+   memory; then 3a.2 (blocks, dispatcher, `-jit`), 3a.3 (invalidation),
+   3a.4 (both modes in tests, bench). The design agreed with the owner
+   is in `.claude/knowledge/performance.md` ("Phase 3a"). Specs:
+   `~/specs/intel_sdm.txt`, `sysv_amd64_abi.txt`. `/effort high` for
+   3a.1, `xhigh` for 3a.2 and 3a.3.
 2. The console hang: typing while the kernel prints a line (see
    tests/linux/user.txt); find which side (PL011 or the guest) loops.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.

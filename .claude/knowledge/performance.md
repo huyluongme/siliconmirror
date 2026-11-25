@@ -14,6 +14,11 @@ still stops the machine.
   counter reads (`util/muldiv.h`). U-Boot to the prompt 73.6 s -> 34.4 s.
 - Phase 2: `-clock host` (`backend/clock/host`, `machine_follow_host`):
   U-Boot 2.9 s. The default stays virtual (deterministic tests).
+- Before the JIT (2026-11-25): MRS of CNTPCT_EL0 and CNTVCT_EL0 goes
+  straight to `arm64_timer_read_count()`, ahead of the table search
+  (gprof: the counter path was 20 % of U-Boot to the prompt, 290 M
+  reads in 2.54 G instructions). U-Boot to the prompt 37.8 s -> 33.9 s;
+  the loop unchanged (noise 1.9-2.1 s).
 
 Baseline then: about 70-110 M instructions/s; QEMU about 1 G/s on the
 same loop.
@@ -79,3 +84,31 @@ and for other hosts.
   >= 500 M instructions/s.
 - Profile first: in Linux's boot, find what is hot (gprof on the release
   build).
+
+## Phase 3a: the design agreed with the owner (2026-11-25)
+
+- 3a.1: an x86-64 emitter and executable memory in `src/cpu/jit/`
+  (guest-independent; the `cpu` module). W^X: one memfd mapped twice,
+  written through one view and run through the other. Linux x86-64
+  only; other hosts keep the interpreter. Unit tests check the bytes
+  (Intel SDM vol. 2, checked with GNU as) and run small functions.
+- 3a.2: blocks and the dispatcher. A block starts at the PC, stays in
+  one 4 KB page of RAM, and ends at a branch, a system instruction, an
+  exception-generating one or the page's end; 3a translates each
+  instruction into a call of the interpreter. The cache key is
+  (PA, VA, EL, flags), found through the fetch page cache (the same
+  translation and permission checks as the interpreter); one cache for
+  all the cores. Exact virtual time: a block runs only when the slice
+  has room for all of it (else `step()` one by one), `executed` counts
+  each instruction, interrupts are checked at each block's start and
+  after an MMIO access or a system instruction. `-jit on|off`, off by
+  default until 3b/3c give the same boot logs.
+- 3a.3: invalidation. A page with translated code is watched: the CPU's
+  write page cache skips it (entries dropped when it becomes watched),
+  and `bus_write`/`bus_write_block` to it (device DMA, other cores, the
+  slow path) drop its blocks. Code memory is reused only between
+  blocks; full means flush everything. A common technique of dynamic
+  translators (general knowledge; no other project's source read).
+- 3a.4: unit, bare-metal and session tests in both modes (the boot logs
+  must be byte-identical: virtual time shows any difference in the
+  instruction count), `scripts/bench.sh`, mutation, docs.

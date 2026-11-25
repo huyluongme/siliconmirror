@@ -22,6 +22,8 @@ missing, into that folder. Never commit them.
 | lan9514 | LAN9514 hub + Ethernet, DS00002306A | microchip.com |
 | lan950x_ds.txt | LAN950x DS00001875D: the register map (ch. 7) | microchip.com (403 to scripts: the owner downloads it) |
 | lan8700 | LAN8700 PHY, DS00002260A | microchip.com |
+| intel_sdm | Intel 64 and IA-32 SDM, combined volumes 1-4 (2: instruction encodings; 3A 11.1.3: self-modifying code), for the JIT | cdrdv2.intel.com/v1/dl/getContent/671200 |
+| sysv_amd64_abi | System V AMD64 ABI 1.0 (3.2: the calling convention), for the JIT | gitlab.com/x86-psABIs/x86-64-ABI, the build job's abi.pdf |
 | rfc/ | RFC 768, 791, 792, 826, 1122, 2131, 2132, 4787, 5382, 5961, 6298, 9293 (the user network: IP, UDP, DHCP, TCP and NAT) | rfc-editor.org/rfc/rfcN.txt |
 
 Encodings: check instruction encodings with GNU as and objdump
