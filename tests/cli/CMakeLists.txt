@@ -63,11 +63,16 @@ add_expect_test(cli.serial-unknown
 	COMMAND ${smirror} -M raspi3b -serial bogus)
 
 # The card's image is closed when the command line fails after -sd.
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img "")
+# Each test has its own files: ctest runs them at the same time, and
+# smirror locks a card's image, so a shared one would be "in use".
+foreach(card sd-then-serial sd-then-audio sd-audio-then-net)
+	file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/${card}.img "")
+endforeach()
 add_expect_test(cli.sd-then-serial-unknown
 	STATUS 1
 	STDERR "^smirror: unknown -serial device 'bogus'\n$"
-	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
+	COMMAND ${smirror} -M raspi3b
+		-sd ${CMAKE_CURRENT_BINARY_DIR}/sd-then-serial.img
 		-serial bogus)
 
 add_expect_test(cli.clock-unknown
@@ -105,14 +110,16 @@ add_expect_test(cli.audio-wav-not-writable
 add_expect_test(cli.sd-then-audio-unknown
 	STATUS 1
 	STDERR "^smirror: unknown -audio device 'alsa-'\n$"
-	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
-		-serial file:${CMAKE_CURRENT_BINARY_DIR}/serial.txt -audio alsa-)
+	COMMAND ${smirror} -M raspi3b
+		-sd ${CMAKE_CURRENT_BINARY_DIR}/sd-then-audio.img
+		-serial file:${CMAKE_CURRENT_BINARY_DIR}/sd-then-audio.txt -audio alsa-)
 
 # The board owns the output, and closes it when it cannot boot.
 add_expect_test(cli.audio-wav-nothing-to-boot
 	STATUS 1
 	STDERR "^smirror: raspi3b: no SD card and no -kernel: "
-	COMMAND ${smirror} -M raspi3b -audio wav:${CMAKE_CURRENT_BINARY_DIR}/out.wav)
+	COMMAND ${smirror} -M raspi3b
+		-audio wav:${CMAKE_CURRENT_BINARY_DIR}/audio-wav-nothing-to-boot.wav)
 
 add_expect_test(cli.audio-none
 	STATUS 1
@@ -166,9 +173,10 @@ add_expect_test(cli.net-pcap-no-colon
 add_expect_test(cli.sd-audio-then-net-unknown
 	STATUS 1
 	STDERR "^smirror: unknown -net device 'tap'\n$"
-	COMMAND ${smirror} -M raspi3b -sd ${CMAKE_CURRENT_BINARY_DIR}/empty-card.img
-		-serial file:${CMAKE_CURRENT_BINARY_DIR}/serial.txt
-		-audio wav:${CMAKE_CURRENT_BINARY_DIR}/out.wav -net tap)
+	COMMAND ${smirror} -M raspi3b
+		-sd ${CMAKE_CURRENT_BINARY_DIR}/sd-audio-then-net.img
+		-serial file:${CMAKE_CURRENT_BINARY_DIR}/sd-audio-then-net.txt
+		-audio wav:${CMAKE_CURRENT_BINARY_DIR}/sd-audio-then-net.wav -net tap)
 
 # The board owns the link, and closes it when it cannot boot.
 add_expect_test(cli.net-pcap-nothing-to-boot
