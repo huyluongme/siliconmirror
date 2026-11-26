@@ -30,6 +30,7 @@ add_library(cpu STATIC
 	arm64/simd_perm.c
 	arm64/simd_fp.c
 	arm64/timer.c
+	jit/cache.c
 	jit/exec_mem.c
 	jit/x64.c)
 

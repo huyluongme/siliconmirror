@@ -306,6 +306,10 @@ add_executable(test_jit_exec_mem test_jit_exec_mem.c)
 target_link_libraries(test_jit_exec_mem PRIVATE cpu)
 add_test(NAME unit.jit_exec_mem COMMAND test_jit_exec_mem)
 
+add_executable(test_jit_cache test_jit_cache.c)
+target_link_libraries(test_jit_cache PRIVATE cpu)
+add_test(NAME unit.jit_cache COMMAND test_jit_cache)
+
 add_executable(test_arm64_debug test_arm64_debug.c)
 target_link_libraries(test_arm64_debug PRIVATE cpu)
 add_test(NAME unit.arm64_debug COMMAND test_arm64_debug)
