@@ -244,6 +244,13 @@ typedef struct Arm64Config {
 	 * stay valid while the core exists. NULL gives a counter stuck at 0.
 	 */
 	SystemCounter *counter;
+
+	/*
+	 * The JIT's cache of translated code (src/cpu/jit/cache.h), shared by
+	 * the cores of a machine, which must stay valid while the core runs.
+	 * NULL runs the interpreter alone.
+	 */
+	struct JitCache *jit;
 } Arm64Config;
 
 /*

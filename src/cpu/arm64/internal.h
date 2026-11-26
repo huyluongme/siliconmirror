@@ -299,6 +299,30 @@ static inline uint32_t arm64_esr(unsigned ec, uint32_t iss)
 /* Decode and execute one instruction; c->pc is its address. */
 Arm64Exec arm64_execute(Arm64Cpu *c, uint32_t insn);
 
+/*
+ * From cpu.c, the interpreter's step, which the JIT (jit.c) shares.
+ * arm64_step() takes a pending interrupt, or fetches and executes the
+ * instruction at the PC and takes the exception that it raises; it
+ * returns false when the machine stops. arm64_step_insn() is its second
+ * half: it executes insn, the instruction that a fetch from the PC read,
+ * and says how insn ended.
+ */
+typedef enum Arm64StepEnd {
+	ARM64_STEP_DONE,      /* completed: the PC is the next instruction's */
+	ARM64_STEP_EXCEPTION, /* raised an exception, which was taken */
+	ARM64_STEP_STOP,      /* the machine stops */
+} Arm64StepEnd;
+
+bool arm64_step(Arm64Cpu *c);
+Arm64StepEnd arm64_step_insn(Arm64Cpu *c, uint32_t insn);
+
+/*
+ * From jit.c: run() of a core with a JIT cache (Arm64Config.jit), which
+ * executes the same instructions as the interpreter in the same virtual
+ * time, mostly through translated blocks.
+ */
+uint64_t arm64_jit_run(Arm64Cpu *c, uint64_t max_insns);
+
 /* The same for each group of C4.1, in the source file named after it. */
 Arm64Exec arm64_exec_dp_imm(Arm64Cpu *c, uint32_t insn);
 Arm64Exec arm64_exec_branch_sys(Arm64Cpu *c, uint32_t insn);

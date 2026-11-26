@@ -29,7 +29,7 @@ src/
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
     jit/              The JIT's guest-independent parts: an x86-64
-                      emitter, executable memory
+                      emitter, executable memory, the cache of blocks
   hw/                 Device models, grouped by kind
     char/             UARTs (pl011, bcm2835_aux)
     gpio/             GPIO blocks (bcm2835_gpio)
@@ -243,6 +243,34 @@ code. Its guest-independent parts live in `src/cpu/jit/`:
   mapped twice: code is written through the read-write view and run
   through the read-execute one. Where the host refuses it (not Linux,
   `vm.memfd_noexec = 2`, a security policy), the JIT is unavailable.
+- `cache.c`: the translated blocks, found by the physical and virtual
+  address of their first instruction and by flags (what else the code
+  depends on), with their code in one executable memory. One cache
+  serves all the cores of a machine. Code is written only between
+  blocks; when the code memory or the table of blocks is full, the
+  cache is emptied and translation starts again.
+
+The AArch64 side is `src/cpu/arm64/jit.c`, which `-jit on` turns on
+(`Arm64Config.jit`; off by default):
+
+- A block starts at the PC and holds the instructions after it in the
+  same 4 KB page of RAM, at most 64: it ends after a branch, an
+  exception-generating or a System instruction. It is found through the
+  fetch page cache, so with the interpreter's translation and permission
+  checks; on a miss the interpreter steps the instruction and its fetch
+  fills that cache. The cache key is (PA, VA, Exception level).
+- Phase 3a translates each instruction into a call of the interpreter's
+  step without its fetch (`arm64_step_insn()`); later phases give the
+  instructions code of their own.
+- Virtual time stays exact: a block runs only when the turn has room for
+  all of it (else the interpreter steps), each instruction counts in
+  `Cpu.executed` as it ends, interrupts are looked for before each
+  block, and a block stops after an instruction that changed the core's
+  interrupt inputs (an MMIO access can), raised an exception, stopped
+  the core or the machine. Within a block nothing else that decides
+  whether an interrupt is taken can change.
+- Not yet (phase 3a.3): writes to RAM that holds translated code do not
+  drop its blocks, so `-jit on` cannot boot Linux after U-Boot yet.
 
 ## Headers and naming
 

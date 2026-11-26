@@ -15,6 +15,7 @@ add_library(cpu STATIC
 	arm64/fp.c
 	arm64/fp_scalar.c
 	arm64/interrupt.c
+	arm64/jit.c
 	arm64/load_store.c
 	arm64/mem.c
 	arm64/mmu.c

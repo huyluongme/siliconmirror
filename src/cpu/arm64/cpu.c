@@ -159,12 +159,32 @@ Arm64Exec arm64_bus_failure(Arm64Cpu *c, uint64_t address, unsigned size,
 	return ARM64_EXEC_DATA_ABORT;
 }
 
-/*
- * Take a pending interrupt, or fetch, decode and execute one instruction
- * or take the exception that it raises. Returns false when the machine stops:
- * on what the model does not emulate yet.
- */
-static bool step(Arm64Cpu *c)
+Arm64StepEnd arm64_step_insn(Arm64Cpu *c, uint32_t insn)
+{
+	Arm64Exec result;
+
+	c->detail[0] = '\0';
+	c->next_pc = c->pc + 4;
+	result = arm64_execute(c, insn);
+	switch (result) {
+	case ARM64_EXEC_OK:
+		c->pc = c->next_pc;
+		return ARM64_STEP_DONE;
+	case ARM64_EXEC_UNDEFINED:
+		take_undefined(c);
+		return ARM64_STEP_EXCEPTION;
+	case ARM64_EXEC_EXCEPTION:
+		arm64_take_exception(c);
+		return ARM64_STEP_EXCEPTION;
+	case ARM64_EXEC_UNIMPLEMENTED:
+	case ARM64_EXEC_DATA_ABORT:
+		stop(c, result, false, insn);
+		return ARM64_STEP_STOP;
+	}
+	return ARM64_STEP_STOP;
+}
+
+bool arm64_step(Arm64Cpu *c)
 {
 	if (arm64_interrupt_requested(c) && arm64_take_pending_interrupt(c))
 		return true;
@@ -190,28 +210,13 @@ static bool step(Arm64Cpu *c)
 
 	c->detail[0] = '\0';
 	result = fetch(c, &insn);
-	if (result == ARM64_EXEC_OK) {
-		c->next_pc = c->pc + 4;
-		result = arm64_execute(c, insn);
-	} else if (result != ARM64_EXEC_EXCEPTION) {
-		stop(c, result, true, 0);
-		return false;
-	}
-	switch (result) {
-	case ARM64_EXEC_OK:
-		c->pc = c->next_pc;
-		return true;
-	case ARM64_EXEC_UNDEFINED:
-		take_undefined(c);
-		return true;
-	case ARM64_EXEC_EXCEPTION:
+	if (result == ARM64_EXEC_OK)
+		return arm64_step_insn(c, insn) != ARM64_STEP_STOP;
+	if (result == ARM64_EXEC_EXCEPTION) {
 		arm64_take_exception(c);
 		return true;
-	case ARM64_EXEC_UNIMPLEMENTED:
-	case ARM64_EXEC_DATA_ABORT:
-		stop(c, result, false, insn);
-		return false;
 	}
+	stop(c, result, true, 0);
 	return false;
 }
 
@@ -221,9 +226,11 @@ static uint64_t arm64_run(Cpu *base, uint64_t max_insns)
 	uint64_t n = 0;
 
 	base->executed = 0;
+	if (c->config.jit != NULL)
+		return arm64_jit_run(c, max_insns);
 	while (n < max_insns && base->state == CPU_RUNNING &&
 	       base->machine->stop == MACHINE_STOP_NONE) {
-		if (!step(c))
+		if (!arm64_step(c))
 			break;
 		base->executed = ++n;
 	}
