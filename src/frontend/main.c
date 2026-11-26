@@ -43,6 +43,7 @@ typedef struct Options {
 	const char *clock;   /* -clock */
 	const char *audio;   /* -audio */
 	const char *net;     /* -net */
+	const char *jit;     /* -jit */
 } Options;
 
 static void print_usage(FILE *out)
@@ -78,6 +79,11 @@ static void print_usage(FILE *out)
 	      "                     the same on every run; host: time follows "
 	      "the host's\n"
 	      "                     clock, as on the board\n"
+	      "  -jit on|off        on: run the guest's code through the JIT "
+	      "(Linux x86-64\n"
+	      "                     hosts), with the same results; off (the "
+	      "default):\n"
+	      "                     the interpreter alone\n"
 	      "  -h, -help          Show this help and exit\n"
 	      "  -version           Show version information and exit\n"
 	      "\n"
@@ -139,6 +145,8 @@ static const char **option_value(Options *options, const char *name)
 		return &options->audio;
 	if (strcmp(name, "net") == 0)
 		return &options->net;
+	if (strcmp(name, "jit") == 0)
+		return &options->jit;
 	return NULL;
 }
 
@@ -329,6 +337,18 @@ int main(int argc, char **argv)
 		}
 	}
 
+	bool jit = false;
+
+	if (options.jit != NULL) {
+		if (strcmp(options.jit, "on") == 0) {
+			jit = true;
+		} else if (strcmp(options.jit, "off") != 0) {
+			fprintf(stderr, "smirror: unknown -jit '%s': use on or off\n",
+			        options.jit);
+			return EXIT_FAILURE;
+		}
+	}
+
 	const Board *board = board_find(options.machine);
 
 	if (board == NULL) {
@@ -337,7 +357,8 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	BoardOptions board_options = {.kernel = options.kernel, .warn = warn};
+	BoardOptions board_options = {
+		.kernel = options.kernel, .jit = jit, .warn = warn};
 	char error[512];
 
 	if (options.sd != NULL) {

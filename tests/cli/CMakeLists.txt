@@ -80,6 +80,11 @@ add_expect_test(cli.clock-unknown
 	STDERR "^smirror: unknown clock 'bogus': use virtual or host\n$"
 	COMMAND ${smirror} -M raspi3b -clock bogus)
 
+add_expect_test(cli.jit-unknown
+	STATUS 1
+	STDERR "^smirror: unknown -jit 'bogus': use on or off\n$"
+	COMMAND ${smirror} -M raspi3b -jit bogus)
+
 add_expect_test(cli.serial-twice
 	STATUS 1
 	STDERR "^smirror: only one -serial is supported\n$"

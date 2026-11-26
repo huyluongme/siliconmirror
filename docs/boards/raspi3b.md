@@ -59,6 +59,12 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
   single core resets. The manual says so outright for `L2CTLR_EL1` and
   `L2ECTLR_EL1`; for the other two, which control and report on the
   same L2, smirror assumes it.
+- With `-jit on` the four cores share one cache of translated code
+  (docs/architecture.md, "The JIT"), which the board's reset empties:
+  the firmware loads the boot files into RAM again. The cores run the
+  same instructions in the same virtual time as without it, except
+  (until performance phase 3a.3) code that the guest rewrites after
+  running it.
 
 Each core has the Cortex-A53's exclusive monitor (`cpu/arm64/exclusive.c`),
 local and global in one: a Load-Exclusive marks the 64-byte block of its

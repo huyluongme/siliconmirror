@@ -15,10 +15,13 @@
 #include "machine/raspi3b.h"
 #include "machine/net_cable.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "cpu/arm64/cpu.h"
+#include "cpu/jit/cache.h"
 #include "hw/char/bcm2835_aux.h"
 #include "hw/char/pl011.h"
 #include "hw/display/bcm2835_hvs.h"
@@ -50,10 +53,11 @@
  * n has MPIDR_EL1 0x80000000 + n: bit 31 is RES1, and the cores form one
  * cluster with affinity 0 (the reg properties of Linux's bcm2837.dtsi),
  * which shares one L2 memory system. Their Generic Timers count from
- * the core timer of the ARM local peripherals.
+ * the core timer of the ARM local peripherals. With -jit on, they share
+ * one JIT cache.
  */
 static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster,
-                              SystemCounter *counter)
+                              SystemCounter *counter, JitCache *jit)
 {
 	return (Arm64Config){
 		.reset_pc = RASPI3B_STUB_ADDRESS,
@@ -62,6 +66,7 @@ static Arm64Config cortex_a53(unsigned core, Arm64Cluster *cluster,
 		.mpidr = 0x80000000u | core,
 		.cluster = cluster,
 		.counter = counter,
+		.jit = jit,
 	};
 }
 
@@ -110,6 +115,20 @@ static void reset_cluster(void *ctx)
 static void destroy_cluster(void *ctx)
 {
 	arm64_cluster_destroy(ctx);
+}
+
+/*
+ * The JIT's code comes from RAM, which a reset may load again: the
+ * machine's reset empties the cache.
+ */
+static void reset_jit(void *ctx)
+{
+	jit_cache_flush(ctx);
+}
+
+static void destroy_jit(void *ctx)
+{
+	jit_cache_destroy(ctx);
 }
 
 /*
@@ -556,6 +575,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 	Machine *m = machine_create();
 	BusStatus status;
 	Arm64Cluster *cluster;
+	JitCache *jit = NULL;
 	Bcm2836Local *local;
 	Bcm2835Ic *ic;
 	IrqLine *gpio_irqs[BCM2835_GPIO_NUM_IRQS];
@@ -643,9 +663,23 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		         bus_status_str(status));
 		goto fail;
 	}
+	if (options->jit) {
+		jit = jit_cache_create(JIT_CACHE_CODE_SIZE, JIT_CACHE_BLOCKS);
+		if (jit == NULL) {
+			snprintf(error, error_size,
+			         "-jit on: the JIT needs a Linux x86-64 host that allows "
+			         "executable memory: %s",
+			         strerror(errno));
+			goto fail;
+		}
+		if (!machine_add_device(m, jit, reset_jit, destroy_jit)) {
+			jit_cache_destroy(jit);
+			goto out_of_memory;
+		}
+	}
 	for (unsigned i = 0; i < RASPI3B_NUM_CPUS; i++) {
 		Arm64Config config =
-			cortex_a53(i, cluster, bcm2836_local_counter(local));
+			cortex_a53(i, cluster, bcm2836_local_counter(local), jit);
 		Cpu *cpu = arm64_cpu_create(&config);
 
 		if (cpu == NULL)

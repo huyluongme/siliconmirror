@@ -7,9 +7,12 @@
  * print on the mini UART. The programs were built with the GNU assembler.
  */
 
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <unistd.h>
 
 #include "backend/audio/wav.h"
 #include "backend/char/file.h"
@@ -18,6 +21,7 @@
 #include "core/event.h"
 #include "cpu/arm64/cpu.h"
 #include "cpu/arm64/sysreg.h"
+#include "cpu/jit/cache.h"
 #include "machine/board.h"
 #include "machine/raspi3b.h"
 #include "test.h"
@@ -106,8 +110,12 @@ static void write_kernel(const uint32_t *words, size_t count)
 	fclose(f);
 }
 
-/* Boot a kernel; the serial output goes to *out, which the test closes. */
-static Machine *boot(const uint32_t *words, size_t count, FILE **out)
+/*
+ * Boot a kernel, with -jit on when jit; the serial output goes to *out,
+ * which the test closes.
+ */
+static Machine *boot_jit(const uint32_t *words, size_t count, FILE **out,
+                         bool jit)
 {
 	char error[256] = "";
 
@@ -118,6 +126,7 @@ static Machine *boot(const uint32_t *words, size_t count, FILE **out)
 	BoardOptions options = {
 		.kernel = KERNEL,
 		.serial = char_file_create(*out, false),
+		.jit = jit,
 	};
 	Machine *m = raspi3b_board.create(&options, error, sizeof(error));
 
@@ -125,6 +134,11 @@ static Machine *boot(const uint32_t *words, size_t count, FILE **out)
 		fprintf(stderr, "raspi3b: %s\n", error);
 	CHECK(m != NULL);
 	return m;
+}
+
+static Machine *boot(const uint32_t *words, size_t count, FILE **out)
+{
+	return boot_jit(words, count, out, false);
 }
 
 /* Everything written to out so far. */
@@ -365,9 +379,63 @@ static void test_hello(void)
 	CHECK_EQ(machine_run(m, 2000000), MACHINE_STOP_IDLE);
 	read_output(out, text, sizeof(text));
 	CHECK(strcmp(text, "Hello, world!\n") == 0);
+	CHECK(arm64_cpu_of(m->cpus[0])->config.jit == NULL); /* -jit off */
 	machine_destroy(m);
 	fclose(out);
 	remove(KERNEL);
+}
+
+/*
+ * With -jit on, the four cores share one JIT cache, which a reset of
+ * the machine empties. Where the host gives no executable memory, the
+ * board does not start.
+ */
+static void test_jit(void)
+{
+#if defined(__linux__) && defined(__x86_64__)
+	FILE *out;
+	Machine *m = boot_jit(hello, ARRAY_SIZE(hello), &out, true);
+	JitCache *jit = arm64_cpu_of(m->cpus[0])->config.jit;
+	char text[64], error[256] = "";
+	struct rlimit saved, limit;
+	BoardOptions options;
+	int fd;
+
+	CHECK(jit != NULL);
+	CHECK_EQ(m->num_cpus, 4);
+	for (unsigned i = 1; i < m->num_cpus; i++)
+		CHECK(arm64_cpu_of(m->cpus[i])->config.jit == jit);
+	CHECK_EQ(machine_run(m, 2000000), MACHINE_STOP_IDLE);
+	read_output(out, text, sizeof(text));
+	CHECK(strcmp(text, "Hello, world!\n") == 0);
+	CHECK(jit->num_blocks > 0);
+	machine_reset(m);
+	CHECK_EQ(jit->num_blocks, 0);
+	machine_destroy(m);
+	fclose(out);
+
+	/* No file descriptor left for the memfd of the JIT's memory. */
+	out = tmpfile();
+	fd = open("/dev/null", O_RDONLY);
+	CHECK(out != NULL && fd >= 0);
+	close(fd);
+	CHECK(getrlimit(RLIMIT_NOFILE, &saved) == 0);
+	limit = saved;
+	limit.rlim_cur = (rlim_t)fd;
+	CHECK(setrlimit(RLIMIT_NOFILE, &limit) == 0);
+	options = (BoardOptions){
+		.kernel = KERNEL,
+		.serial = char_file_create(out, false),
+		.jit = true,
+	};
+	m = raspi3b_board.create(&options, error, sizeof(error));
+	CHECK(setrlimit(RLIMIT_NOFILE, &saved) == 0);
+	CHECK(m == NULL);
+	CHECK(strcmp(error, "-jit on: the JIT needs a Linux x86-64 host that "
+	                    "allows executable memory: Too many open files") == 0);
+	fclose(out);
+	remove(KERNEL);
+#endif
 }
 
 static void test_secondary_cores(void)
@@ -1279,6 +1347,7 @@ int main(void)
 	RUN_TEST(test_state_before_the_stub);
 	RUN_TEST(test_state_after_the_stub);
 	RUN_TEST(test_hello);
+	RUN_TEST(test_jit);
 	RUN_TEST(test_interrupt_wiring);
 	RUN_TEST(test_gpu_interrupt_wiring);
 	RUN_TEST(test_mailbox);

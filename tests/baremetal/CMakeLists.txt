@@ -69,6 +69,38 @@ add_expect_test(baremetal.hello-clock-virtual
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel hello.bin -clock virtual)
 
+# The JIT runs it the same as the interpreter (-jit off, the default).
+add_expect_test(baremetal.hello-jit-on
+	STDOUT "^Hello, world!\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel hello.bin -jit on)
+
+add_expect_test(baremetal.hello-jit-off
+	STDOUT "^Hello, world!\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel hello.bin -jit off)
+
+# Where the host gives no executable memory, -jit on does not start:
+# with one file descriptor free, which the serial file takes, none is
+# left for the memfd of the JIT.
+find_program(PRLIMIT prlimit)
+if(PRLIMIT AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+	add_expect_test(baremetal.hello-jit-no-memory
+		STATUS 1
+		STDERR "^smirror: raspi3b: -jit on: the JIT needs a Linux x86-64 host that allows executable memory: Too many open files\n$"
+		COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/one_free_fd.sh ${PRLIMIT}
+			${smirror} -M raspi3b -kernel hello.bin -serial file:/dev/null
+			-jit on)
+
+	# Without -jit, no memfd: the kernel file is the one left without.
+	add_expect_test(baremetal.hello-jit-default-off
+		STATUS 1
+		STDERR "^smirror: raspi3b: hello.bin: Too many open files\n$"
+		COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/one_free_fd.sh ${PRLIMIT}
+			${smirror} -M raspi3b -kernel hello.bin -serial file:/dev/null)
+endif()
+
 # A wait of 2 s on the timer: with -clock host, it takes 2 s on the
 # host's clock. See sleep.s.
 add_expect_test(baremetal.sleep-clock-host
@@ -142,6 +174,23 @@ add_expect_test(baremetal.mmu
 	STDOUT "^mmu ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel mmu.bin)
+
+# Exceptions, interrupts and the MMU through the JIT, which gives what
+# the interpreter gives (performance phase 3a).
+add_expect_test(baremetal.exceptions-jit
+	STDOUT "^2:15\n2:3c\n2:00\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel exceptions.bin -jit on)
+
+add_expect_test(baremetal.irq-jit
+	STDOUT "^irq ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel irq.bin -jit on)
+
+add_expect_test(baremetal.mmu-jit
+	STDOUT "^mmu ok\n$"
+	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
+	COMMAND ${smirror} -M raspi3b -kernel mmu.bin -jit on)
 
 # The console as U-Boot uses it: the mini UART on GPIO 14 and 15, as the
 # firmware sets it up. What miniuart.input sends comes back. See

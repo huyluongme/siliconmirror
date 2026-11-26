@@ -47,6 +47,13 @@ typedef struct BoardOptions {
 	 */
 	NetLink *net;
 
+	/*
+	 * -jit on: run the guest's code through the JIT, which gives the
+	 * same results as the interpreter. create() fails where the host has
+	 * no JIT.
+	 */
+	bool jit;
+
 	/* Messages that do not stop the board, such as what it ignores. */
 	void (*warn)(void *ctx, const char *message);
 	void *warn_ctx;
