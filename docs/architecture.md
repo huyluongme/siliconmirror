@@ -28,6 +28,8 @@ src/
                       machine main loop
   cpu/
     arm64/            AArch64 decoder, interpreter, MMU, system registers
+    jit/              The JIT's guest-independent parts: an x86-64
+                      emitter, executable memory
   hw/                 Device models, grouped by kind
     char/             UARTs (pl011, bcm2835_aux)
     gpio/             GPIO blocks (bcm2835_gpio)
@@ -224,6 +226,23 @@ Known limits, to be handled when the devices that need it arrive:
   more input can come. Host input comes at no fixed virtual time, so a
   run that takes input from a terminal does not repeat exactly; one
   that takes it from a file does.
+
+## The JIT
+
+The interpreter is the reference model, and the only one on hosts other
+than x86-64 Linux. The JIT, being built in stages (performance phase 3,
+`.claude/knowledge/performance.md`), will translate guest code into host
+code. Its guest-independent parts live in `src/cpu/jit/`:
+
+- `x64.c`: an emitter of x86-64 instructions (Intel SDM vol. 2). It
+  writes bytes into a buffer, choosing the encoding GNU as chooses, so
+  `tests/unit/test_jit_x64.c` checks every byte against the assembler
+  (`.claude/tools/x64_bytes_check.py`) and runs small functions.
+- `exec_mem.c`: memory for the translated code, never writable and
+  executable at the same address (W^X). One `memfd_create()` file is
+  mapped twice: code is written through the read-write view and run
+  through the read-execute one. Where the host refuses it (not Linux,
+  `vm.memfd_noexec = 2`, a security policy), the JIT is unavailable.
 
 ## Headers and naming
 

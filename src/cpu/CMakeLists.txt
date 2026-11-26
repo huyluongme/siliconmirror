@@ -29,6 +29,8 @@ add_library(cpu STATIC
 	arm64/simd_long.c
 	arm64/simd_perm.c
 	arm64/simd_fp.c
-	arm64/timer.c)
+	arm64/timer.c
+	jit/exec_mem.c
+	jit/x64.c)
 
 target_link_libraries(cpu PUBLIC core)

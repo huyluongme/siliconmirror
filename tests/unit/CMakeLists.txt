@@ -298,6 +298,14 @@ add_executable(test_arm64_pmu test_arm64_pmu.c)
 target_link_libraries(test_arm64_pmu PRIVATE cpu)
 add_test(NAME unit.arm64_pmu COMMAND test_arm64_pmu)
 
+add_executable(test_jit_x64 test_jit_x64.c)
+target_link_libraries(test_jit_x64 PRIVATE cpu)
+add_test(NAME unit.jit_x64 COMMAND test_jit_x64)
+
+add_executable(test_jit_exec_mem test_jit_exec_mem.c)
+target_link_libraries(test_jit_exec_mem PRIVATE cpu)
+add_test(NAME unit.jit_exec_mem COMMAND test_jit_exec_mem)
+
 add_executable(test_arm64_debug test_arm64_debug.c)
 target_link_libraries(test_arm64_debug PRIVATE cpu)
 add_test(NAME unit.arm64_debug COMMAND test_arm64_debug)
