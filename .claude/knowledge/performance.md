@@ -113,6 +113,22 @@ and for other hosts.
   each instruction, interrupts are checked at each block's start and
   after an MMIO access or a system instruction. `-jit on|off`, off by
   default until 3b/3c give the same boot logs.
+  Done (2026-11-26): `src/cpu/jit/cache.c` (hash on the PA, 64 MB of
+  code and 2^19 blocks for a machine, flush when full) and
+  `src/cpu/arm64/jit.c` (at most 64 instructions a block; RBX the core,
+  R12 the helper). Refinement of the interrupt rule, exact and simpler:
+  a block stops after any instruction that changed `Arm64Cpu.asserted`
+  (only devices change it, through an MMIO access); the other inputs of
+  the decision (HCR_EL2, SCR_EL3, DAIF, EL) change only through System
+  instructions and exceptions, which end blocks. On a fetch page cache
+  miss the interpreter steps one instruction (its fetch translates), so
+  the JIT never translates addresses itself. `tests/unit/test_arm64_jit.c`
+  compares both modes turn by turn. Measured (release, best of 2): the
+  loop 2.17 s -> 2.36 s, U-Boot to the prompt 36.8 s -> 42.4 s, same
+  output: slower, as expected of calls into the interpreter, since the
+  loop's blocks are 2 instructions and each costs a lookup (page cache,
+  hash) and an indirect call. 3b's native code and 3e's chaining are
+  where the speed comes from.
 - 3a.3: invalidation. A page with translated code is watched: the CPU's
   write page cache skips it (entries dropped when it becomes watched),
   and `bus_write`/`bus_write_block` to it (device DMA, other cores, the

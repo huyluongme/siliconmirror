@@ -3,9 +3,9 @@
 Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
-- **Date:** 2026-11-26
-- **master:** fcaa944 (the agreed design of phase 3a), then phase 3a.1
-  (the JIT's emitter and executable memory).
+- **Date:** 2026-11-27
+- **master:** 22fc261 (phase 3a.2: the JIT's blocks,
+  cache and dispatcher, `-jit on|off`).
 - **Phase 3.0 done:** the profile before the JIT, in
   `.claude/knowledge/performance.md` ("Phase 3.0"): 92 % of Pi OS's host
   time is the interpreter; the guest code is flat integer, load/store
@@ -17,19 +17,24 @@ work (or the next one), so a new session starts from here.
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
   Networking to the host is done: `-net tap`, `-net pcap`, `-net user`
   with TCP and `hostfwd`.
-- **Last task:** performance phase 3a.1: the JIT's x86-64 emitter
-  (`src/cpu/jit/x64.c`) and W^X executable memory (`exec_mem.c`, one
-  memfd mapped read-write and read-execute). 79 encodings checked
-  byte for byte with GNU as (`.claude/tools/x64_bytes_check.py`), small
-  functions run in the unit tests. Not used by the emulator yet.
+- **Last task:** performance phase 3a.2: blocks of at most 64
+  instructions, one cache for all cores (`src/cpu/jit/cache.c`), the
+  dispatcher in `src/cpu/arm64/jit.c` (each instruction a call of the
+  interpreter's `arm64_step_insn()`), `-jit on|off` (off by default).
+  `tests/unit/test_arm64_jit.c` compares both modes turn by turn;
+  U-Boot reaches its prompt with the same output. Not faster yet
+  (loop 2.17 -> 2.36 s, U-Boot 36.8 -> 42.4 s): 3b and 3e bring the
+  speed. Written code is not seen yet: Linux after U-Boot needs 3a.3.
+  Boot logs unchanged (the JIT is off by default). Mutation perf5:
+  277 of 301 killed, 24 equivalent.
 
 ## Next tasks
 
-1. **Next: performance phase 3a.2** (blocks, dispatcher, `-jit`), then
-   3a.3 (invalidation), 3a.4 (both modes in tests, bench). The design
-   agreed with the owner is in `.claude/knowledge/performance.md` ("Phase 3a"). Specs:
-   `~/specs/intel_sdm.txt`, `sysv_amd64_abi.txt`. `/effort xhigh` for 3a.2
-   and 3a.3.
+1. **Next: performance phase 3a.3** (invalidation: watched pages, the
+   write page cache, `bus_write`/`bus_write_block`), then 3a.4 (both
+   modes in all tests, bench). The design agreed with the owner is in
+   `.claude/knowledge/performance.md` ("Phase 3a"). `/effort xhigh` for
+   3a.3.
 2. The console hang: typing while the kernel prints a line (see
    tests/linux/user.txt); find which side (PL011 or the guest) loops.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.

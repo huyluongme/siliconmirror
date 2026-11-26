@@ -57,7 +57,11 @@ MSan build can confirm). Host I/O: `EAGAIN` and `EWOULDBLOCK` are the
 same value on Linux; a regular file writes partly only at its limit,
 after which the next write fails, so the pointer's advance is never
 seen; `write()` returns 0 only for 0 bytes; code under `#else` of
-another host. A board's leaks in its failure paths: `main()` still holds
+another host. JIT (perf5): the constants of a hash that only spreads
+entries over buckets; masks on an address the caller has aligned; a
+"fits" check (`<=` to `<`) whose other side is the exact, slower path; a
+test and jump after the last call that lands where the code falls
+through. A board's leaks in its failure paths: `main()` still holds
 the pointer in `BoardOptions`, so LeakSanitizer sees it reachable.
 What only root can reach (a real TAP device's flags, a read-only open)
 is checked by hand, not in CI.
@@ -76,7 +80,13 @@ failed overlay. TCP (linux29): a full host socket, which the test makes
 itself by sending into the router's socket until nothing moves for
 longer than the host's delayed ACK (40 ms); a virtual clock started at
 the wrap of the ISN clock; every field of a RST; idle periods before a
-timeout is measured (a stale timer doubles it). Mutation testing does not prove a model right: a
+timeout is measured (a stale timer doubles it). JIT (perf5): a PC
+misaligned in bit 0 as well as bit 1; a block to the end of a page long
+enough that a wrong stride stops it early; code rounding at `used % 16
+== 1`; a leaked mapping (count the memfd's lines in /proc/self/maps);
+an option's default when both values give the same results: run with
+one file descriptor free (`tests/baremetal/one_free_fd.sh`, prlimit), so
+which file fails shows which path ran. Mutation testing does not prove a model right: a
 misread datasheet passes it. Real software (U-Boot, Linux) is the
 strongest check.
 
