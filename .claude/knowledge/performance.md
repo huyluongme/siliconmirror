@@ -92,6 +92,16 @@ and for other hosts.
   written through one view and run through the other. Linux x86-64
   only; other hosts keep the interpreter. Unit tests check the bytes
   (Intel SDM vol. 2, checked with GNU as) and run small functions.
+  Done (2026-11-25): `x64.c` (push/pop/ret, MOV forms, LEA, the eight
+  ALU operations on registers, immediates and memory, TEST, CALL near
+  or through RAX, forward JMP/Jcc with labels; a full buffer drops the
+  code and sets `full`) and `exec_mem.c`; 79 encodings checked with GNU
+  as by `.claude/tools/x64_bytes_check.py`. Shifts, IMUL, SETcc, MOVZX
+  and backward jumps come with 3b-3d, when a translation needs them.
+  A function that calls into an ExecMem is marked `EXEC_MEM_CALLER`:
+  clang's -fsanitize=function (ci-clang) reads a type signature 8 bytes
+  before an indirect call's target, which generated code lacks (SEGV at
+  the start of the mapping).
 - 3a.2: blocks and the dispatcher. A block starts at the PC, stays in
   one 4 KB page of RAM, and ends at a branch, a system instruction, an
   exception-generating one or the page's end; 3a translates each
