@@ -4,8 +4,8 @@ Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
 - **Date:** 2026-11-28
-- **master:** d0fa3a2 (phase 3a.3: the JIT sees code that is
-  written).
+- **master:** b8ef0ae (phase 3a.3 and its notes; 3a.4 on top once
+  committed).
 - **Phase 3.0 done:** the profile before the JIT, in
   `.claude/knowledge/performance.md` ("Phase 3.0"): 92 % of Pi OS's host
   time is the interpreter; the guest code is flat integer, load/store
@@ -17,26 +17,25 @@ work (or the next one), so a new session starts from here.
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
   Networking to the host is done: `-net tap`, `-net pcap`, `-net user`
   with TCP and `hostfwd`.
-- **Last task:** performance phase 3a.3: invalidation. The bus watches
-  the 4 KB pages of RAM that hold translated code (`bus_watch_ram()`,
-  one watcher, `bus_set_watcher()`); a write through `bus_write()` or
-  `bus_write_block()` to one drops its blocks (the cache's table of
-  pages). The cores' write page caches hold no watched page; a block
-  stops after an instruction that dropped blocks. U-Boot then Linux
-  with `-jit on` gives a boot log byte-identical to the interpreter's
-  (193 s against 157 s: 3b and 3e bring the speed); `-jit off`
-  unchanged within noise. Boot logs unchanged (the JIT is off by
-  default). Mutation perf6: 231 of 253 killed (2 did not
-  compile), 22 equivalent.
+- **Last task:** performance phase 3a.4: both modes in the tests.
+  Each bare-metal program runs again as `<name>-jit` with `-jit on`
+  (`add_guest_test()`), each U-Boot, Linux and Pi OS session has a
+  `-jit` twin, and `scripts/boot-log.sh` boots each chain in both modes
+  at once and fails unless the logs are byte-identical: they are, Pi OS
+  included (its first run with the JIT). `scripts/bench.sh` measures
+  both modes (loop 2.27 -> 2.48 s, U-Boot 37.6 -> 47.1 s with `-jit
+  on`: 3b and 3e bring the speed). The single-instruction unit tests
+  stay interpreter-only (owner's choice); 3b adds a differential test
+  of each translated instruction. No C changed: two hand-made JIT
+  faults instead of a mutation run (`performance.md`, "3a.4").
 
 ## Next tasks
 
-1. **Next: performance phase 3a.4**: unit, bare-metal and session
-   tests in both modes (the boot logs byte-identical), `-jit` in
-   `scripts/bench.sh`, mutation, docs; then 3b (integer ALU and
-   branches in native code). The design agreed with the owner is in
-   `.claude/knowledge/performance.md` ("Phase 3a"). `/effort high` is
-   enough for 3a.4; `xhigh` for the design of 3b.
+1. **Next: performance phase 3b**: integer ALU and branches in native
+   code, with a differential test in test_arm64_jit.c of each
+   translated instruction against the interpreter on many states. The
+   design agreed with the owner is in `.claude/knowledge/performance.md`
+   ("Phase 3a", "Phase 3"); `/effort xhigh` for the design of 3b.
 2. The console hang: typing while the kernel prints a line (see
    tests/linux/user.txt); find which side (PL011 or the guest) loops.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.

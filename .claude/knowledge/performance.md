@@ -158,3 +158,25 @@ and for other hosts.
 - 3a.4: unit, bare-metal and session tests in both modes (the boot logs
   must be byte-identical: virtual time shows any difference in the
   instruction count), `scripts/bench.sh`, mutation, docs.
+  Done (2026-11-28): `add_guest_test()` (tests/CMakeLists.txt) runs each
+  bare-metal program again as `<name>-jit` with `-jit on` where the JIT
+  runs (`SMIRROR_TEST_JIT`: Linux x86-64), the two modes of one test
+  taking turns (RESOURCE_LOCK: an SD card smirror locks); every session
+  of tests/uboot, tests/linux and tests/raspios has a `-jit` twin
+  (`SMIRROR_TEST_JIT_MODES`), the hostfwd sessions taking turns on
+  their host ports. `scripts/boot-log.sh` boots each chain in both
+  modes at once and fails unless the logs are identical (40 min wall
+  for both chains, against 27 for the interpreter alone). Raspberry Pi
+  OS with `-jit on`, tried for the first time: byte-identical. The
+  single-instruction unit tests stay interpreter-only (one instruction
+  a turn never holds a block, owner's choice): 3b adds a differential
+  test of each translated instruction against the interpreter on many
+  states, in test_arm64_jit.c. No C changed, so no mutation run; two
+  hand-made faults in jit.c instead: counting each instruction of a
+  block twice fails baremetal.timer-jit alone; not stopping a block
+  when `asserted` changes passes every bare-metal twin (a late
+  interrupt by a few instructions changes nothing they print) and
+  fails unit.arm64_jit, which is where that rule is tested.
+  Measured (bench.sh, release, best of 3, off -> on): loop 2.27 ->
+  2.48 s, U-Boot -clock virtual 37.6 -> 47.1 s, -clock host 3.03 ->
+  3.10 s.
