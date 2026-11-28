@@ -12,7 +12,10 @@
 #     (scripts/boot-log-raspios.txt), about ten minutes. Its first boot
 #     says nothing on the serial console, as on the real board.
 # The boots run on the virtual clock: the same build prints the same
-# logs.
+# logs. Each chain boots twice at once, with the interpreter (-jit off)
+# and with the JIT (-jit on), which must print the same log byte for
+# byte: virtual time would show any difference in what the guest ran.
+# The JIT's log is kept as DIR/boot-jit.log when the two differ.
 #
 # Usage: scripts/boot-log.sh [BUILD]
 #
@@ -24,19 +27,36 @@ set -eu
 
 BUILD=${1:-build/release}
 
-# log DIR LOG SCRIPT: boot DIR/card.img through SCRIPT into LOG.
-log() {
+# run DIR NAME SCRIPT JIT: boot DIR/card.img through SCRIPT with -jit JIT
+# into DIR/NAME.log; DIR/NAME.status holds drive's exit status.
+run() {
 	status=0
-	"$BUILD/drive" "$1/card.img" "$1/run.img" "$3" \
-		"$BUILD/smirror" -M raspi3b -sd "$1/run.img" > "$1/boot.out" \
-		2> "$1/boot.err" || status=$?
-	tr -d '\r' < "$1/boot.out" > "$2"
+	"$BUILD/drive" "$1/card.img" "$1/$2.img" "$3" \
+		"$BUILD/smirror" -M raspi3b -sd "$1/$2.img" -jit "$4" \
+		> "$1/$2.out" 2> "$1/$2.err" || status=$?
+	tr -d '\r' < "$1/$2.out" > "$1/$2.log"
 	if [ "$status" -ne 0 ]; then
-		printf '\n' >> "$2"
-		cat "$1/boot.err" >> "$2"
+		printf '\n' >> "$1/$2.log"
+		cat "$1/$2.err" >> "$1/$2.log"
 	fi
-	rm -f "$1/run.img"
-	echo "boot-log: $2 (drive status $status)"
+	echo "$status" > "$1/$2.status"
+	rm -f "$1/$2.img"
+}
+
+# log DIR LOG SCRIPT: boot DIR/card.img through SCRIPT into LOG, in both
+# modes; fails when the JIT's log is not the interpreter's.
+log() {
+	run "$1" boot "$3" off &
+	run "$1" boot-jit "$3" on &
+	wait
+	mv "$1/boot.log" "$2"
+	echo "boot-log: $2 (drive status $(cat "$1/boot.status"))"
+	if ! cmp -s "$2" "$1/boot-jit.log"; then
+		echo "boot-log: -jit on gives another log: $1/boot-jit.log" \
+			"(drive status $(cat "$1/boot-jit.status"))" >&2
+		exit 1
+	fi
+	rm -f "$1/boot-jit.log"
 }
 
 mkdir -p docs/boot-logs

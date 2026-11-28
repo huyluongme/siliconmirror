@@ -3,7 +3,9 @@
 # Copyright (C) 2026 Huy Luong Duc
 #
 # Measure how fast smirror runs a guest: a loop of 200 million
-# instructions, and U-Boot from power on to its prompt, with each clock.
+# instructions, and U-Boot from power on to its prompt, with each clock,
+# each with the interpreter (-jit off) and, on a Linux x86-64 host, with
+# the JIT (-jit on).
 #
 # Usage: scripts/bench.sh [BUILD]
 #
@@ -28,6 +30,10 @@ if [ ! -x "$SMIRROR" ]; then
 	exit 1
 fi
 mkdir -p "$WORK"
+JITS=off
+if [ "$(uname -sm)" = "Linux x86_64" ]; then
+	JITS="off on"
+fi
 
 now() {
 	date +%s.%N
@@ -66,8 +72,11 @@ EOF
 "${CROSS}as" -o "$WORK/loop.o" "$WORK/loop.s"
 "${CROSS}ld" -Ttext=0x80000 -e 0x80000 -o "$WORK/loop.elf" "$WORK/loop.o"
 "${CROSS}objcopy" -O binary "$WORK/loop.elf" "$WORK/loop.bin"
-t=$(best "$SMIRROR" -M raspi3b -kernel "$WORK/loop.bin" -serial null)
-echo "$t" | awk '{ printf "loop:   %7.3f s, %5.1f M instructions/s\n", $1, 200 / $1 }'
+for jit in $JITS; do
+	t=$(best "$SMIRROR" -M raspi3b -kernel "$WORK/loop.bin" -serial null \
+		-jit $jit)
+	echo "$t $jit" | awk '{ printf "loop:   %7.3f s, %5.1f M instructions/s, -jit %s\n", $1, 200 / $1, $2 }'
+done
 
 if [ ! -f "$CARD" ] || [ ! -x "$DRIVE" ]; then
 	echo "u-boot: skipped, no $CARD or $DRIVE"
@@ -81,8 +90,10 @@ expect U-Boot>
 quit
 EOF
 for clock in virtual host; do
-	t=$(best "$DRIVE" "$CARD" "$WORK/card.img" "$WORK/uboot.txt" "$SMIRROR" \
-		-M raspi3b -clock $clock -sd "$WORK/card.img")
-	echo "$t $clock" |
-		awk '{ printf "u-boot: %7.3f s to the prompt, -clock %s\n", $1, $2 }'
+	for jit in $JITS; do
+		t=$(best "$DRIVE" "$CARD" "$WORK/card.img" "$WORK/uboot.txt" \
+			"$SMIRROR" -M raspi3b -clock $clock -jit $jit -sd "$WORK/card.img")
+		echo "$t $clock $jit" |
+			awk '{ printf "u-boot: %7.3f s to the prompt, -clock %s -jit %s\n", $1, $2, $3 }'
+	done
 done

@@ -102,7 +102,9 @@ trees and gzip kernels, each for SECONDS (60 by default).
 
 `scripts/bench.sh` measures the speed of a `release` build: a loop of
 200 million instructions, and U-Boot from power on to its prompt (with
-the card above), each the best of 3 runs.
+the card above), each the best of 3 runs, with `-jit off` and, on Linux
+x86-64, `-jit on`. `scripts/boot-log.sh` boots in both modes too, and
+fails unless the JIT's log is the interpreter's, byte for byte.
 
 ```sh
 make test                  # build and run the tests
