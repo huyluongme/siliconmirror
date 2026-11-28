@@ -278,6 +278,22 @@ void arm64_tlb_flush_all_pes(Arm64Cpu *c)
 			arm64_tlb_flush(arm64_cpu_of(m->cpus[i]));
 }
 
+void arm64_drop_write_page_all_pes(Arm64Cpu *c, uint64_t pa)
+{
+	Machine *m = c->cpu.machine;
+
+	for (unsigned i = 0; i < m->num_cpus; i++) {
+		Arm64Page *pages;
+
+		if (m->cpus[i]->ops != &arm64_ops)
+			continue;
+		pages = arm64_cpu_of(m->cpus[i])->pages[ARM64_PAGE_WRITE];
+		for (unsigned j = 0; j < ARM64_PAGE_ENTRIES; j++)
+			if (pages[j].pa == pa)
+				pages[j].host = NULL;
+	}
+}
+
 unsigned arm64_exclusive_pes;
 
 void arm64_monitor_mark(Arm64Cpu *c)

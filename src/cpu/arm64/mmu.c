@@ -192,10 +192,10 @@ uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, unsigned el,
                          uint64_t pa, uint8_t attr)
 {
 	Arm64Page *p = &c->pages[kind][(va >> 12) & (ARM64_PAGE_ENTRIES - 1)];
-	uint8_t *host =
-		bus_ram_pointer(c->cpu.machine->bus, pa & ~(uint64_t)0xfff, 0x1000);
+	Bus *bus = c->cpu.machine->bus;
+	uint8_t *host = bus_ram_pointer(bus, pa & ~(uint64_t)0xfff, 0x1000);
 
-	if (host == NULL)
+	if (host == NULL || (kind == ARM64_PAGE_WRITE && bus_ram_watched(bus, pa)))
 		return NULL;
 	p->va = va & ~(uint64_t)0xfff;
 	p->pa = pa & ~(uint64_t)0xfff;

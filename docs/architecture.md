@@ -248,7 +248,13 @@ code. Its guest-independent parts live in `src/cpu/jit/`:
   depends on), with their code in one executable memory. One cache
   serves all the cores of a machine. Code is written only between
   blocks; when the code memory or the table of blocks is full, the
-  cache is emptied and translation starts again.
+  cache is emptied and translation starts again. A block's code
+  depends on the 4 KB page of RAM that holds its first instruction:
+  the cache watches the page on the bus (`bus_watch_ram()`), and a
+  write that the bus makes to a watched page (`bus_write()`,
+  `bus_write_block()`: a device's DMA, a loader, a core's slow path)
+  drops the page's blocks. The page is watched again when a block of it
+  is translated again.
 
 The AArch64 side is `src/cpu/arm64/jit.c`, which `-jit on` turns on
 (`Arm64Config.jit`; off by default):
@@ -269,8 +275,13 @@ The AArch64 side is `src/cpu/arm64/jit.c`, which `-jit on` turns on
   interrupt inputs (an MMIO access can), raised an exception, stopped
   the core or the machine. Within a block nothing else that decides
   whether an interrupt is taken can change.
-- Not yet (phase 3a.3): writes to RAM that holds translated code do not
-  drop its blocks, so `-jit on` cannot boot Linux after U-Boot yet.
+- Code that is written is seen at the next instruction, as in the
+  interpreter. The cores' write page caches hold no watched page, so
+  their writes to code go through the bus: translating a block drops
+  its page from every core's write page cache, and a watched page is
+  not filled in again. A block stops after an instruction that dropped
+  blocks, so code that rewrites its own next instructions runs the new
+  ones.
 
 ## Headers and naming
 

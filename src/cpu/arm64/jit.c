@@ -22,8 +22,18 @@
  * When the PC's page is not there, the interpreter steps the instruction,
  * and its fetch fills the page cache. A block is kept for the physical
  * address, the virtual address and the Exception level of its first
- * instruction; translated code is not checked against later writes to
- * its RAM yet (phase 3a.3).
+ * instruction.
+ *
+ * Code written to RAM is seen as the interpreter sees it, at the next
+ * instruction. The cache watches each page that it holds blocks of, and
+ * a write that the bus makes to the page drops them: a device's DMA, a
+ * loader, a core's slow path. The cores' write page caches skip watched
+ * pages, so their writes to them take the slow path: a page is dropped
+ * from every core's write page cache when a block of it is translated,
+ * and is not filled in again while watched. A block stops after an
+ * instruction that dropped blocks, which may have been its own later
+ * instructions: the next block is found, or translated, from what RAM
+ * holds then.
  *
  * Virtual time stays exact:
  *  - a block runs only when the turn has room for all its instructions,
@@ -37,12 +47,14 @@
  *    only the inputs can change, through a device that an MMIO access
  *    reaches, so a block stops after an instruction that changed them;
  *  - a block also stops after an instruction that raised an exception,
- *    that left the core not running or that stopped the machine.
+ *    that left the core not running or that stopped the machine, or that
+ *    dropped blocks (above).
  *
  * Translating blocks of guest code into host code, kept in a cache, is
- * the common technique of dynamic binary translators (general
- * knowledge); this design is written from the Arm ARM and the Intel SDM,
- * without reading any other project's source.
+ * the common technique of dynamic binary translators, and so is
+ * dropping translations when the pages they came from are written
+ * (general knowledge); this design is written from the Arm ARM and the
+ * Intel SDM, without reading any other project's source.
  */
 
 #include "core/machine.h"
@@ -74,13 +86,14 @@ static bool ends_block(uint32_t insn)
 static int block_step(Arm64Cpu *c, uint32_t insn)
 {
 	uint32_t asserted = c->asserted;
+	uint64_t dropped = c->config.jit->dropped;
 	Arm64StepEnd end = arm64_step_insn(c, insn);
 
 	if (end == ARM64_STEP_STOP)
 		return 0;
 	c->cpu.executed++;
 	return end == ARM64_STEP_DONE && c->asserted == asserted &&
-	       c->cpu.state == CPU_RUNNING &&
+	       c->config.jit->dropped == dropped && c->cpu.state == CPU_RUNNING &&
 	       c->cpu.machine->stop == MACHINE_STOP_NONE;
 }
 
@@ -133,7 +146,8 @@ static const JitBlock *add_block(Arm64Cpu *c, JitCache *cache,
  * Translate the block at the PC, whose physical address is pa and whose
  * page is at page in host memory. When the cache is full, it is emptied
  * and the block translated again. Returns NULL when the block does not
- * fit even in an empty cache.
+ * fit even in an empty cache. The cache watches the page of a block that
+ * it keeps, so no core may write to it through its write page cache.
  */
 static const JitBlock *translate(Arm64Cpu *c, JitCache *cache,
                                  const uint8_t *page, uint64_t pa)
@@ -154,6 +168,8 @@ static const JitBlock *translate(Arm64Cpu *c, JitCache *cache,
 		jit_cache_flush(cache);
 		b = add_block(c, cache, insns, count, pa);
 	}
+	if (b != NULL)
+		arm64_drop_write_page_all_pes(c, pa & ~(uint64_t)0xfff);
 	return b;
 }
 

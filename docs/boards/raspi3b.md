@@ -62,9 +62,9 @@ the BCM2837 configures it, from the core's Technical Reference Manual:
 - With `-jit on` the four cores share one cache of translated code
   (docs/architecture.md, "The JIT"), which the board's reset empties:
   the firmware loads the boot files into RAM again. The cores run the
-  same instructions in the same virtual time as without it, except
-  (until performance phase 3a.3) code that the guest rewrites after
-  running it.
+  same instructions in the same virtual time as without it, also when
+  code in RAM is written after it ran (Linux loaded by U-Boot where
+  U-Boot ran first).
 
 Each core has the Cortex-A53's exclusive monitor (`cpu/arm64/exclusive.c`),
 local and global in one: a Load-Exclusive marks the 64-byte block of its

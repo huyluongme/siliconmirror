@@ -599,7 +599,9 @@ static inline const Arm64Page *arm64_page_find(const Arm64Cpu *c, unsigned kind,
 
 /*
  * Keep the page of va, which an access of kind with the permissions of
- * el translated to pa with memory attributes attr, when it is RAM.
+ * el translated to pa with memory attributes attr, when it is RAM; but
+ * not for a write to a page that the bus watches (a JIT translated code
+ * from it): those writes go through the bus, which tells the JIT.
  * Returns the host memory of the byte at va, or NULL.
  */
 uint8_t *arm64_page_fill(Arm64Cpu *c, unsigned kind, uint64_t va, unsigned el,
@@ -611,6 +613,13 @@ uint64_t arm64_branch_addr(const Arm64Cpu *c, uint64_t target);
  * TLBI instruction.
  */
 void arm64_tlb_flush_all_pes(Arm64Cpu *c);
+
+/*
+ * From cpu.c: forget the page at pa, a multiple of 4KB, in the write page
+ * cache of every AArch64 PE of the machine, when the bus watches it: the
+ * writes to it must go through the bus.
+ */
+void arm64_drop_write_page_all_pes(Arm64Cpu *c, uint64_t pa);
 
 /*
  * The System instructions with op0 = 1: DC, IC, AT and TLBI, from

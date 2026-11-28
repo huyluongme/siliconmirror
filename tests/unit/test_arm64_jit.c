@@ -617,6 +617,131 @@ static void test_full(void)
 	}
 }
 
+/*
+ * Code that writes the instruction after the next one, in its own block
+ * (x2 = CODE + 12, w3 the new instruction): the block stops after an
+ * instruction that dropped blocks, so the next instruction is the new
+ * one, as in the interpreter. The first write, of the interpreter before
+ * the page has blocks, is to x4: in another page, or in the code's page,
+ * which it puts in the write page cache: the translation of the block
+ * must drop it from there, or the block's write would not be seen.
+ */
+#define ADD_X5_10 0x910028a5 /* add x5, x5, #10 */
+#define NOP 0xd503201f       /* nop */
+
+static const uint32_t patch_own[] = {
+	0xb9000083, /* str w3, [x4] */
+	0xb9000043, /* str w3, [x2] */
+	ADD_X5,     /* add x5, x5, #1 */
+	ADD_X5,     /* add x5, x5, #1: becomes add x5, x5, #10 */
+	WFI,        /* wfi */
+};
+
+static void test_patch_own(void)
+{
+	Pair p;
+
+	for (int run = 0; run < 4; run++) {
+		PAIR_INIT(&p, 1, patch_own);
+		BOTH(&p, s, {
+			s->c[0]->x[2] = CODE + 12;
+			s->c[0]->x[3] = ADD_X5_10;
+			s->c[0]->x[4] = run & 2 ? CODE + 0x800 : CODE + 0x1000;
+		});
+		CHECK_EQ(run & 1 ? RUN_LONG(&p) : RUN_SMALL(&p), MACHINE_STOP_IDLE);
+		CHECK_EQ(p.jit.c[0]->x[5], 11);
+		if (run & 1) {
+			CHECK_EQ(p.jit.jit->dropped, 1);
+			CHECK_EQ(p.jit.jit->translations, 2);
+			CHECK(block(&p, CODE + 4) == NULL);
+			CHECK(block(&p, CODE + 8) && block(&p, CODE + 8)->count == 3);
+		}
+		pair_free(&p);
+	}
+}
+
+/* Run core of both sides from va. */
+static void resume(Pair *p, unsigned core, uint64_t va)
+{
+	BOTH(p, s, s->c[core]->pc = va);
+	BOTH(p, s, s->c[core]->cpu.state = CPU_RUNNING);
+}
+
+/*
+ * Another core's write page cache. Core 1 writes to the page of core 0's
+ * code twice: the first write drops the page's blocks, so the second
+ * puts the page in core 1's write page cache. When core 0 translates a
+ * block of the page again, the page must leave that cache too, or core
+ * 1's write of a new instruction would not be seen. Core 0's code is at
+ * CODE3, whose page is not the first entry of a page cache.
+ */
+#define CODE2 (CODE + 0x4000)
+#define CODE3 (CODE + 0x1000)
+
+static const uint32_t core0_code[] = {
+	NOP,    /* nop */
+	ADD_X5, /* add x5, x5, #1: core 1 makes it add x5, x5, #10 */
+	WFI,    /* wfi */
+};
+
+static const uint32_t core1_code[] = {
+	WFI,        /* wfi */
+	0xb9000043, /* str w3, [x2] */
+	0xb9000043, /* str w3, [x2] */
+	WFI,        /* wfi */
+	0xb90000c4, /* str w4, [x6] */
+	WFI,        /* wfi */
+};
+
+static void test_patch_other_core(void)
+{
+	Pair p;
+
+	PAIR_INIT(&p, 2, core0_code);
+	BOTH(&p, s, {
+		put(s, CODE3, core0_code, ARRAY_SIZE(core0_code));
+		put(s, CODE2, core1_code, ARRAY_SIZE(core1_code));
+		s->c[0]->pc = CODE3;
+		s->c[1]->pc = CODE2;
+		s->c[1]->x[2] = CODE3 + 0x800;
+		s->c[1]->x[4] = ADD_X5_10;
+		s->c[1]->x[6] = CODE3 + 4;
+	});
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK_EQ(p.jit.c[0]->x[5], 1);
+	resume(&p, 1, CODE2 + 4);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK_EQ(p.jit.jit->dropped, 1);
+	resume(&p, 0, CODE3);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK_EQ(p.jit.c[0]->x[5], 2);
+	resume(&p, 1, CODE2 + 16);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK(p.jit.jit->dropped > 1); /* the blocks that core 0 made again */
+	resume(&p, 0, CODE3);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK_EQ(p.jit.c[0]->x[5], 12);
+	pair_free(&p);
+}
+
+/* A device's write to the code (bus_write_block()) drops blocks too. */
+static void test_device_write(void)
+{
+	static const uint8_t add_x0_5[] = {0x00, 0x14, 0x00, 0x91};
+	Pair p;
+
+	PAIR_INIT(&p, 1, two_adds);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	BOTH(&p, s,
+	     CHECK_EQ(bus_write_block(s->m->bus, CODE + 4, add_x0_5, 4), BUS_OK));
+	again(&p, CODE, 3);
+	CHECK_EQ(RUN_LONG(&p), MACHINE_STOP_IDLE);
+	CHECK_EQ(p.jit.c[0]->x[0], 8);
+	CHECK_EQ(p.jit.jit->dropped, 1);
+	CHECK_EQ(p.jit.jit->translations, 2);
+	pair_free(&p);
+}
+
 int main(void)
 {
 	alarm(60); /* a mutant may loop in translated code */
@@ -630,6 +755,9 @@ int main(void)
 	RUN_TEST(test_key);
 	RUN_TEST(test_cores);
 	RUN_TEST(test_full);
+	RUN_TEST(test_patch_own);
+	RUN_TEST(test_patch_other_core);
+	RUN_TEST(test_device_write);
 	return test_summary();
 }
 

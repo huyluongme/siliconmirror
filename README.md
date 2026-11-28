@@ -156,7 +156,7 @@ contains `compile_commands.json` for editors and language servers.
 | `-audio DEV`   | Where the board's sound goes: nothing plugged in (`none`, the default), `wav:PATH` (WAV files, each stream in its own format) or `alsa`, `alsa:DEVICE` (the host's sound card) |
 | `-net DEV`     | The other end of the board's Ethernet cable: no cable (`none`, the default), `tap:IFNAME` (the host's TAP device IFNAME), `pcap:PATH` (a capture of the frames the guest sends, nothing comes back) or `user[,hostfwd=[tcp]:[hostaddr]:hostport-[guestaddr]:guestport]...` (a network inside smirror, out through the host's sockets, no root; each `hostfwd` brings the host's TCP connections to hostport into the board) |
 | `-clock CLOCK` | `virtual` (the default): time counts instructions, the same on every run; `host`: time follows the host's clock, as on the board, and U-Boot boots far faster |
-| `-jit on\|off` | `on`: run the guest's code through the JIT, on Linux x86-64 hosts, with the same results as the interpreter; `off` (the default): the interpreter alone. The JIT is being built: it is not faster yet, and it does not yet see code that the guest rewrites after running it (Linux after U-Boot) |
+| `-jit on\|off` | `on`: run the guest's code through the JIT, on Linux x86-64 hosts, with the same results as the interpreter; `off` (the default): the interpreter alone. The JIT is being built: it is not faster yet |
 
 The SD card image is used as it is, as a real card would be: what the
 guest writes goes to the file, and two smirror processes cannot use the
