@@ -16,6 +16,7 @@
 #ifndef CORE_BUS_H
 #define CORE_BUS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -84,6 +85,34 @@ uint8_t *bus_ram_pointer(Bus *bus, uint64_t addr, uint64_t len);
  */
 BusStatus bus_read_block(Bus *bus, uint64_t addr, void *buf, size_t len);
 BusStatus bus_write_block(Bus *bus, uint64_t addr, const void *buf, size_t len);
+
+/*
+ * Watched RAM, for a JIT that translated code from it. A page is the
+ * 4KB at a multiple of 4KB, which one RAM region must hold all of to be
+ * watched. When bus_write() or bus_write_block() writes to a watched
+ * page, the bus stops watching it and, after the write, calls the
+ * watcher with the page's address: for each page written, in the order
+ * of the addresses. Writes through bus_ram_pointer() are not seen: a CPU
+ * must not write through such a pointer to a watched page.
+ */
+#define BUS_PAGE_SIZE 0x1000
+
+typedef void BusWatcher(void *ctx, uint64_t page);
+
+/*
+ * Call watcher(ctx, page) for writes to watched pages, or nothing when
+ * watcher is NULL. A bus has one watcher at a time.
+ */
+void bus_set_watcher(Bus *bus, BusWatcher *watcher, void *ctx);
+
+/*
+ * Watch the page that holds addr. Returns false, and watches nothing,
+ * when one RAM region does not hold all of the page.
+ */
+bool bus_watch_ram(Bus *bus, uint64_t addr);
+
+/* Whether the page that holds addr is watched. */
+bool bus_ram_watched(Bus *bus, uint64_t addr);
 
 /* A short description of status, for messages. */
 const char *bus_status_str(BusStatus status);

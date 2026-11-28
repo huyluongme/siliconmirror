@@ -15,6 +15,11 @@ typedef struct BusRegion {
 	uint64_t base;
 	uint64_t size;
 	uint8_t *ram; /* host memory for RAM, NULL for MMIO */
+	/*
+	 * For RAM: a bit for each page that has bytes in the region, from
+	 * the page that holds base, set while the page is watched.
+	 */
+	uint64_t *watched;
 	const BusMmioOps *ops;
 	void *ctx;
 } BusRegion;
@@ -23,7 +28,11 @@ struct Bus {
 	BusRegion *regions; /* sorted by base address */
 	size_t count;
 	size_t capacity;
+	BusWatcher *watcher;
+	void *watcher_ctx;
 };
+
+#define PAGE_SHIFT 12 /* BUS_PAGE_SIZE is 1 << PAGE_SHIFT */
 
 /*
  * Accesses are 1, 2, 4 or 8 bytes wide. A macro rather than a function:
@@ -118,8 +127,10 @@ void bus_destroy(Bus *bus)
 {
 	if (bus == NULL)
 		return;
-	for (size_t i = 0; i < bus->count; i++)
+	for (size_t i = 0; i < bus->count; i++) {
 		free(bus->regions[i].ram);
+		free(bus->regions[i].watched);
+	}
 	free(bus->regions);
 	free(bus);
 }
@@ -136,19 +147,25 @@ BusStatus bus_map_ram(Bus *bus, const char *name, uint64_t base, uint64_t size)
 		return BUS_ERR_NOMEM;
 #endif
 
+	uint64_t pages =
+		((base + (size - 1)) >> PAGE_SHIFT) - (base >> PAGE_SHIFT) + 1;
 	BusRegion region = {
 		.name = name,
 		.base = base,
 		.size = size,
 		.ram = calloc(1, (size_t)size),
+		.watched = calloc((size_t)((pages + 63) / 64), sizeof(uint64_t)),
 	};
 
-	if (region.ram == NULL)
-		return BUS_ERR_NOMEM;
-
-	status = insert_region(bus, index, &region);
-	if (status != BUS_OK)
-		free(region.ram);
+	if (region.ram != NULL && region.watched != NULL) {
+		status = insert_region(bus, index, &region);
+		if (status == BUS_OK)
+			return BUS_OK;
+	} else {
+		status = BUS_ERR_NOMEM;
+	}
+	free(region.ram);
+	free(region.watched);
 	return status;
 }
 
@@ -220,6 +237,36 @@ BusStatus bus_read(Bus *bus, uint64_t addr, unsigned size, uint64_t *value)
 	return BUS_OK;
 }
 
+/* The bit in r->watched of the page that holds addr, in RAM region r. */
+static size_t page_bit(const BusRegion *r, uint64_t addr)
+{
+	return (size_t)((addr >> PAGE_SHIFT) - (r->base >> PAGE_SHIFT));
+}
+
+static bool page_watched(const BusRegion *r, size_t bit)
+{
+	return (r->watched[bit / 64] >> (bit % 64)) & 1;
+}
+
+/*
+ * After a write to the len bytes at addr, len > 0, in RAM region r: stop
+ * watching the pages written to, and tell the watcher.
+ */
+static void written(Bus *bus, BusRegion *r, uint64_t addr, uint64_t len)
+{
+	size_t last = page_bit(r, addr + (len - 1));
+	uint64_t page;
+
+	for (size_t bit = page_bit(r, addr); bit <= last; bit++) {
+		if (!page_watched(r, bit))
+			continue;
+		r->watched[bit / 64] &= ~(UINT64_C(1) << (bit % 64));
+		page = ((r->base >> PAGE_SHIFT) + bit) << PAGE_SHIFT;
+		if (bus->watcher != NULL)
+			bus->watcher(bus->watcher_ctx, page);
+	}
+}
+
 BusStatus bus_write(Bus *bus, uint64_t addr, unsigned size, uint64_t value)
 {
 	assert(VALID_SIZE(size));
@@ -233,22 +280,25 @@ BusStatus bus_write(Bus *bus, uint64_t addr, unsigned size, uint64_t value)
 	uint64_t offset = addr - r->base;
 
 	value &= size_mask(size);
-	if (r->ram != NULL)
+	if (r->ram != NULL) {
 		store_le(r->ram + offset, size, value);
-	else if (r->ops->write != NULL)
+		written(bus, r, addr, size);
+	} else if (r->ops->write != NULL)
 		r->ops->write(r->ctx, offset, value, size);
 	return BUS_OK;
 }
 
-/* Copy n bytes between buf and region r, starting at offset. */
-static void copy_in_region(BusRegion *r, uint64_t offset, uint8_t *buf,
-                           size_t n, bool write)
+/* Copy n bytes, n > 0, between buf and region r, starting at offset. */
+static void copy_in_region(Bus *bus, BusRegion *r, uint64_t offset,
+                           uint8_t *buf, size_t n, bool write)
 {
 	if (r->ram != NULL) {
-		if (write)
+		if (write) {
 			memcpy(r->ram + offset, buf, n);
-		else
+			written(bus, r, r->base + offset, n);
+		} else {
 			memcpy(buf, r->ram + offset, n);
+		}
 		return;
 	}
 
@@ -275,7 +325,7 @@ static BusStatus copy_block(Bus *bus, uint64_t addr, uint8_t *buf, size_t len,
 		uint64_t left_in_region = r->size - offset;
 		size_t n = len < left_in_region ? len : (size_t)left_in_region;
 
-		copy_in_region(r, offset, buf, n, write);
+		copy_in_region(bus, r, offset, buf, n, write);
 		buf += n;
 		len -= n;
 
@@ -296,6 +346,34 @@ BusStatus bus_write_block(Bus *bus, uint64_t addr, const void *buf, size_t len)
 {
 	/* copy_block() only reads from buf when writing to the bus. */
 	return copy_block(bus, addr, (uint8_t *)buf, len, true);
+}
+
+void bus_set_watcher(Bus *bus, BusWatcher *watcher, void *ctx)
+{
+	assert(watcher == NULL || bus->watcher == NULL);
+	bus->watcher = watcher;
+	bus->watcher_ctx = ctx;
+}
+
+bool bus_watch_ram(Bus *bus, uint64_t addr)
+{
+	uint64_t page = addr & ~(uint64_t)(BUS_PAGE_SIZE - 1);
+	BusRegion *r = find_region(bus, page);
+	size_t bit;
+
+	if (r == NULL || r->ram == NULL ||
+	    BUS_PAGE_SIZE - 1 > region_last(r) - page)
+		return false;
+	bit = page_bit(r, page);
+	r->watched[bit / 64] |= UINT64_C(1) << (bit % 64);
+	return true;
+}
+
+bool bus_ram_watched(Bus *bus, uint64_t addr)
+{
+	BusRegion *r = find_region(bus, addr);
+
+	return r != NULL && r->ram != NULL && page_watched(r, page_bit(r, addr));
 }
 
 const char *bus_status_str(BusStatus status)

@@ -4,10 +4,12 @@
 /* Unit tests for the memory bus (src/core/bus.c). */
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/bus.h"
 #include "test.h"
+#include "util/macros.h"
 
 /* A fake device that records its last access. */
 typedef struct FakeDevice {
@@ -341,6 +343,172 @@ static void test_ram_pointer(void)
 	bus_destroy(bus);
 }
 
+/*
+ * Which pages can be watched: all of a page in one RAM region. Regions:
+ * "ram" 0-0x2fff, "odd" 0x10800-0x117ff (no whole page), "edge"
+ * 0x20000-0x217ff (one whole page), "short" (a page but its last byte),
+ * "big" with more pages than a word of the bitmap, "tail" whose last
+ * byte is alone in the 65th page, a device and nothing.
+ */
+static Bus *watch_bus(FakeDevice *dev)
+{
+	Bus *bus = bus_create();
+
+	CHECK_EQ(bus_map_ram(bus, "ram", 0, 0x3000), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "ram2", 0x3000, 0x1000), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "odd", 0x10800, 0x1000), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "edge", 0x20000, 0x1800), BUS_OK);
+	CHECK_EQ(bus_map_mmio(bus, "dev", 0x30000, 0x1000, &fake_ops, dev), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "short", 0x50000, 0xfff), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "big", 0x100000, 0x100000), BUS_OK);
+	CHECK_EQ(bus_map_ram(bus, "tail", 0x200000, 0x40001), BUS_OK);
+	return bus;
+}
+
+static void test_watch_pages(void)
+{
+	FakeDevice dev = {0};
+	Bus *bus = watch_bus(&dev);
+
+	CHECK(!bus_ram_watched(bus, 0x1000));
+	CHECK(bus_watch_ram(bus, 0x1234));
+	CHECK(bus_ram_watched(bus, 0x1000));
+	CHECK(bus_ram_watched(bus, 0x1fff));
+	CHECK(!bus_ram_watched(bus, 0x0fff));
+	CHECK(!bus_ram_watched(bus, 0x2000));
+	CHECK(bus_watch_ram(bus, 0x1000)); /* again */
+	CHECK(bus_watch_ram(bus, 0x2fff)); /* the last page of "ram" */
+	CHECK(bus_ram_watched(bus, 0x2000));
+	CHECK(!bus_ram_watched(bus, 0x3000)); /* "ram2" */
+
+	/* Not all of the page in one RAM region. */
+	CHECK(!bus_watch_ram(bus, 0x10800));
+	CHECK(!bus_watch_ram(bus, 0x11000));
+	CHECK(!bus_ram_watched(bus, 0x10800));
+	CHECK(!bus_ram_watched(bus, 0x11000));
+	CHECK(bus_watch_ram(bus, 0x20fff));
+	CHECK(!bus_watch_ram(bus, 0x21000));
+	CHECK(bus_ram_watched(bus, 0x20000));
+	CHECK(!bus_ram_watched(bus, 0x21000));
+	CHECK(!bus_watch_ram(bus, 0x50000));
+	CHECK(!bus_ram_watched(bus, 0x50000));
+	CHECK(!bus_watch_ram(bus, 0x240000));
+	CHECK(!bus_ram_watched(bus, 0x240000));
+	CHECK(!bus_watch_ram(bus, 0x30000)); /* MMIO */
+	CHECK(!bus_watch_ram(bus, 0x40000)); /* nothing */
+	CHECK(!bus_ram_watched(bus, 0x30000));
+	CHECK(!bus_ram_watched(bus, 0x40000));
+	CHECK_EQ(dev.reads + dev.writes, 0);
+
+	/* Pages 63, 64 and 65 of "big": two words of the bitmap. */
+	CHECK(bus_watch_ram(bus, 0x140000));
+	CHECK(!bus_ram_watched(bus, 0x13f000));
+	CHECK(bus_ram_watched(bus, 0x140000));
+	CHECK(!bus_ram_watched(bus, 0x141000));
+	CHECK(bus_watch_ram(bus, 0x13f000));
+	CHECK(bus_ram_watched(bus, 0x13f000));
+	CHECK(!bus_ram_watched(bus, 0x100000));
+	bus_destroy(bus);
+}
+
+/* What a watcher was told. */
+typedef struct Watch {
+	Bus *bus;
+	uint64_t probe; /* an address to read when told */
+	uint64_t pages[8];
+	uint64_t values[8]; /* at probe, when told */
+	bool still[8];      /* whether the page was watched still */
+	unsigned calls;
+} Watch;
+
+static void watcher(void *ctx, uint64_t page)
+{
+	Watch *w = ctx;
+
+	if (w->calls == ARRAY_SIZE(w->pages))
+		abort(); /* a mutant may call it without end */
+	CHECK_EQ(bus_read(w->bus, w->probe, 4, &w->values[w->calls]), BUS_OK);
+	w->still[w->calls] = bus_ram_watched(w->bus, page);
+	w->pages[w->calls++] = page;
+}
+
+/* Writes to watched pages through the bus. */
+static void test_watch_writes(void)
+{
+	FakeDevice dev = {0};
+	Bus *bus = watch_bus(&dev);
+	Watch w = {.bus = bus, .probe = 0x1ffe};
+	uint8_t buf[0x1001] = {0};
+	uint64_t value;
+
+	bus_set_watcher(bus, watcher, &w);
+	CHECK(bus_watch_ram(bus, 0x1000));
+	CHECK(bus_watch_ram(bus, 0x2000));
+
+	/* Reads, and writes elsewhere, are not seen. */
+	CHECK_EQ(bus_read(bus, 0x1000, 8, &value), BUS_OK);
+	CHECK_EQ(bus_read_block(bus, 0xff0, buf, 0x20), BUS_OK);
+	CHECK_EQ(bus_write(bus, 0x0ffc, 4, 1), BUS_OK);
+	CHECK_EQ(bus_write(bus, 0x30000, 4, 1), BUS_OK);
+	CHECK_EQ(w.calls, 0);
+	CHECK(bus_ram_watched(bus, 0x1000));
+
+	/* A write to two pages: each is told once, after the write. */
+	CHECK_EQ(bus_write(bus, 0x1ffe, 4, 0x11223344), BUS_OK);
+	CHECK_EQ(w.calls, 2);
+	CHECK_EQ(w.pages[0], 0x1000);
+	CHECK_EQ(w.pages[1], 0x2000);
+	CHECK_EQ(w.values[0], 0x11223344);
+	CHECK(!w.still[0] && !w.still[1]);
+	CHECK(!bus_ram_watched(bus, 0x1000));
+	CHECK(!bus_ram_watched(bus, 0x2000));
+	CHECK_EQ(bus_write(bus, 0x1000, 1, 0), BUS_OK);
+	CHECK_EQ(w.calls, 2);
+
+	/* Blocks: up to the page, into it, and over two regions. */
+	w.calls = 0;
+	w.probe = 0x1000;
+	CHECK(bus_watch_ram(bus, 0x1000));
+	CHECK_EQ(bus_write_block(bus, 0, buf, 0x1000), BUS_OK);
+	CHECK_EQ(w.calls, 0);
+	buf[0x1000] = 0x5a;
+	CHECK_EQ(bus_write_block(bus, 0, buf, 0x1001), BUS_OK);
+	CHECK_EQ(w.calls, 1);
+	CHECK_EQ(w.pages[0], 0x1000);
+	CHECK_EQ(w.values[0] & 0xff, 0x5a);
+	CHECK(bus_watch_ram(bus, 0x2000));
+	CHECK(bus_watch_ram(bus, 0x3000));
+	CHECK_EQ(bus_write_block(bus, 0x2ff0, buf, 0x20), BUS_OK);
+	CHECK_EQ(w.calls, 3);
+	CHECK_EQ(w.pages[1], 0x2000);
+	CHECK_EQ(w.pages[2], 0x3000);
+
+	/* Pages of a region that does not start at 0: bits 63 and 64. */
+	w.calls = 0;
+	CHECK(bus_watch_ram(bus, 0x140000));
+	CHECK_EQ(bus_write(bus, 0x140ff8, 8, 0), BUS_OK);
+	CHECK_EQ(w.calls, 1);
+	CHECK_EQ(w.pages[0], 0x140000);
+	CHECK(bus_watch_ram(bus, 0x13f000));
+	CHECK_EQ(bus_write(bus, 0x13f000, 1, 0), BUS_OK);
+	CHECK_EQ(w.calls, 2);
+	CHECK_EQ(w.pages[1], 0x13f000);
+	CHECK(!bus_ram_watched(bus, 0x13f000));
+
+	/* The last byte of "tail", in a page of its own. */
+	CHECK_EQ(bus_write(bus, 0x240000, 1, 0), BUS_OK);
+	CHECK_EQ(w.calls, 2);
+
+	/* Without a watcher, a write still ends the watch. */
+	bus_set_watcher(bus, NULL, NULL);
+	CHECK(bus_watch_ram(bus, 0x1000));
+	CHECK_EQ(bus_write(bus, 0x1000, 4, 0), BUS_OK);
+	CHECK(!bus_ram_watched(bus, 0x1000));
+	CHECK_EQ(w.calls, 2);
+	CHECK_EQ(dev.writes, 1);
+	bus_destroy(bus);
+}
+
 int main(void)
 {
 	RUN_TEST(test_empty_bus);
@@ -358,5 +526,7 @@ int main(void)
 	RUN_TEST(test_block_copy);
 	RUN_TEST(test_block_copy_at_top_of_address_space);
 	RUN_TEST(test_status_strings);
+	RUN_TEST(test_watch_pages);
+	RUN_TEST(test_watch_writes);
 	return test_summary();
 }
