@@ -53,7 +53,7 @@ set(smirror $<TARGET_FILE:smirror>)
 
 # The message goes to standard output, why the machine stopped to
 # standard error.
-add_expect_test(baremetal.hello
+add_guest_test(baremetal.hello
 	STDOUT "^Hello, world!\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel hello.bin)
@@ -69,12 +69,8 @@ add_expect_test(baremetal.hello-clock-virtual
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel hello.bin -clock virtual)
 
-# The JIT runs it the same as the interpreter (-jit off, the default).
-add_expect_test(baremetal.hello-jit-on
-	STDOUT "^Hello, world!\n$"
-	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
-	COMMAND ${smirror} -M raspi3b -kernel hello.bin -jit on)
-
+# -jit off is the default, the interpreter. add_guest_test() runs each
+# program again with -jit on, which must give the same.
 add_expect_test(baremetal.hello-jit-off
 	STDOUT "^Hello, world!\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
@@ -84,8 +80,7 @@ add_expect_test(baremetal.hello-jit-off
 # with one file descriptor free, which the serial file takes, none is
 # left for the memfd of the JIT.
 find_program(PRLIMIT prlimit)
-if(PRLIMIT AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+if(PRLIMIT AND SMIRROR_TEST_JIT)
 	add_expect_test(baremetal.hello-jit-no-memory
 		STATUS 1
 		STDERR "^smirror: raspi3b: -jit on: the JIT needs a Linux x86-64 host that allows executable memory: Too many open files\n$"
@@ -109,7 +104,7 @@ add_expect_test(baremetal.sleep-clock-host
 	MIN_SECONDS 2
 	COMMAND ${smirror} -M raspi3b -kernel sleep.bin -clock host)
 
-add_expect_test(baremetal.sleep-clock-virtual
+add_guest_test(baremetal.sleep-clock-virtual
 	STDOUT "^awake\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel sleep.bin -clock virtual)
@@ -135,21 +130,21 @@ set_tests_properties(baremetal.hello-serial-file-contents PROPERTIES
 # Exceptions at EL2, EL1 and EL0, and the returns from them. The handler
 # prints each one as "<Exception level>:<exception class>"; see the
 # comments in exceptions.s.
-add_expect_test(baremetal.exceptions
+add_guest_test(baremetal.exceptions
 	STDOUT "^2:15\n2:3c\n2:00\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel exceptions.bin)
 
 # A kernel starts in the state that the boot stub leaves the cores in,
 # and releases the other cores through the spin table. See boot.s.
-add_expect_test(baremetal.boot
+add_guest_test(baremetal.boot
 	STDOUT "^boot state ok\n123\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel boot.bin)
 
 # The Generic Timer as the boot stub sets it up: its frequency, how fast
 # the counts go, a timer and an event stream. See timer.s.
-add_expect_test(baremetal.timer
+add_guest_test(baremetal.timer
 	STDOUT "^timer ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel timer.bin)
@@ -157,7 +152,7 @@ add_expect_test(baremetal.timer
 # Interrupts through the ARM local peripherals: the Generic Timer, the
 # mailboxes, the local timer and the AXI outstanding interrupt, to IRQ
 # and FIQ, masked and not, and from core 0 to core 1. See irq.s.
-add_expect_test(baremetal.irq
+add_guest_test(baremetal.irq
 	STDOUT "^irq ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel irq.bin)
@@ -165,37 +160,20 @@ add_expect_test(baremetal.irq
 # The transmit interrupt of UART0, through the BCM2835 interrupt
 # controller and the ARM local peripherals, to the IRQ and the FIQ of
 # core 0. See uart_irq.s.
-add_expect_test(baremetal.uart-irq
+add_guest_test(baremetal.uart-irq
 	STDOUT "^uart irq ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel uart_irq.bin)
 
-add_expect_test(baremetal.mmu
+add_guest_test(baremetal.mmu
 	STDOUT "^mmu ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel mmu.bin)
 
-# Exceptions, interrupts and the MMU through the JIT, which gives what
-# the interpreter gives (performance phase 3a).
-add_expect_test(baremetal.exceptions-jit
-	STDOUT "^2:15\n2:3c\n2:00\n2:00\n1:15\n2:16\n1:25\n2:18\n1:15\n1:18\n$"
-	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
-	COMMAND ${smirror} -M raspi3b -kernel exceptions.bin -jit on)
-
-add_expect_test(baremetal.irq-jit
-	STDOUT "^irq ok\n$"
-	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
-	COMMAND ${smirror} -M raspi3b -kernel irq.bin -jit on)
-
-add_expect_test(baremetal.mmu-jit
-	STDOUT "^mmu ok\n$"
-	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
-	COMMAND ${smirror} -M raspi3b -kernel mmu.bin -jit on)
-
 # The console as U-Boot uses it: the mini UART on GPIO 14 and 15, as the
 # firmware sets it up. What miniuart.input sends comes back. See
 # miniuart.s.
-add_expect_test(baremetal.miniuart
+add_guest_test(baremetal.miniuart
 	STDOUT "^mini uart\nabc\nmini uart ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	INPUT ${CMAKE_CURRENT_SOURCE_DIR}/miniuart.input
@@ -203,7 +181,7 @@ add_expect_test(baremetal.miniuart
 
 # The firmware's answers on the property channel of the mailboxes, and
 # the mailbox interrupt. See mailbox.s.
-add_expect_test(baremetal.mailbox
+add_guest_test(baremetal.mailbox
 	STDOUT "^mailbox ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -kernel mailbox.bin)
@@ -212,7 +190,7 @@ add_expect_test(baremetal.mailbox
 # receive timeout interrupt. See echo.s. As on the board, its first byte,
 # '~', goes to the mini UART, which has GPIO 15 as the firmware set it up
 # until echo.s gives the pin to the PL011.
-add_expect_test(baremetal.echo
+add_guest_test(baremetal.echo
 	STDOUT "^hello\necho ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	INPUT ${CMAKE_CURRENT_SOURCE_DIR}/echo.input
@@ -233,7 +211,7 @@ add_test(NAME baremetal.raspi3b-stub-up-to-date
 		${PROJECT_SOURCE_DIR}/src/machine/raspi3b_stub.inc)
 
 # An instruction that is not implemented stops the machine with an error.
-add_expect_test(baremetal.unimplemented
+add_guest_test(baremetal.unimplemented
 	STATUS 1
 	STDERR "^smirror: error: cpu0: instruction 0xd5330400 at 0x0000000000080000 is not implemented yet"
 	COMMAND ${smirror} -M raspi3b -kernel unimplemented.bin)
@@ -297,7 +275,7 @@ make_card(sdboot-fat16.img 16 16
 
 # config.txt filters, an overlay that is not on the card, cmdline.txt,
 # and the device tree on a FAT32 card like Raspberry Pi OS's.
-add_expect_test(baremetal.sd-boot-fat32
+add_guest_test(baremetal.sd-boot-fat32
 	STDOUT "^cmdline: console=ttyS0,115200 smirror\n\
 sd boot ok\n$"
 	STDERR "^smirror: warning: Failed to load overlay 'vc4-kms-v3d': no \
@@ -306,7 +284,7 @@ is pending\n$"
 	COMMAND ${smirror} -M raspi3b -sd sdboot-fat32.img)
 
 # Long names in directories, on FAT16.
-add_expect_test(baremetal.sd-boot-fat16
+add_guest_test(baremetal.sd-boot-fat16
 	STDOUT "^cmdline: quiet smirror-fat16\nsd boot ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -sd sdboot-fat16.img)
@@ -318,7 +296,7 @@ make_card(sdcard-fat32.img 64 32
 
 # The kernel reads and writes the card it came from, through SDHOST, as
 # U-Boot does. See sdcard.s.
-add_expect_test(baremetal.sd-card
+add_guest_test(baremetal.sd-card
 	STDOUT "^sd card ok\n$"
 	STDERR "^smirror: idle: every CPU is waiting and no event is pending\n$"
 	COMMAND ${smirror} -M raspi3b -sd sdcard-fat32.img)

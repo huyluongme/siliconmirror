@@ -326,3 +326,13 @@ The AArch64 side is `src/cpu/arm64/jit.c`, which `-jit on` turns on
   devicetree blobs. `scripts/fuzz.sh` builds them with clang,
   AddressSanitizer and UBSan, and runs each from seeds that real tools
   make.
+- Both modes of `-jit`: where the JIT runs (Linux x86-64), each
+  bare-metal program (`add_guest_test()`) and each session runs again
+  with `-jit on` as `<name>-jit`, which must give the same output, and
+  `scripts/boot-log.sh` boots each chain in both modes and fails unless
+  the two logs are the same byte for byte: on the virtual clock, a
+  difference in what the guest ran shows in the times Linux prints.
+  `tests/unit/test_arm64_jit.c` runs code on two machines, one in each
+  mode, and compares them turn by turn. The unit tests of single
+  instructions run one instruction a turn, which never holds a whole
+  block, so they test the interpreter alone.
