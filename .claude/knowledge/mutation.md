@@ -86,7 +86,11 @@ enough that a wrong stride stops it early; code rounding at `used % 16
 == 1`; a leaked mapping (count the memfd's lines in /proc/self/maps);
 an option's default when both values give the same results: run with
 one file descriptor free (`tests/baremetal/one_free_fd.sh`, prlimit), so
-which file fails shows which path ran. Mutation testing does not prove a model right: a
+which file fails shows which path ran. JIT (perf6): a loop over a page
+cache that stops after entry 0 passes when the test's code is in the
+page of entry 0 (put it elsewhere); a bitmap's `bit / 63` is caught
+only at bit 63; a bitmap one word short only by a region whose last
+byte is alone in its page. Mutation testing does not prove a model right: a
 misread datasheet passes it. Real software (U-Boot, Linux) is the
 strongest check.
 

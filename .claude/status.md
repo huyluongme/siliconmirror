@@ -3,9 +3,9 @@
 Update this file at the end of every task, in the same commit as the
 work (or the next one), so a new session starts from here.
 
-- **Date:** 2026-11-27
-- **master:** 22fc261 (phase 3a.2: the JIT's blocks,
-  cache and dispatcher, `-jit on|off`).
+- **Date:** 2026-11-28
+- **master:** d0fa3a2 (phase 3a.3: the JIT sees code that is
+  written).
 - **Phase 3.0 done:** the profile before the JIT, in
   `.claude/knowledge/performance.md` ("Phase 3.0"): 92 % of Pi OS's host
   time is the interpreter; the guest code is flat integer, load/store
@@ -17,24 +17,26 @@ work (or the next one), so a new session starts from here.
   (`docs/boot-logs/raspi3b-raspios.log`, `tests/raspios/`).
   Networking to the host is done: `-net tap`, `-net pcap`, `-net user`
   with TCP and `hostfwd`.
-- **Last task:** performance phase 3a.2: blocks of at most 64
-  instructions, one cache for all cores (`src/cpu/jit/cache.c`), the
-  dispatcher in `src/cpu/arm64/jit.c` (each instruction a call of the
-  interpreter's `arm64_step_insn()`), `-jit on|off` (off by default).
-  `tests/unit/test_arm64_jit.c` compares both modes turn by turn;
-  U-Boot reaches its prompt with the same output. Not faster yet
-  (loop 2.17 -> 2.36 s, U-Boot 36.8 -> 42.4 s): 3b and 3e bring the
-  speed. Written code is not seen yet: Linux after U-Boot needs 3a.3.
-  Boot logs unchanged (the JIT is off by default). Mutation perf5:
-  277 of 301 killed, 24 equivalent.
+- **Last task:** performance phase 3a.3: invalidation. The bus watches
+  the 4 KB pages of RAM that hold translated code (`bus_watch_ram()`,
+  one watcher, `bus_set_watcher()`); a write through `bus_write()` or
+  `bus_write_block()` to one drops its blocks (the cache's table of
+  pages). The cores' write page caches hold no watched page; a block
+  stops after an instruction that dropped blocks. U-Boot then Linux
+  with `-jit on` gives a boot log byte-identical to the interpreter's
+  (193 s against 157 s: 3b and 3e bring the speed); `-jit off`
+  unchanged within noise. Boot logs unchanged (the JIT is off by
+  default). Mutation perf6: 231 of 253 killed (2 did not
+  compile), 22 equivalent.
 
 ## Next tasks
 
-1. **Next: performance phase 3a.3** (invalidation: watched pages, the
-   write page cache, `bus_write`/`bus_write_block`), then 3a.4 (both
-   modes in all tests, bench). The design agreed with the owner is in
-   `.claude/knowledge/performance.md` ("Phase 3a"). `/effort xhigh` for
-   3a.3.
+1. **Next: performance phase 3a.4**: unit, bare-metal and session
+   tests in both modes (the boot logs byte-identical), `-jit` in
+   `scripts/bench.sh`, mutation, docs; then 3b (integer ALU and
+   branches in native code). The design agreed with the owner is in
+   `.claude/knowledge/performance.md` ("Phase 3a"). `/effort high` is
+   enough for 3a.4; `xhigh` for the design of 3b.
 2. The console hang: typing while the kernel prints a line (see
    tests/linux/user.txt); find which side (PL011 or the guest) loops.
 3. Display (HVS channels, pixelvalves, HDMI) and USB keyboard/mouse.

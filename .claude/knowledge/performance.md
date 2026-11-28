@@ -135,6 +135,26 @@ and for other hosts.
   slow path) drop its blocks. Code memory is reused only between
   blocks; full means flush everything. A common technique of dynamic
   translators (general knowledge; no other project's source read).
+  Done (2026-11-28): the bus keeps a bit for each 4 KB page of each RAM
+  region (`bus_watch_ram()`, `bus_ram_watched()`); a write through
+  `bus_write()`/`bus_write_block()` to a watched page ends the watch
+  and, after the write, calls the bus's one watcher
+  (`bus_set_watcher()`). `jit_cache_create(bus, ...)` makes the cache
+  that watcher; `jit_cache_add()` watches the block's page, and a table
+  of pages (one entry for each page, its blocks linked) lets a write
+  take the page's blocks out of their bucket chains (`dropped` counts
+  them). AArch64: `arm64_page_fill()` keeps no write entry for a
+  watched page; translating a block drops its page from every core's
+  write page cache (`arm64_drop_write_page_all_pes()`); a block stops
+  after an instruction that dropped blocks, so code that rewrites its
+  own next instructions runs the new ones, as in the interpreter.
+  Measured (release): U-Boot then Linux to the shell with `-jit on`,
+  the boot log byte-identical to the interpreter's, 193 s against
+  157 s. `-jit off` unchanged within noise (best of 3, master then
+  this: U-Boot 36.80 -> 36.89 s, loop 2.20 -> 2.08 s). Left for when
+  3b measures it: a page that holds code and data written often loses
+  its blocks at each write after a run; dropping only the blocks that
+  a write overlaps would keep the others.
 - 3a.4: unit, bare-metal and session tests in both modes (the boot logs
   must be byte-identical: virtual time shows any difference in the
   instruction count), `scripts/bench.sh`, mutation, docs.
