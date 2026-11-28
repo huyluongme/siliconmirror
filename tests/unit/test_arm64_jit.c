@@ -112,15 +112,25 @@ static void put(Side *s, uint64_t pa, const uint32_t *words, size_t n)
 		CHECK_EQ(bus_write(s->m->bus, pa + 4 * i, 4, words[i]), BUS_OK);
 }
 
-static void side_init(Side *s, unsigned cores, JitCache *jit)
+/*
+ * A machine with cores; with a JIT cache of code_size bytes of code and
+ * max_blocks blocks when max_blocks is not 0.
+ */
+static void side_init(Side *s, unsigned cores, size_t code_size,
+                      size_t max_blocks)
 {
-	Arm64Config config = {.reset_pc = CODE, .highest_el = 3, .jit = jit};
+	Arm64Config config = {.reset_pc = CODE, .highest_el = 3};
 
 	s->m = machine_create();
-	s->jit = jit;
 	CHECK_EQ(bus_map_ram(s->m->bus, "ram", 0, 0x100000), BUS_OK);
 	CHECK_EQ(bus_map_mmio(s->m->bus, "probe", PROBE, 0x1000, &probe_ops, s),
 	         BUS_OK);
+	s->jit = NULL;
+	if (max_blocks != 0) {
+		s->jit = jit_cache_create(s->m->bus, code_size, max_blocks);
+		CHECK(s->jit != NULL);
+	}
+	config.jit = s->jit;
 	for (unsigned i = 0; i < cores; i++) {
 		Cpu *cpu;
 
@@ -140,12 +150,9 @@ static void side_init(Side *s, unsigned cores, JitCache *jit)
 static void pair_init(Pair *p, unsigned cores, const uint32_t *code, size_t n,
                       size_t code_size, size_t max_blocks)
 {
-	JitCache *jit = jit_cache_create(code_size, max_blocks);
-
-	CHECK(jit != NULL);
 	p->cores = cores;
-	side_init(&p->interp, cores, NULL);
-	side_init(&p->jit, cores, jit);
+	side_init(&p->interp, cores, 0, 0);
+	side_init(&p->jit, cores, code_size, max_blocks);
 	put(&p->interp, CODE, code, n);
 	put(&p->jit, CODE, code, n);
 }
@@ -155,9 +162,9 @@ static void pair_init(Pair *p, unsigned cores, const uint32_t *code, size_t n,
 
 static void pair_free(Pair *p)
 {
+	jit_cache_destroy(p->jit.jit); /* before its bus */
 	machine_destroy(p->interp.m);
 	machine_destroy(p->jit.m);
-	jit_cache_destroy(p->jit.jit);
 }
 
 /* Do the same to both sides. */

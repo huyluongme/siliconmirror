@@ -664,7 +664,7 @@ static Machine *raspi3b_create(const BoardOptions *options, char *error,
 		goto fail;
 	}
 	if (options->jit) {
-		jit = jit_cache_create(JIT_CACHE_CODE_SIZE, JIT_CACHE_BLOCKS);
+		jit = jit_cache_create(m->bus, JIT_CACHE_CODE_SIZE, JIT_CACHE_BLOCKS);
 		if (jit == NULL) {
 			snprintf(error, error_size,
 			         "-jit on: the JIT needs a Linux x86-64 host that allows "
